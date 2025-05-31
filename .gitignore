@@ -1,0 +1,78 @@
+# Dependencies
+node_modules/
+dist/
+*.local
+
+# Rust/Tauri
+src-tauri/target/
+Cargo.lock
+src-tauri/WixTools/
+
+# Python
+python/venv/
+python/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+
+# Build outputs
+build/
+*.exe
+*.msi
+*.app
+*.dmg
+*.AppImage
+*.snap
+*.deb
+*.rpm
+*.tar.gz
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment variables
+.env
+.env.local
+.env.production.local
+.env.development.local
+
+# Temporary files
+*.tmp
+*.temp
+build_output.txt
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Rust installer (large file)
+rustup-init.exe
+
+# Model files (too large for Git)
+python/models/
+*.bin
+*.pt
+*.onnx
+
+# User data
+user_data/
+history/
+config.json

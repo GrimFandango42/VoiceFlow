@@ -1,0 +1,25 @@
+{
+  "name": "voiceflow-electron",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^36.3.2",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.voiceflow.app",
+    "productName": "VoiceFlow",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "portable",
+      "icon": "../src-tauri/icons/icon.ico"
+    }
+  }
+}
