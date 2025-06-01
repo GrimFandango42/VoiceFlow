@@ -1,0 +1,6 @@
+@echo off
+echo Starting VoiceFlow FIXED Server...
+echo Using virtual environment Python...
+cd /d "C:\AI_Projects\VoiceFlow\python"
+venv\Scripts\python.exe stt_server_fixed.py
+pause

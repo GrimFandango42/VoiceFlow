@@ -1,0 +1,43 @@
+{
+  "setup": {
+    "python_version": "PASS",
+    "virtual_env": "PASS",
+    "python/stt_server.py": "PASS",
+    "VoiceFlow-Invisible.bat": "PASS",
+    "VoiceFlow-Native.bat": "PASS",
+    "Install-Native-Mode.bat": "PASS",
+    "VoiceFlow-TrulyInvisible.ps1": "PASS"
+  },
+  "dependencies": {
+    "pyautogui": "PASS",
+    "keyboard": "PASS",
+    "pywin32": "PASS",
+    "RealtimeSTT": "PASS",
+    "faster_whisper": "PASS",
+    "requests": "PASS",
+    "websockets": "PASS",
+    "numpy": "PASS"
+  },
+  "services": {
+    "ollama_connectivity": "PASS",
+    "ollama_url": "http://localhost:11434/api/tags",
+    "available_models": [
+      "llama3.3:latest"
+    ],
+    "compatible_models": [
+      "llama3.3:latest"
+    ],
+    "gpu_available": "WARNING"
+  },
+  "integration": {
+    "whisper_load": "PASS"
+  },
+  "performance": {},
+  "summary": {
+    "total_tests": 21,
+    "passed": 17,
+    "failed": 0,
+    "warnings": 1,
+    "readiness": "READY"
+  }
+}

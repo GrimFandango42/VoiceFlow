@@ -1,0 +1,19 @@
+{
+  "timestamp": 1748788289.1409228,
+  "readiness": "READY",
+  "python_version": "3.13.3",
+  "missing_files": [],
+  "dependencies": {
+    "pyautogui": "INSTALLED",
+    "keyboard": "INSTALLED",
+    "RealtimeSTT": "INSTALLED",
+    "requests": "INSTALLED",
+    "websockets": "INSTALLED"
+  },
+  "ollama_connected": true,
+  "available_models": [
+    "llama3.3:latest"
+  ],
+  "gpu_available": false,
+  "gpu_info": "CPU only"
+}

@@ -27,7 +27,7 @@ $toggleItem.Add_Click({
         $script:process = Start-Process -FilePath "python\venv\Scripts\python.exe" -ArgumentList "python\stt_server.py" -WindowStyle Hidden -PassThru
         $script:running = $true
         $toggleItem.Text = "Stop VoiceFlow"
-        $trayIcon.ShowBalloonTip(1000, "VoiceFlow", "Started - Press Ctrl+Alt+Space to record", [System.Windows.Forms.ToolTipIcon]::Info)
+        $trayIcon.ShowBalloonTip(1000, "VoiceFlow", "Started - Press Ctrl+Alt to record", [System.Windows.Forms.ToolTipIcon]::Info)
         Start-Sleep -Seconds 2
         Start-Process "http://localhost:8765"
     }

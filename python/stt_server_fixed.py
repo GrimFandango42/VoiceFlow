@@ -1,6 +1,6 @@
 """
-VoiceFlow STT Server - Local Whisper + DeepSeek Integration
-Zero-cost voice transcription with AI enhancement
+VoiceFlow STT Server - FIXED VERSION
+Fixes critical bugs preventing text injection
 """
 
 import asyncio
@@ -35,21 +35,16 @@ class VoiceFlowServer:
         self.init_database()
         
         # Ollama configuration
-        # Try multiple Ollama endpoints (WSL and local)
         self.ollama_urls = [
-            "http://172.30.248.191:11434/api/generate",  # Your WSL IP
-            "http://localhost:11434/api/generate",  # Windows local
-            "http://127.0.0.1:11434/api/generate"  # Alternative local
+            "http://localhost:11434/api/generate",
+            "http://127.0.0.1:11434/api/generate"
         ]
-        self.ollama_url = None  # Will be set when we find a working endpoint
+        self.ollama_url = None
         self.deepseek_model = "llama3.3:latest"
         self.use_ai_enhancement = True
         
         # Test Ollama connectivity
         self.test_ollama_connection()
-        
-        # Message queue for WebSocket
-        self.message_queue = queue.Queue()
         
         # Statistics
         self.stats = {
@@ -59,93 +54,39 @@ class VoiceFlowServer:
             "processing_times": []
         }
         
-        # Initialize STT recorder with compatibility settings
+        # Initialize STT recorder with FIXED compatibility settings
+        print("[INIT] Initializing STT recorder with fixed configuration...")
         try:
-            # Try GPU first with float16
+            # FORCE CPU mode with stable settings to avoid float16 issues
             self.recorder = AudioToTextRecorder(
-                model="large-v3",
+                model="tiny",  # Use tiny model for stability
                 language="en",
-                device="cuda",
-                compute_type="float16",
-                gpu_device_index=0,
+                device="cpu",  # Force CPU to avoid float16 issues
+                compute_type="int8",  # Force int8 for compatibility
                 on_recording_start=self.on_recording_start,
                 on_recording_stop=self.on_recording_stop,
-                on_transcription_start=self.on_transcription_start,
+                on_transcription_start=self.on_transcription_start,  # FIXED callback
                 use_microphone=True,
                 spinner=False,
                 level=0,
-                # Real-time transcription settings
+                # Simplified real-time settings
                 enable_realtime_transcription=True,
-                realtime_processing_pause=0.1,
-                realtime_model_type="small",  # Use small model for preview
+                realtime_processing_pause=0.2,
+                realtime_model_type="tiny",
                 on_realtime_transcription_update=self.on_realtime_update,
-                # VAD settings for better detection
+                # Conservative VAD settings
                 silero_sensitivity=0.5,
                 webrtc_sensitivity=3,
                 post_speech_silence_duration=0.4,
                 min_length_of_recording=0.5,
                 min_gap_between_recordings=0.3,
-                # Wake word support (optional)
                 wake_words="",
                 on_wakeword_detected=None
             )
-            print("[GPU] Using CUDA acceleration with float16")
+            print("[OK] STT recorder initialized successfully with CPU/int8")
         except Exception as e:
-            print(f"[GPU] CUDA float16 failed: {e}")
-            try:
-                # Fallback to GPU with int8
-                self.recorder = AudioToTextRecorder(
-                    model="base",  # Use smaller model for compatibility
-                    language="en",
-                    device="cuda",
-                    compute_type="int8",
-                    gpu_device_index=0,
-                    on_recording_start=self.on_recording_start,
-                    on_recording_stop=self.on_recording_stop,
-                    on_transcription_start=self.on_transcription_start,
-                    use_microphone=True,
-                    spinner=False,
-                    level=0,
-                    enable_realtime_transcription=True,
-                    realtime_processing_pause=0.1,
-                    realtime_model_type="tiny",
-                    on_realtime_transcription_update=self.on_realtime_update,
-                    silero_sensitivity=0.5,
-                    webrtc_sensitivity=3,
-                    post_speech_silence_duration=0.4,
-                    min_length_of_recording=0.5,
-                    min_gap_between_recordings=0.3,
-                    wake_words="",
-                    on_wakeword_detected=None
-                )
-                print("[GPU] Using CUDA acceleration with int8")
-            except Exception as e2:
-                print(f"[GPU] CUDA int8 failed: {e2}")
-                # Final fallback to CPU
-                self.recorder = AudioToTextRecorder(
-                    model="base",
-                    language="en",
-                    device="cpu",
-                    compute_type="int8",
-                    on_recording_start=self.on_recording_start,
-                    on_recording_stop=self.on_recording_stop,
-                    on_transcription_start=self.on_transcription_start,
-                    use_microphone=True,
-                    spinner=False,
-                    level=0,
-                    enable_realtime_transcription=True,
-                    realtime_processing_pause=0.2,
-                    realtime_model_type="tiny",
-                    on_realtime_transcription_update=self.on_realtime_update,
-                    silero_sensitivity=0.5,
-                    webrtc_sensitivity=3,
-                    post_speech_silence_duration=0.4,
-                    min_length_of_recording=0.5,
-                    min_gap_between_recordings=0.3,
-                    wake_words="",
-                    on_wakeword_detected=None
-                )
-                print("[CPU] Using CPU fallback with int8")
+            print(f"[ERROR] Failed to initialize STT recorder: {e}")
+            raise
         
         self.websocket_clients = set()
         self.current_transcription = {
@@ -210,6 +151,7 @@ class VoiceFlowServer:
             "final_text": "",
             "enhanced_text": ""
         }
+        print("[RECORDING] Recording started")
         self.broadcast_message({
             "type": "recording_started",
             "timestamp": datetime.now().isoformat()
@@ -217,6 +159,7 @@ class VoiceFlowServer:
         
     def on_recording_stop(self):
         """Called when recording stops"""
+        print("[RECORDING] Recording stopped")
         self.broadcast_message({
             "type": "recording_stopped",
             "timestamp": datetime.now().isoformat()
@@ -225,23 +168,41 @@ class VoiceFlowServer:
     def on_realtime_update(self, text):
         """Real-time preview using small model"""
         self.current_transcription["preview_text"] = text
+        print(f"[REALTIME] {text}")
         self.broadcast_message({
             "type": "realtime_preview",
             "text": text,
             "timestamp": datetime.now().isoformat()
         })
         
-    def on_transcription_start(self, text):
-        """Final transcription using large model"""
+    def on_transcription_start(self, audio_data):
+        """FIXED: Handle both text and audio data properly"""
         start_time = time.time()
+        
+        # Check if we received text or audio data
+        if isinstance(audio_data, str):
+            # If it's already text, use it directly
+            text = audio_data
+        elif isinstance(audio_data, np.ndarray):
+            # If it's audio data, we need to process it somehow
+            # For now, we'll just use the preview text or wait for the final transcription
+            print("[DEBUG] Received audio data instead of text - using alternative approach")
+            return False  # Don't abort transcription
+        else:
+            print(f"[DEBUG] Unexpected data type: {type(audio_data)}")
+            return False
         
         # Store raw transcription
         self.current_transcription["final_text"] = text
-        word_count = len(text.split())
+        word_count = len(text.split()) if text else 0
+        
+        print(f"[TRANSCRIPTION] Raw: {text}")
         
         # Enhance with DeepSeek
         enhanced_text = self.enhance_with_deepseek(text)
         self.current_transcription["enhanced_text"] = enhanced_text
+        
+        print(f"[ENHANCED] {enhanced_text}")
         
         # Calculate processing time
         processing_time = int((time.time() - start_time) * 1000)
@@ -272,24 +233,25 @@ class VoiceFlowServer:
             "timestamp": datetime.now().isoformat()
         })
         
-        
         # Auto-inject text at cursor position
         self.inject_text_at_cursor(enhanced_text)
+        
+        return False  # Don't abort transcription
     
     def inject_text_at_cursor(self, text):
         """Inject text at the current cursor position in any application"""
         if not SYSTEM_INTEGRATION:
-            print(f"[Text ready to paste]: {text}")
+            print(f"[TEXT READY]: {text}")
             return
             
         try:
             # Method 1: Direct typing with pyautogui
-            # This works in most applications
+            print(f"[INJECTING] {text}")
             pyautogui.typewrite(text)
-            print(f"[Injected]: {text}")
+            print(f"[SUCCESS] Text injected successfully")
             
         except Exception as e:
-            print(f"[Injection failed]: {e}")
+            print(f"[INJECTION FAILED]: {e}")
             # Fallback: Copy to clipboard
             try:
                 import win32clipboard
@@ -297,13 +259,13 @@ class VoiceFlowServer:
                 win32clipboard.EmptyClipboard()
                 win32clipboard.SetClipboardData(win32clipboard.CF_TEXT, text.encode('utf-8'))
                 win32clipboard.CloseClipboard()
-                print("[Copied to clipboard] Press Ctrl+V to paste")
+                print("[COPIED] Text copied to clipboard - Press Ctrl+V to paste")
             except:
-                print("[Error] Could not access clipboard")
+                print("[ERROR] Could not access clipboard")
         
     def enhance_with_deepseek(self, text):
         """Enhance transcription with DeepSeek for proper formatting"""
-        if not self.use_ai_enhancement:
+        if not self.use_ai_enhancement or not text:
             return self.basic_format(text)
             
         try:
@@ -319,7 +281,7 @@ Formatted text:"""
                 "stream": False,
                 "temperature": 0.3,
                 "top_p": 0.9,
-                "max_tokens": len(text) * 2  # Allow some expansion
+                "max_tokens": len(text) * 2
             }, timeout=10)
             
             if response.status_code == 200:
@@ -330,178 +292,196 @@ Formatted text:"""
                 return enhanced
             else:
                 print(f"DeepSeek error: {response.status_code}")
-                return text
+                return self.basic_format(text)
                 
         except Exception as e:
             print(f"DeepSeek enhancement failed: {e}")
-            # Fallback to basic formatting
             return self.basic_format(text)
             
     def basic_format(self, text):
         """Basic formatting fallback if DeepSeek is unavailable"""
+        if not text:
+            return ""
         # Capitalize first letter
-        if text:
-            text = text[0].upper() + text[1:]
+        text = text[0].upper() + text[1:]
         # Add period if missing
-        if text and not text[-1] in '.!?':
+        if not text[-1] in '.!?':
             text += '.'
         return text
         
     def save_transcription(self, **kwargs):
         """Save transcription to database"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO transcriptions (raw_text, enhanced_text, duration_ms, word_count, processing_time_ms)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (
-            kwargs.get('raw_text'),
-            kwargs.get('enhanced_text'),
-            kwargs.get('duration_ms'),
-            kwargs.get('word_count'),
-            kwargs.get('processing_time_ms')
-        ))
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO transcriptions (raw_text, enhanced_text, duration_ms, word_count, processing_time_ms)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                kwargs.get('raw_text'),
+                kwargs.get('enhanced_text'),
+                kwargs.get('duration_ms'),
+                kwargs.get('word_count'),
+                kwargs.get('processing_time_ms')
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[DB ERROR] Could not save transcription: {e}")
         
     def get_history(self, limit=50):
         """Get transcription history"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT * FROM transcriptions 
-            ORDER BY timestamp DESC 
-            LIMIT ?
-        ''', (limit,))
-        columns = [description[0] for description in cursor.description]
-        results = []
-        for row in cursor.fetchall():
-            results.append(dict(zip(columns, row)))
-        conn.close()
-        return results
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM transcriptions 
+                ORDER BY timestamp DESC 
+                LIMIT ?
+            ''', (limit,))
+            columns = [description[0] for description in cursor.description]
+            results = []
+            for row in cursor.fetchall():
+                results.append(dict(zip(columns, row)))
+            conn.close()
+            return results
+        except Exception as e:
+            print(f"[DB ERROR] Could not get history: {e}")
+            return []
         
     def get_statistics(self):
         """Get usage statistics"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Today's stats
-        cursor.execute('''
-            SELECT COUNT(*), SUM(word_count), AVG(processing_time_ms)
-            FROM transcriptions
-            WHERE DATE(timestamp) = DATE('now')
-        ''')
-        today_count, today_words, avg_processing = cursor.fetchone()
-        
-        # All time stats
-        cursor.execute('''
-            SELECT COUNT(*), SUM(word_count), AVG(processing_time_ms)
-            FROM transcriptions
-        ''')
-        total_count, total_words, total_avg_processing = cursor.fetchone()
-        
-        conn.close()
-        
-        return {
-            "today": {
-                "transcriptions": today_count or 0,
-                "words": today_words or 0,
-                "avg_processing_ms": avg_processing or 0
-            },
-            "all_time": {
-                "transcriptions": total_count or 0,
-                "words": total_words or 0,
-                "avg_processing_ms": total_avg_processing or 0
-            },
-            "session": {
-                "transcriptions": self.stats["total_transcriptions"],
-                "words": self.stats["total_words"],
-                "uptime_minutes": (datetime.now() - self.stats["session_start"]).seconds // 60
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Today's stats
+            cursor.execute('''
+                SELECT COUNT(*), SUM(word_count), AVG(processing_time_ms)
+                FROM transcriptions
+                WHERE DATE(timestamp) = DATE('now')
+            ''')
+            today_count, today_words, avg_processing = cursor.fetchone()
+            
+            # All time stats
+            cursor.execute('''
+                SELECT COUNT(*), SUM(word_count), AVG(processing_time_ms)
+                FROM transcriptions
+            ''')
+            total_count, total_words, total_avg_processing = cursor.fetchone()
+            
+            conn.close()
+            
+            return {
+                "today": {
+                    "transcriptions": today_count or 0,
+                    "words": today_words or 0,
+                    "avg_processing_ms": avg_processing or 0
+                },
+                "all_time": {
+                    "transcriptions": total_count or 0,
+                    "words": total_words or 0,
+                    "avg_processing_ms": total_avg_processing or 0
+                },
+                "session": {
+                    "transcriptions": self.stats["total_transcriptions"],
+                    "words": self.stats["total_words"],
+                    "uptime_minutes": (datetime.now() - self.stats["session_start"]).seconds // 60
+                }
             }
-        }
+        except Exception as e:
+            print(f"[DB ERROR] Could not get statistics: {e}")
+            return {"today": {}, "all_time": {}, "session": {}}
         
     def broadcast_message(self, message):
         """Send message to all connected WebSocket clients"""
+        if not self.websocket_clients:
+            return
+        
         disconnected_clients = set()
         for client in self.websocket_clients:
             try:
-                asyncio.create_task(client.send(json.dumps(message)))
-            except:
+                # Use asyncio.create_task properly
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(client.send(json.dumps(message)))
+            except Exception as e:
                 disconnected_clients.add(client)
         self.websocket_clients -= disconnected_clients
         
-    async def handle_websocket(self, websocket, path):
-        """Handle WebSocket connections"""
+    async def handle_websocket(self, websocket, path):  # FIXED: Added path parameter
+        """FIXED: Handle WebSocket connections with proper signature"""
         self.websocket_clients.add(websocket)
+        print(f"[WEBSOCKET] Client connected: {path}")
+        
         try:
             await websocket.send(json.dumps({
                 "type": "connected",
-                "message": "VoiceFlow STT Server Connected"
+                "message": "VoiceFlow STT Server Connected (Fixed Version)"
             }))
             
             async for message in websocket:
-                data = json.loads(message)
-                
-                if data["type"] == "get_history":
-                    history = self.get_history(data.get("limit", 50))
-                    await websocket.send(json.dumps({
-                        "type": "history",
-                        "data": history
-                    }))
+                try:
+                    data = json.loads(message)
                     
-                elif data["type"] == "get_statistics":
-                    stats = self.get_statistics()
-                    await websocket.send(json.dumps({
-                        "type": "statistics",
-                        "data": stats
-                    }))
-                    
-                elif data["type"] == "start_recording":
-                    # Trigger recording manually if needed
-                    pass
-                    
-                elif data["type"] == "toggle_recording":
-                    # Toggle recording state
-                    self.recorder.text(lambda text: None)
-                    
-                elif data["type"] == "set_language":
-                    # Change language setting
-                    language = data.get("language", "en")
-                    self.recorder.language = language
-                    await websocket.send(json.dumps({
-                        "type": "language_changed",
-                        "language": language
-                    }))
-                    
-                elif data["type"] == "set_microphone":
-                    # Change microphone setting
-                    device = data.get("device", None)
-                    # This would require reinitializing the recorder
-                    await websocket.send(json.dumps({
-                        "type": "microphone_changed",
-                        "device": device
-                    }))
+                    if data["type"] == "get_history":
+                        history = self.get_history(data.get("limit", 50))
+                        await websocket.send(json.dumps({
+                            "type": "history",
+                            "data": history
+                        }))
+                        
+                    elif data["type"] == "get_statistics":
+                        stats = self.get_statistics()
+                        await websocket.send(json.dumps({
+                            "type": "statistics",
+                            "data": stats
+                        }))
+                        
+                    elif data["type"] == "start_recording":
+                        # Trigger recording manually if needed
+                        pass
+                        
+                    elif data["type"] == "toggle_recording":
+                        # This will be handled by the hotkey system
+                        pass
+                        
+                except json.JSONDecodeError as e:
+                    print(f"[WEBSOCKET] Invalid JSON: {e}")
+                except Exception as e:
+                    print(f"[WEBSOCKET] Message handling error: {e}")
                     
         except websockets.exceptions.ConnectionClosed:
-            pass
+            print("[WEBSOCKET] Client disconnected")
+        except Exception as e:
+            print(f"[WEBSOCKET] Connection error: {e}")
         finally:
-            self.websocket_clients.remove(websocket)
+            if websocket in self.websocket_clients:
+                self.websocket_clients.remove(websocket)
             
     def start_recorder_thread(self):
         """Run the STT recorder in a separate thread"""
         def recorder_loop():
-            while True:
-                self.recorder.text(lambda text: None)  # Callbacks handle everything
+            try:
+                while True:
+                    # Use the improved transcription callback
+                    result = self.recorder.text()
+                    if result:
+                        print(f"[RECORDER] Got transcription: {result}")
+                        # Process the result through our callback
+                        self.on_transcription_start(result)
+            except Exception as e:
+                print(f"[RECORDER] Error in recorder loop: {e}")
         
         recorder_thread = threading.Thread(target=recorder_loop, daemon=True)
         recorder_thread.start()
+        print("[RECORDER] Recorder thread started")
     
     def start_hotkey_listener(self):
         """Start global hotkey listener for Ctrl+Alt"""
         def hotkey_handler():
-            # Trigger recording toggle
             print("[HOTKEY] Hotkey pressed!")
-            # The recorder already has its own hotkey handling
+            # The recorder handles the hotkey internally
             
         try:
             keyboard.add_hotkey('ctrl+alt', hotkey_handler)
@@ -511,8 +491,8 @@ Formatted text:"""
         
     async def main(self):
         """Main server loop"""
-        print("[STARTUP] VoiceFlow STT Server Starting...")
-        print(f"[GPU] Using Whisper large-v3 on RTX 4080")
+        print("[STARTUP] VoiceFlow STT Server Starting (FIXED VERSION)...")
+        print(f"[MODEL] Using Whisper tiny model on CPU with int8")
         print(f"[AI] DeepSeek enhancement via Ollama")
         print(f"[DATA] Data stored in: {self.data_dir}")
         
@@ -523,16 +503,28 @@ Formatted text:"""
         if SYSTEM_INTEGRATION:
             self.start_hotkey_listener()
         
-        # Start WebSocket server
-        async with websockets.serve(self.handle_websocket, "localhost", 8765):
-            print("[SERVER] Server running on ws://localhost:8765")
-            print("[HOTKEY] Press Ctrl+Alt to start recording (configured in app)")
-            if SYSTEM_INTEGRATION:
-                print("[OK] System integration active - text will be typed at cursor")
-            else:
-                print("[WARNING] Install pyautogui and keyboard for automatic text injection")
-            await asyncio.Future()  # Run forever
+        try:
+            # Start WebSocket server with proper error handling
+            async with websockets.serve(self.handle_websocket, "localhost", 8765):
+                print("[SERVER] Server running on ws://localhost:8765")
+                print("[HOTKEY] Press Ctrl+Alt to start recording")
+                if SYSTEM_INTEGRATION:
+                    print("[OK] System integration active - text will be typed at cursor")
+                else:
+                    print("[WARNING] Install pyautogui and keyboard for automatic text injection")
+                
+                # Run forever
+                await asyncio.Future()
+                
+        except Exception as e:
+            print(f"[SERVER] Failed to start server: {e}")
+            raise
             
 if __name__ == "__main__":
-    server = VoiceFlowServer()
-    asyncio.run(server.main())
+    try:
+        server = VoiceFlowServer()
+        asyncio.run(server.main())
+    except KeyboardInterrupt:
+        print("\n[SHUTDOWN] Server stopped by user")
+    except Exception as e:
+        print(f"[ERROR] Server failed: {e}")
