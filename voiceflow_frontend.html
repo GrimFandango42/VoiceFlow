@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceFlow - Voice Transcription</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 2rem;
+            max-width: 800px;
+            width: 90%;
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 2rem;
+            font-size: 2.5rem;
+            font-weight: 300;
+        }
+
+        .status {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding: 1rem;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+
+        .status.connected {
+            background: rgba(76, 175, 80, 0.3);
+        }
+
+        .status.disconnected {
+            background: rgba(244, 67, 54, 0.3);
+        }
+
+        .status.recording {
+            background: rgba(255, 193, 7, 0.3);
+            animation: pulse 1.5s ease-in-out infinite alternate;
+        }
+
+        @keyframes pulse {
+            from { transform: scale(1); }
+            to { transform: scale(1.05); }
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        button {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            padding: 1rem 2rem;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .transcription-area {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            min-height: 200px;
+        }
+
+        .preview-text {
+            color: #ffeb3b;
+            font-style: italic;
+            margin-bottom: 1rem;
+        }
+
+        .final-text {
+            color: white;
+            font-size: 1.1rem;
+            line-height: 1.6;
+        }
+
+        .hotkey-info {
+            text-align: center;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 1rem;
+            border-radius: 10px;
+            margin-top: 1rem;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1rem;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+
+        .history {
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 1rem;
+        }
+
+        .history-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 0.5rem;
+            margin-bottom: 0.5rem;
+            border-radius: 5px;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎙️ VoiceFlow</h1>
+        
+        <div id="status" class="status disconnected">
+            Connecting to VoiceFlow Server...
+        </div>
+
+        <div class="controls">
+            <button id="toggleBtn" disabled>Start Recording</button>
+            <button id="statsBtn">Show Stats</button>
+            <button id="historyBtn">Show History</button>
+        </div>
+
+        <div class="transcription-area">
+            <div class="preview-text" id="previewText">
+                Press Ctrl+Alt to start recording...
+            </div>
+            <div class="final-text" id="finalText">
+                Your transcribed and enhanced text will appear here.
+            </div>
+        </div>
+
+        <div class="hotkey-info">
+            <strong>Global Hotkey:</strong> Press <kbd>Ctrl+Alt</kbd> anywhere to start/stop recording
+            <br>
+            <small>Text will be automatically injected at your cursor position</small>
+        </div>
+
+        <div class="stats" id="stats" style="display: none;">
+            <div class="stat-card">
+                <div class="stat-value" id="sessionTranscriptions">0</div>
+                <div class="stat-label">Session Transcriptions</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="sessionWords">0</div>
+                <div class="stat-label">Words Processed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="avgProcessing">0ms</div>
+                <div class="stat-label">Avg Processing Time</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="uptime">0min</div>
+                <div class="stat-label">Session Uptime</div>
+            </div>
+        </div>
+
+        <div class="history" id="history" style="display: none;">
+            <!-- History items will be added here -->
+        </div>
+    </div>
+
+    <script>
+        class VoiceFlowClient {
+            constructor() {
+                this.ws = null;
+                this.isRecording = false;
+                this.stats = {
+                    transcriptions: 0,
+                    words: 0,
+                    processingTimes: [],
+                    startTime: Date.now()
+                };
+                this.init();
+            }
+
+            init() {
+                this.connectWebSocket();
+                this.setupEventListeners();
+            }
+
+            connectWebSocket() {
+                try {
+                    this.ws = new WebSocket('ws://localhost:8765');
+                    
+                    this.ws.onopen = () => {
+                        this.updateStatus('Connected to VoiceFlow Server', 'connected');
+                        document.getElementById('toggleBtn').disabled = false;
+                    };
+
+                    this.ws.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        this.handleMessage(data);
+                    };
+
+                    this.ws.onclose = () => {
+                        this.updateStatus('Disconnected from server. Reconnecting...', 'disconnected');
+                        document.getElementById('toggleBtn').disabled = true;
+                        setTimeout(() => this.connectWebSocket(), 3000);
+                    };
+
+                    this.ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        this.updateStatus('Connection error. Is the server running?', 'disconnected');
+                    };
+                } catch (error) {
+                    console.error('Failed to connect:', error);
+                    this.updateStatus('Failed to connect. Is the server running?', 'disconnected');
+                }
+            }
+
+            handleMessage(data) {
+                switch (data.type) {
+                    case 'connected':
+                        console.log('Connected to VoiceFlow server');
+                        break;
+                    
+                    case 'recording_started':
+                        this.isRecording = true;
+                        this.updateStatus('Recording... (Press Ctrl+Alt to stop)', 'recording');
+                        document.getElementById('previewText').textContent = 'Listening...';
+                        break;
+                    
+                    case 'recording_stopped':
+                        this.isRecording = false;
+                        this.updateStatus('Processing audio...', 'connected');
+                        break;
+                    
+                    case 'realtime_preview':
+                        document.getElementById('previewText').textContent = 
+                            `Preview: ${data.text}`;
+                        break;
+                    
+                    case 'transcription_complete':
+                        this.handleTranscriptionComplete(data);
+                        break;
+                    
+                    case 'statistics':
+                        this.updateStats(data.data);
+                        break;
+                    
+                    case 'history':
+                        this.updateHistory(data.data);
+                        break;
+                }
+            }
+
+            handleTranscriptionComplete(data) {
+                document.getElementById('previewText').textContent = 
+                    `Raw: ${data.raw_text}`;
+                document.getElementById('finalText').textContent = 
+                    data.enhanced_text;
+                
+                this.updateStatus('Transcription complete! Text injected at cursor.', 'connected');
+                
+                // Update local stats
+                this.stats.transcriptions++;
+                this.stats.words += data.word_count;
+                this.stats.processingTimes.push(data.processing_time_ms);
+                
+                // Auto-hide status after 3 seconds
+                setTimeout(() => {
+                    if (!this.isRecording) {
+                        this.updateStatus('Ready for next recording (Ctrl+Alt)', 'connected');
+                    }
+                }, 3000);
+            }
+
+            updateStatus(message, type) {
+                const statusElement = document.getElementById('status');
+                statusElement.textContent = message;
+                statusElement.className = `status ${type}`;
+            }
+
+            updateStats(serverStats) {
+                document.getElementById('sessionTranscriptions').textContent = 
+                    serverStats.session.transcriptions;
+                document.getElementById('sessionWords').textContent = 
+                    serverStats.session.words;
+                
+                const avgTime = this.stats.processingTimes.length > 0 
+                    ? Math.round(this.stats.processingTimes.reduce((a, b) => a + b) / this.stats.processingTimes.length)
+                    : 0;
+                document.getElementById('avgProcessing').textContent = `${avgTime}ms`;
+                
+                const uptime = Math.round((Date.now() - this.stats.startTime) / 60000);
+                document.getElementById('uptime').textContent = `${uptime}min`;
+            }
+
+            updateHistory(historyData) {
+                const historyElement = document.getElementById('history');
+                historyElement.innerHTML = '';
+                
+                historyData.slice(0, 10).forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'history-item';
+                    div.innerHTML = `
+                        <strong>${new Date(item.timestamp).toLocaleTimeString()}:</strong>
+                        ${item.enhanced_text || item.raw_text}
+                        <small>(${item.word_count} words, ${item.processing_time_ms}ms)</small>
+                    `;
+                    historyElement.appendChild(div);
+                });
+            }
+
+            setupEventListeners() {
+                document.getElementById('toggleBtn').addEventListener('click', () => {
+                    // Note: Manual toggle - the hotkey (Ctrl+Alt) is handled by the Python server
+                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                        this.ws.send(JSON.stringify({ type: 'toggle_recording' }));
+                    }
+                });
+
+                document.getElementById('statsBtn').addEventListener('click', () => {
+                    const statsDiv = document.getElementById('stats');
+                    if (statsDiv.style.display === 'none') {
+                        statsDiv.style.display = 'grid';
+                        document.getElementById('statsBtn').textContent = 'Hide Stats';
+                        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                            this.ws.send(JSON.stringify({ type: 'get_statistics' }));
+                        }
+                    } else {
+                        statsDiv.style.display = 'none';
+                        document.getElementById('statsBtn').textContent = 'Show Stats';
+                    }
+                });
+
+                document.getElementById('historyBtn').addEventListener('click', () => {
+                    const historyDiv = document.getElementById('history');
+                    if (historyDiv.style.display === 'none') {
+                        historyDiv.style.display = 'block';
+                        document.getElementById('historyBtn').textContent = 'Hide History';
+                        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                            this.ws.send(JSON.stringify({ type: 'get_history', limit: 10 }));
+                        }
+                    } else {
+                        historyDiv.style.display = 'none';
+                        document.getElementById('historyBtn').textContent = 'Show History';
+                    }
+                });
+            }
+        }
+
+        // Initialize VoiceFlow client when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new VoiceFlowClient();
+        });
+    </script>
+</body>
+</html>

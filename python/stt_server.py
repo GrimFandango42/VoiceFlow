@@ -59,34 +59,93 @@ class VoiceFlowServer:
             "processing_times": []
         }
         
-        # Initialize STT recorder with optimal settings for RTX 4080
-        self.recorder = AudioToTextRecorder(
-            model="large-v3",
-            language="en",
-            device="cuda",
-            compute_type="float16",
-            gpu_device_index=0,
-            on_recording_start=self.on_recording_start,
-            on_recording_stop=self.on_recording_stop,
-            on_transcription_start=self.on_transcription_start,
-            use_microphone=True,
-            spinner=False,
-            level=0,
-            # Real-time transcription settings
-            enable_realtime_transcription=True,
-            realtime_processing_pause=0.1,
-            realtime_model_type="small",  # Use small model for preview
-            on_realtime_transcription_update=self.on_realtime_update,
-            # VAD settings for better detection
-            silero_sensitivity=0.5,
-            webrtc_sensitivity=3,
-            post_speech_silence_duration=0.4,
-            min_length_of_recording=0.5,
-            min_gap_between_recordings=0.3,
-            # Wake word support (optional)
-            wake_words="",
-            on_wakeword_detected=None
-        )
+        # Initialize STT recorder with compatibility settings
+        try:
+            # Try GPU first with float16
+            self.recorder = AudioToTextRecorder(
+                model="large-v3",
+                language="en",
+                device="cuda",
+                compute_type="float16",
+                gpu_device_index=0,
+                on_recording_start=self.on_recording_start,
+                on_recording_stop=self.on_recording_stop,
+                on_transcription_start=self.on_transcription_start,
+                use_microphone=True,
+                spinner=False,
+                level=0,
+                # Real-time transcription settings
+                enable_realtime_transcription=True,
+                realtime_processing_pause=0.1,
+                realtime_model_type="small",  # Use small model for preview
+                on_realtime_transcription_update=self.on_realtime_update,
+                # VAD settings for better detection
+                silero_sensitivity=0.5,
+                webrtc_sensitivity=3,
+                post_speech_silence_duration=0.4,
+                min_length_of_recording=0.5,
+                min_gap_between_recordings=0.3,
+                # Wake word support (optional)
+                wake_words="",
+                on_wakeword_detected=None
+            )
+            print("[GPU] Using CUDA acceleration with float16")
+        except Exception as e:
+            print(f"[GPU] CUDA float16 failed: {e}")
+            try:
+                # Fallback to GPU with int8
+                self.recorder = AudioToTextRecorder(
+                    model="base",  # Use smaller model for compatibility
+                    language="en",
+                    device="cuda",
+                    compute_type="int8",
+                    gpu_device_index=0,
+                    on_recording_start=self.on_recording_start,
+                    on_recording_stop=self.on_recording_stop,
+                    on_transcription_start=self.on_transcription_start,
+                    use_microphone=True,
+                    spinner=False,
+                    level=0,
+                    enable_realtime_transcription=True,
+                    realtime_processing_pause=0.1,
+                    realtime_model_type="tiny",
+                    on_realtime_transcription_update=self.on_realtime_update,
+                    silero_sensitivity=0.5,
+                    webrtc_sensitivity=3,
+                    post_speech_silence_duration=0.4,
+                    min_length_of_recording=0.5,
+                    min_gap_between_recordings=0.3,
+                    wake_words="",
+                    on_wakeword_detected=None
+                )
+                print("[GPU] Using CUDA acceleration with int8")
+            except Exception as e2:
+                print(f"[GPU] CUDA int8 failed: {e2}")
+                # Final fallback to CPU
+                self.recorder = AudioToTextRecorder(
+                    model="base",
+                    language="en",
+                    device="cpu",
+                    compute_type="int8",
+                    on_recording_start=self.on_recording_start,
+                    on_recording_stop=self.on_recording_stop,
+                    on_transcription_start=self.on_transcription_start,
+                    use_microphone=True,
+                    spinner=False,
+                    level=0,
+                    enable_realtime_transcription=True,
+                    realtime_processing_pause=0.2,
+                    realtime_model_type="tiny",
+                    on_realtime_transcription_update=self.on_realtime_update,
+                    silero_sensitivity=0.5,
+                    webrtc_sensitivity=3,
+                    post_speech_silence_duration=0.4,
+                    min_length_of_recording=0.5,
+                    min_gap_between_recordings=0.3,
+                    wake_words="",
+                    on_wakeword_detected=None
+                )
+                print("[CPU] Using CPU fallback with int8")
         
         self.websocket_clients = set()
         self.current_transcription = {
@@ -105,14 +164,14 @@ class VoiceFlowServer:
                 response = requests.get(test_url, timeout=2)
                 if response.status_code == 200:
                     self.ollama_url = url
-                    print(f"✓ Ollama connected at: {url}")
+                    print(f"[OK] Ollama connected at: {url}")
                     # Check if our model exists
                     models = response.json().get('models', [])
                     model_names = [m.get('name', '') for m in models]
                     if self.deepseek_model in model_names:
-                        print(f"✓ Found {self.deepseek_model} model")
+                        print(f"[OK] Found {self.deepseek_model} model")
                     else:
-                        print(f"⚠ Model {self.deepseek_model} not found. Available models: {model_names}")
+                        print(f"[WARNING] Model {self.deepseek_model} not found. Available models: {model_names}")
                         if model_names:
                             self.deepseek_model = model_names[0]
                             print(f"  Using {self.deepseek_model} instead")
@@ -120,7 +179,7 @@ class VoiceFlowServer:
             except Exception as e:
                 continue
         
-        print("⚠ Could not connect to Ollama. AI enhancement will be disabled.")
+        print("WARNING: Could not connect to Ollama. AI enhancement will be disabled.")
         self.use_ai_enhancement = False
         
     def init_database(self):
@@ -441,21 +500,21 @@ Formatted text:"""
         """Start global hotkey listener for Ctrl+Alt+Space"""
         def hotkey_handler():
             # Trigger recording toggle
-            print("🎤 Hotkey pressed!")
+            print("[HOTKEY] Hotkey pressed!")
             # The recorder already has its own hotkey handling
             
         try:
             keyboard.add_hotkey('ctrl+alt', hotkey_handler)
-            print("🎯 Global hotkey registered: Ctrl+Alt")
+            print("[HOTKEY] Global hotkey registered: Ctrl+Alt")
         except Exception as e:
-            print(f"⚠️  Could not register global hotkey: {e}")
+            print(f"[WARNING] Could not register global hotkey: {e}")
         
     async def main(self):
         """Main server loop"""
-        print("🎙️ VoiceFlow STT Server Starting...")
-        print(f"📊 Using Whisper large-v3 on RTX 4080")
-        print(f"🧠 DeepSeek enhancement via Ollama")
-        print(f"💾 Data stored in: {self.data_dir}")
+        print("[STARTUP] VoiceFlow STT Server Starting...")
+        print(f"[GPU] Using Whisper large-v3 on RTX 4080")
+        print(f"[AI] DeepSeek enhancement via Ollama")
+        print(f"[DATA] Data stored in: {self.data_dir}")
         
         # Start the recorder thread
         self.start_recorder_thread()
@@ -466,12 +525,12 @@ Formatted text:"""
         
         # Start WebSocket server
         async with websockets.serve(self.handle_websocket, "localhost", 8765):
-            print("🚀 Server running on ws://localhost:8765")
-            print("🎯 Press Ctrl+Alt to start recording (configured in app)")
+            print("[SERVER] Server running on ws://localhost:8765")
+            print("[HOTKEY] Press Ctrl+Alt to start recording (configured in app)")
             if SYSTEM_INTEGRATION:
-                print("✅ System integration active - text will be typed at cursor")
+                print("[OK] System integration active - text will be typed at cursor")
             else:
-                print("⚠️  Install pyautogui and keyboard for automatic text injection")
+                print("[WARNING] Install pyautogui and keyboard for automatic text injection")
             await asyncio.Future()  # Run forever
             
 if __name__ == "__main__":
