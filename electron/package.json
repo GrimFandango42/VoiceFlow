@@ -9,7 +9,9 @@
   },
   "devDependencies": {
     "electron": "^36.3.2",
-    "electron-builder": "^24.9.1"
+    "electron-builder": "^24.9.1",
+    "electron-packager": "^17.1.2",
+    "electron-rebuild": "^3.2.9"
   },
   "build": {
     "appId": "com.voiceflow.app",
@@ -17,9 +19,24 @@
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "main.js",
+      "package.json",
+      "../dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist",
+        "to": "app/dist"
+      }
+    ],
     "win": {
-      "target": "portable",
+      "target": "nsis",
       "icon": "../src-tauri/icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   }
 }

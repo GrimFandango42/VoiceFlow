@@ -11,7 +11,7 @@
 ## ⌨️ Keyboard Shortcuts
 | Shortcut | Action |
 |----------|---------|
-| `Ctrl+Alt+Space` | Toggle recording |
+| `Ctrl+Alt` | Toggle recording |
 | `Ctrl+Alt+V` | Show/hide window |
 | `Ctrl+Alt+S` | Quick settings |
 

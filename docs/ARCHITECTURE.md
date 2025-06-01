@@ -73,7 +73,7 @@ VoiceFlow is a desktop application built with Tauri, combining the performance o
 **Key Features**:
 ```rust
 // Global hotkey handling
-tauri::GlobalShortcutManager::register("Ctrl+Alt+Space")
+tauri::GlobalShortcutManager::register("Ctrl+Alt")
 
 // System tray with menu
 SystemTray::new()
@@ -129,7 +129,7 @@ Audio Input → VAD → Whisper → DeepSeek → WebSocket Output
 
 ### 1. Recording Flow
 ```
-User presses Ctrl+Alt+Space
+User presses Ctrl+Alt
     ↓
 Tauri captures hotkey
     ↓

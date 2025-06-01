@@ -16,6 +16,13 @@ from RealtimeSTT import AudioToTextRecorder
 import threading
 import queue
 import time
+try:
+    import pyautogui
+    import keyboard
+    SYSTEM_INTEGRATION = True
+except ImportError:
+    SYSTEM_INTEGRATION = False
+    print("System integration packages not installed. Text injection disabled.")
 
 class VoiceFlowServer:
     def __init__(self):
@@ -35,7 +42,7 @@ class VoiceFlowServer:
             "http://127.0.0.1:11434/api/generate"  # Alternative local
         ]
         self.ollama_url = None  # Will be set when we find a working endpoint
-        self.deepseek_model = "deepseek-r1:14b"
+        self.deepseek_model = "llama3.3:latest"
         self.use_ai_enhancement = True
         
         # Test Ollama connectivity
@@ -206,6 +213,35 @@ class VoiceFlowServer:
             "timestamp": datetime.now().isoformat()
         })
         
+        
+        # Auto-inject text at cursor position
+        self.inject_text_at_cursor(enhanced_text)
+    
+    def inject_text_at_cursor(self, text):
+        """Inject text at the current cursor position in any application"""
+        if not SYSTEM_INTEGRATION:
+            print(f"[Text ready to paste]: {text}")
+            return
+            
+        try:
+            # Method 1: Direct typing with pyautogui
+            # This works in most applications
+            pyautogui.typewrite(text)
+            print(f"[Injected]: {text}")
+            
+        except Exception as e:
+            print(f"[Injection failed]: {e}")
+            # Fallback: Copy to clipboard
+            try:
+                import win32clipboard
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32clipboard.CF_TEXT, text.encode('utf-8'))
+                win32clipboard.CloseClipboard()
+                print("[Copied to clipboard] Press Ctrl+V to paste")
+            except:
+                print("[Error] Could not access clipboard")
+        
     def enhance_with_deepseek(self, text):
         """Enhance transcription with DeepSeek for proper formatting"""
         if not self.use_ai_enhancement:
@@ -365,6 +401,28 @@ Formatted text:"""
                     # Trigger recording manually if needed
                     pass
                     
+                elif data["type"] == "toggle_recording":
+                    # Toggle recording state
+                    self.recorder.text(lambda text: None)
+                    
+                elif data["type"] == "set_language":
+                    # Change language setting
+                    language = data.get("language", "en")
+                    self.recorder.language = language
+                    await websocket.send(json.dumps({
+                        "type": "language_changed",
+                        "language": language
+                    }))
+                    
+                elif data["type"] == "set_microphone":
+                    # Change microphone setting
+                    device = data.get("device", None)
+                    # This would require reinitializing the recorder
+                    await websocket.send(json.dumps({
+                        "type": "microphone_changed",
+                        "device": device
+                    }))
+                    
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:
@@ -378,6 +436,19 @@ Formatted text:"""
         
         recorder_thread = threading.Thread(target=recorder_loop, daemon=True)
         recorder_thread.start()
+    
+    def start_hotkey_listener(self):
+        """Start global hotkey listener for Ctrl+Alt+Space"""
+        def hotkey_handler():
+            # Trigger recording toggle
+            print("🎤 Hotkey pressed!")
+            # The recorder already has its own hotkey handling
+            
+        try:
+            keyboard.add_hotkey('ctrl+alt', hotkey_handler)
+            print("🎯 Global hotkey registered: Ctrl+Alt")
+        except Exception as e:
+            print(f"⚠️  Could not register global hotkey: {e}")
         
     async def main(self):
         """Main server loop"""
@@ -389,10 +460,18 @@ Formatted text:"""
         # Start the recorder thread
         self.start_recorder_thread()
         
+        # Start global hotkey listener if available
+        if SYSTEM_INTEGRATION:
+            self.start_hotkey_listener()
+        
         # Start WebSocket server
         async with websockets.serve(self.handle_websocket, "localhost", 8765):
             print("🚀 Server running on ws://localhost:8765")
-            print("🎯 Press Ctrl+Alt+Space to start recording (configured in app)")
+            print("🎯 Press Ctrl+Alt to start recording (configured in app)")
+            if SYSTEM_INTEGRATION:
+                print("✅ System integration active - text will be typed at cursor")
+            else:
+                print("⚠️  Install pyautogui and keyboard for automatic text injection")
             await asyncio.Future()  # Run forever
             
 if __name__ == "__main__":

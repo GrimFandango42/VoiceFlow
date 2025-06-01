@@ -29,7 +29,7 @@ BUILD.bat
 
 ## ✨ Features
 
-- 🎙️ **Real-time Voice Transcription** - Press `Ctrl+Alt+Space` anywhere to start recording
+- 🎙️ **Real-time Voice Transcription** - Press `Ctrl+Alt` anywhere to start recording
 - 🚀 **GPU Accelerated** - Leverages your NVIDIA GPU for blazing fast performance
 - 🧠 **AI Enhancement** - DeepSeek formats your transcriptions with proper punctuation
 - 📊 **Usage Statistics** - Track your words, sessions, and performance metrics
@@ -136,7 +136,7 @@ scripts\check-build.bat
 │  - Settings management                              │
 ├─────────────────────────────────────────────────────┤
 │  Rust Backend (Tauri)                               │
-│  - Global hotkey handling (Ctrl+Alt+Space)          │
+│  - Global hotkey handling (Ctrl+Alt)              │
 │  - System tray integration                          │
 │  - Native window management                         │
 │  - WebSocket client                                 │
@@ -152,7 +152,7 @@ scripts\check-build.bat
 ## 🎯 Key Features
 
 ### Global Hotkey System
-- **Ctrl+Alt+Space**: Toggle recording from anywhere
+- **Ctrl+Alt**: Toggle recording from anywhere
 - Works even when app is minimized to tray
 - Visual indicator when recording
 

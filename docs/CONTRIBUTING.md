@@ -187,7 +187,7 @@ pub fn register_hotkey(shortcut: &str) -> Result<(), HotkeyError> {
 /// Registers a global hotkey for the application
 /// 
 /// # Arguments
-/// * `shortcut` - The key combination (e.g., "Ctrl+Alt+Space")
+/// * `shortcut` - The key combination (e.g., "Ctrl+Alt")
 /// 
 /// # Returns
 /// * `Ok(())` if successful

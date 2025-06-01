@@ -1,42 +1,42 @@
 {
-  "tests_passed": 5,
-  "tests_failed": 1,
+  "tests_passed": 2,
+  "tests_failed": 4,
   "details": [
     {
       "test": "Module imports",
-      "passed": true,
-      "details": "",
-      "timestamp": 1748716678.3544078
+      "passed": false,
+      "details": "No module named 'RealtimeSTT'",
+      "timestamp": 1748756909.2628565
     },
     {
       "test": "Database operations",
       "passed": true,
       "details": "",
-      "timestamp": 1748716678.372459
+      "timestamp": 1748756909.2882683
     },
     {
       "test": "Ollama connection",
       "passed": true,
       "details": "Connected to http://localhost:11434/api/tags, 1 models available",
-      "timestamp": 1748716682.4009004
+      "timestamp": 1748756909.298696
     },
     {
       "test": "Audio devices",
-      "passed": true,
-      "details": "Found 32 devices, default: Microphone (3- fifine Microphon",
-      "timestamp": 1748716682.4760814
+      "passed": false,
+      "details": "No module named 'pyaudio'",
+      "timestamp": 1748756909.2997139
     },
     {
-      "test": "Whisper model cache",
-      "passed": true,
-      "details": "Model cache directory exists",
-      "timestamp": 1748716682.4762232
+      "test": "Whisper model",
+      "passed": false,
+      "details": "No module named 'faster_whisper'",
+      "timestamp": 1748756909.300452
     },
     {
       "test": "WebSocket server",
       "passed": false,
-      "details": "Connection timeout",
-      "timestamp": 1748716684.5062034
+      "details": "Server not running (this is expected in test mode)",
+      "timestamp": 1748756909.3177037
     }
   ]
 }
