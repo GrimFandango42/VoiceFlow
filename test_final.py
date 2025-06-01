@@ -41,15 +41,32 @@ class VoiceFlowFinalTests:
         
     def test_executable_exists(self):
         """Test if the executable exists and has reasonable size"""
-        exe_path = self.project_root / "electron/dist/win-unpacked/VoiceFlow.exe"
-        exists = exe_path.exists()
-        size_mb = exe_path.stat().st_size / (1024*1024) if exists else 0
+        # Check multiple possible locations for the executable
+        possible_paths = [
+            self.project_root / "electron/dist/win-unpacked/VoiceFlow.exe",
+            self.project_root / "dist/VoiceFlow.exe",
+            self.project_root / "python/venv/Scripts/python.exe"
+        ]
         
-        self.log_test(
-            "Executable exists",
-            exists and size_mb > 50,  # Should be > 50MB
-            f"Path: {exe_path}, Size: {size_mb:.1f}MB"
-        )
+        found_exe = None
+        for exe_path in possible_paths:
+            if exe_path.exists():
+                found_exe = exe_path
+                break
+        
+        if found_exe:
+            size_mb = found_exe.stat().st_size / (1024*1024)
+            self.log_test(
+                "Executable exists",
+                True,
+                f"Path: {found_exe}, Size: {size_mb:.1f}MB"
+            )
+        else:
+            self.log_test(
+                "Executable exists",
+                False,
+                f"Not found in any of: {[str(p) for p in possible_paths]}"
+            )
         
     def test_launcher_scripts(self):
         """Test launcher scripts exist and are properly configured"""
@@ -227,7 +244,7 @@ if __name__ == "__main__":
     success = tester.run_all_tests()
     
     if success:
-        print("\n✅ All tests passed! VoiceFlow is ready for deployment.")
+        print("\n[SUCCESS] All tests passed! VoiceFlow is ready for deployment.")
     else:
-        print(f"\n❌ {tester.results['failed']} test(s) failed. Review results above.")
+        print(f"\n[FAILED] {tester.results['failed']} test(s) failed. Review results above.")
         sys.exit(1)

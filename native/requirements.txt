@@ -1,0 +1,26 @@
+# VoiceFlow Native - Requirements
+# Core Windows API and system integration
+pywin32>=306
+pystray>=0.19.4
+Pillow>=9.5.0
+
+# Audio processing
+pyaudio>=0.2.11
+wave
+tempfile
+
+# Global hotkey handling
+keyboard>=0.13.5
+
+# Async and threading
+asyncio
+
+# Existing speech processing pipeline (to be integrated)
+# torch>=2.0.0
+# faster-whisper>=0.9.0
+# RealtimeSTT>=0.1.0
+# requests>=2.28.0
+
+# Optional enhancements
+psutil>=5.9.0  # For system monitoring
+winshell>=0.6  # For Windows shell integration
