@@ -1,0 +1,42 @@
+{
+  "tests_passed": 5,
+  "tests_failed": 1,
+  "details": [
+    {
+      "test": "Module imports",
+      "passed": true,
+      "details": "",
+      "timestamp": 1748716678.3544078
+    },
+    {
+      "test": "Database operations",
+      "passed": true,
+      "details": "",
+      "timestamp": 1748716678.372459
+    },
+    {
+      "test": "Ollama connection",
+      "passed": true,
+      "details": "Connected to http://localhost:11434/api/tags, 1 models available",
+      "timestamp": 1748716682.4009004
+    },
+    {
+      "test": "Audio devices",
+      "passed": true,
+      "details": "Found 32 devices, default: Microphone (3- fifine Microphon",
+      "timestamp": 1748716682.4760814
+    },
+    {
+      "test": "Whisper model cache",
+      "passed": true,
+      "details": "Model cache directory exists",
+      "timestamp": 1748716682.4762232
+    },
+    {
+      "test": "WebSocket server",
+      "passed": false,
+      "details": "Connection timeout",
+      "timestamp": 1748716684.5062034
+    }
+  ]
+}
