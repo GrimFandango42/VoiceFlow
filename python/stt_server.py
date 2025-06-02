@@ -66,7 +66,7 @@ class VoiceFlowServer:
                 model="large-v3",
                 language="en",
                 device="cuda",
-                compute_type="int8",
+                compute_type="float16",
                 gpu_device_index=0,
                 on_recording_start=self.on_recording_start,
                 on_recording_stop=self.on_recording_stop,
@@ -82,8 +82,8 @@ class VoiceFlowServer:
                 # VAD settings for better detection
                 silero_sensitivity=0.5,
                 webrtc_sensitivity=3,
-                post_speech_silence_duration=0.4,
-                min_length_of_recording=0.5,
+                post_speech_silence_duration=0.8,
+                min_length_of_recording=0.2,
                 min_gap_between_recordings=0.3,
                 # Wake word support (optional)
                 wake_words="",
@@ -112,8 +112,8 @@ class VoiceFlowServer:
                     on_realtime_transcription_update=self.on_realtime_update,
                     silero_sensitivity=0.5,
                     webrtc_sensitivity=3,
-                    post_speech_silence_duration=0.4,
-                    min_length_of_recording=0.5,
+                    post_speech_silence_duration=0.8,
+                    min_length_of_recording=0.2,
                     min_gap_between_recordings=0.3,
                     wake_words="",
                     on_wakeword_detected=None
@@ -139,8 +139,8 @@ class VoiceFlowServer:
                     on_realtime_transcription_update=self.on_realtime_update,
                     silero_sensitivity=0.5,
                     webrtc_sensitivity=3,
-                    post_speech_silence_duration=0.4,
-                    min_length_of_recording=0.5,
+                    post_speech_silence_duration=0.8,
+                    min_length_of_recording=0.2,
                     min_gap_between_recordings=0.3,
                     wake_words="",
                     on_wakeword_detected=None
@@ -231,25 +231,9 @@ class VoiceFlowServer:
             "timestamp": datetime.now().isoformat()
         })
         
-    def on_transcription_start(self, audio_data):
-        """Called when transcription starts with audio data"""
-        # This receives audio data (numpy array), not text
-        # Initialize transcription tracking
-        if not hasattr(self, 'current_transcription'):
-            self.current_transcription = {}
-        self.current_transcription["transcription_start_time"] = time.time()
-        return True  # Continue processing
-        
-    def on_transcription_finished(self, text):
+    def on_transcription_start(self, text):
         """Final transcription using large model"""
         start_time = time.time()
-        
-        # Initialize current_transcription if not exists
-        if not hasattr(self, 'current_transcription') or not self.current_transcription:
-            self.current_transcription = {
-                "start_time": start_time,
-                "transcription_start_time": start_time
-            }
         
         # Store raw transcription
         self.current_transcription["final_text"] = text
@@ -261,7 +245,7 @@ class VoiceFlowServer:
         
         # Calculate processing time
         processing_time = int((time.time() - start_time) * 1000)
-        duration = int((time.time() - self.current_transcription.get("start_time", start_time)) * 1000)
+        duration = int((time.time() - self.current_transcription["start_time"]) * 1000)
         
         # Store in database
         self.save_transcription(
@@ -507,23 +491,10 @@ Formatted text:"""
         """Run the STT recorder in a separate thread"""
         def recorder_loop():
             while True:
-                try:
-                    # Use text() with a callback function
-                    text = self.recorder.text(lambda final_text: self.process_final_text(final_text))
-                    if text and text.strip():
-                        self.process_final_text(text.strip())
-                except Exception as e:
-                    print(f"[ERROR] Recorder loop error: {e}")
-                    time.sleep(0.1)  # Short sleep to prevent tight loop
+                self.recorder.text(lambda text: None)  # Callbacks handle everything
         
         recorder_thread = threading.Thread(target=recorder_loop, daemon=True)
         recorder_thread.start()
-    
-    def process_final_text(self, text):
-        """Process the final transcribed text"""
-        if text and text.strip():
-            print(f"[TRANSCRIPTION] {text}")
-            self.on_transcription_finished(text.strip())
     
     def start_hotkey_listener(self):
         """Start global hotkey listener for Ctrl+Alt"""
@@ -552,38 +523,15 @@ Formatted text:"""
         if SYSTEM_INTEGRATION:
             self.start_hotkey_listener()
         
-        # Try to start WebSocket server on multiple ports
-        ports = [8765, 8766, 8767, 8768, 8769]
-        websocket_started = False
-        
-        for port in ports:
-            try:
-                async with websockets.serve(self.handle_websocket, "localhost", port):
-                    print(f"[SERVER] Server running on ws://localhost:{port}")
-                    print("[HOTKEY] Press Ctrl+Alt to start recording")
-                    if SYSTEM_INTEGRATION:
-                        print("[OK] System integration active - text will be typed at cursor")
-                    else:
-                        print("[WARNING] Install pyautogui and keyboard for automatic text injection")
-                    websocket_started = True
-                    await asyncio.Future()  # Run forever
-            except OSError as e:
-                if "10048" in str(e):  # Port in use
-                    print(f"[SERVER] Port {port} in use, trying next...")
-                    continue
-                else:
-                    print(f"[ERROR] Websocket error on port {port}: {e}")
-                    continue
-            break
-        
-        if not websocket_started:
-            print("[SERVER] Could not start websocket server, continuing with standalone mode...")
-            print("[HOTKEY] Press Ctrl+Alt to start recording")
+        # Start WebSocket server
+        async with websockets.serve(self.handle_websocket, "localhost", 8765):
+            print("[SERVER] Server running on ws://localhost:8765")
+            print("[HOTKEY] Press Ctrl+Alt to start recording (configured in app)")
             if SYSTEM_INTEGRATION:
                 print("[OK] System integration active - text will be typed at cursor")
             else:
                 print("[WARNING] Install pyautogui and keyboard for automatic text injection")
-            await asyncio.Future()  # Run forever anyway
+            await asyncio.Future()  # Run forever
             
 if __name__ == "__main__":
     server = VoiceFlowServer()
