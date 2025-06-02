@@ -50,7 +50,7 @@ $toggleItem.Add_Click({
             # Start streamlined server
             $startInfo = New-Object System.Diagnostics.ProcessStartInfo
             $startInfo.FileName = "python\venv\Scripts\python.exe"
-            $startInfo.Arguments = "python\voiceflow_streamlined.py"
+            $startInfo.Arguments = "python\simple_server.py"
             $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
             $startInfo.CreateNoWindow = $true
             $startInfo.UseShellExecute = $false

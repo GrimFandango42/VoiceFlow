@@ -47,7 +47,7 @@ echo Press Ctrl+C to stop
 echo.
 
 cd python
-python voiceflow_streamlined.py
+python stt_server.py
 
 echo.
 echo [Shutdown] VoiceFlow stopped

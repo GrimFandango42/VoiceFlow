@@ -76,7 +76,7 @@ except:
     test('Audio system', False)
 
 # Check files exist
-test('Streamlined server exists', os.path.exists('python/voiceflow_streamlined.py'))
+test('Simple server exists', os.path.exists('python/simple_server.py'))
 test('Simple launcher exists', os.path.exists('VoiceFlow-Simple.bat'))
 test('Tray launcher exists', os.path.exists('VoiceFlow-Simple-Tray.bat'))
 
@@ -94,12 +94,12 @@ except:
 
 # Test syntax
 try:
-    with open('python/voiceflow_streamlined.py', 'r') as f:
+    with open('python/simple_server.py', 'r') as f:
         code = f.read()
-    compile(code, 'voiceflow_streamlined.py', 'exec')
-    test('Streamlined server syntax', True)
+    compile(code, 'simple_server.py', 'exec')
+    test('Simple server syntax', True)
 except Exception as e:
-    test('Streamlined server syntax', False)
+    test('Simple server syntax', False)
     print(f'  Error: {e}')
 
 print()

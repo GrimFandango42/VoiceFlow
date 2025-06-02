@@ -38,7 +38,7 @@ echo.
 echo Press Ctrl+C to stop
 echo.
 
-python python\enhanced_stt_server.py
+python python\stt_server.py
 
 echo.
 echo [SHUTDOWN] Enhanced VoiceFlow stopped

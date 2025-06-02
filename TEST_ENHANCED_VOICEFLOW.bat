@@ -128,22 +128,22 @@ def test_whisper_models():
     except Exception as e:
         return f'Whisper initialization failed: {e}'
 
-def test_enhanced_server_syntax():
+def test_stt_server_syntax():
     try:
-        with open('python/enhanced_stt_server.py', 'r') as f:
+        with open('python/stt_server.py', 'r') as f:
             code = f.read()
-        compile(code, 'enhanced_stt_server.py', 'exec')
+        compile(code, 'stt_server.py', 'exec')
         return True
     except SyntaxError as e:
-        return f'Syntax error in enhanced server: {e}'
+        return f'Syntax error in STT server: {e}'
     except FileNotFoundError:
-        return 'Enhanced server file not found'
+        return 'STT server file not found'
 
 def test_native_server_syntax():
     try:
-        with open('native/enhanced_voiceflow_native.py', 'r') as f:
+        with open('native/voiceflow_native.py', 'r') as f:
             code = f.read()
-        compile(code, 'enhanced_voiceflow_native.py', 'exec')
+        compile(code, 'voiceflow_native.py', 'exec')
         return True
     except SyntaxError as e:
         return f'Syntax error in native server: {e}'
@@ -233,7 +233,7 @@ run_test('Audio System', test_audio_system)
 run_test('GPU Availability', test_gpu_availability)
 run_test('Ollama Connectivity', test_ollama_connectivity)
 run_test('Whisper Models', test_whisper_models)
-run_test('Enhanced Server Syntax', test_enhanced_server_syntax)
+run_test('STT Server Syntax', test_stt_server_syntax)
 run_test('Native Server Syntax', test_native_server_syntax)
 run_test('Global Hotkey Registration', test_global_hotkey_registration)
 run_test('Text Injection Methods', test_text_injection_methods)

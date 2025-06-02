@@ -55,7 +55,7 @@ $toggleItem.Add_Click({
             # Start enhanced server
             $startInfo = New-Object System.Diagnostics.ProcessStartInfo
             $startInfo.FileName = "python\venv\Scripts\python.exe"
-            $startInfo.Arguments = "python\enhanced_stt_server.py"
+            $startInfo.Arguments = "python\stt_server.py"
             $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
             $startInfo.CreateNoWindow = $true
             $startInfo.UseShellExecute = $false
