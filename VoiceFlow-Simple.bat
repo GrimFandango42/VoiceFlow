@@ -2,7 +2,7 @@
 title VoiceFlow - Simple Global Voice Transcription
 echo.
 echo ================================================================
-echo                     VoiceFlow - Simple & Clean
+echo                     VoiceFlow - Simple and Clean
 echo              Press and Hold Ctrl+Alt Anywhere to Record
 echo ================================================================
 echo.

@@ -66,7 +66,7 @@ class VoiceFlowServer:
                 model="large-v3",
                 language="en",
                 device="cuda",
-                compute_type="float16",
+                compute_type="int8",
                 gpu_device_index=0,
                 on_recording_start=self.on_recording_start,
                 on_recording_stop=self.on_recording_stop,
@@ -231,9 +231,25 @@ class VoiceFlowServer:
             "timestamp": datetime.now().isoformat()
         })
         
-    def on_transcription_start(self, text):
+    def on_transcription_start(self, audio_data):
+        """Called when transcription starts with audio data"""
+        # This receives audio data (numpy array), not text
+        # Initialize transcription tracking
+        if not hasattr(self, 'current_transcription'):
+            self.current_transcription = {}
+        self.current_transcription["transcription_start_time"] = time.time()
+        return True  # Continue processing
+        
+    def on_transcription_finished(self, text):
         """Final transcription using large model"""
         start_time = time.time()
+        
+        # Initialize current_transcription if not exists
+        if not hasattr(self, 'current_transcription') or not self.current_transcription:
+            self.current_transcription = {
+                "start_time": start_time,
+                "transcription_start_time": start_time
+            }
         
         # Store raw transcription
         self.current_transcription["final_text"] = text
@@ -245,7 +261,7 @@ class VoiceFlowServer:
         
         # Calculate processing time
         processing_time = int((time.time() - start_time) * 1000)
-        duration = int((time.time() - self.current_transcription["start_time"]) * 1000)
+        duration = int((time.time() - self.current_transcription.get("start_time", start_time)) * 1000)
         
         # Store in database
         self.save_transcription(
@@ -491,7 +507,13 @@ Formatted text:"""
         """Run the STT recorder in a separate thread"""
         def recorder_loop():
             while True:
-                self.recorder.text(lambda text: None)  # Callbacks handle everything
+                try:
+                    text = self.recorder.text()  # Get text directly
+                    if text and text.strip():
+                        self.on_transcription_finished(text.strip())
+                except Exception as e:
+                    print(f"[ERROR] Recorder loop error: {e}")
+                    time.sleep(1)
         
         recorder_thread = threading.Thread(target=recorder_loop, daemon=True)
         recorder_thread.start()
