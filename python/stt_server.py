@@ -508,15 +508,22 @@ Formatted text:"""
         def recorder_loop():
             while True:
                 try:
-                    text = self.recorder.text()  # Get text directly
+                    # Use text() with a callback function
+                    text = self.recorder.text(lambda final_text: self.process_final_text(final_text))
                     if text and text.strip():
-                        self.on_transcription_finished(text.strip())
+                        self.process_final_text(text.strip())
                 except Exception as e:
                     print(f"[ERROR] Recorder loop error: {e}")
-                    time.sleep(1)
+                    time.sleep(0.1)  # Short sleep to prevent tight loop
         
         recorder_thread = threading.Thread(target=recorder_loop, daemon=True)
         recorder_thread.start()
+    
+    def process_final_text(self, text):
+        """Process the final transcribed text"""
+        if text and text.strip():
+            print(f"[TRANSCRIPTION] {text}")
+            self.on_transcription_finished(text.strip())
     
     def start_hotkey_listener(self):
         """Start global hotkey listener for Ctrl+Alt"""
@@ -545,15 +552,38 @@ Formatted text:"""
         if SYSTEM_INTEGRATION:
             self.start_hotkey_listener()
         
-        # Start WebSocket server
-        async with websockets.serve(self.handle_websocket, "localhost", 8765):
-            print("[SERVER] Server running on ws://localhost:8765")
-            print("[HOTKEY] Press Ctrl+Alt to start recording (configured in app)")
+        # Try to start WebSocket server on multiple ports
+        ports = [8765, 8766, 8767, 8768, 8769]
+        websocket_started = False
+        
+        for port in ports:
+            try:
+                async with websockets.serve(self.handle_websocket, "localhost", port):
+                    print(f"[SERVER] Server running on ws://localhost:{port}")
+                    print("[HOTKEY] Press Ctrl+Alt to start recording")
+                    if SYSTEM_INTEGRATION:
+                        print("[OK] System integration active - text will be typed at cursor")
+                    else:
+                        print("[WARNING] Install pyautogui and keyboard for automatic text injection")
+                    websocket_started = True
+                    await asyncio.Future()  # Run forever
+            except OSError as e:
+                if "10048" in str(e):  # Port in use
+                    print(f"[SERVER] Port {port} in use, trying next...")
+                    continue
+                else:
+                    print(f"[ERROR] Websocket error on port {port}: {e}")
+                    continue
+            break
+        
+        if not websocket_started:
+            print("[SERVER] Could not start websocket server, continuing with standalone mode...")
+            print("[HOTKEY] Press Ctrl+Alt to start recording")
             if SYSTEM_INTEGRATION:
                 print("[OK] System integration active - text will be typed at cursor")
             else:
                 print("[WARNING] Install pyautogui and keyboard for automatic text injection")
-            await asyncio.Future()  # Run forever
+            await asyncio.Future()  # Run forever anyway
             
 if __name__ == "__main__":
     server = VoiceFlowServer()
