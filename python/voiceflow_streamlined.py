@@ -14,9 +14,10 @@ import wave
 import os
 from datetime import datetime
 from pathlib import Path
-from RealtimeSTT import AudioToTextRecorder
+from faster_whisper import WhisperModel
 import pyaudio
 import sqlite3
+import numpy as np
 
 # Windows integration
 try:
@@ -73,7 +74,7 @@ class VoiceFlowStreamlined:
         # Initialize speech processor
         self.init_speech_processor()
         
-        print(f"[VoiceFlow] Initialized - AI: {'✅' if self.ai_available else '❌'}")
+        print(f"[VoiceFlow] Initialized - AI: {'Yes' if self.ai_available else 'No'}")
         print(f"[VoiceFlow] Data: {self.data_dir}")
     
     def init_database(self):
@@ -118,26 +119,69 @@ class VoiceFlowStreamlined:
     
     def init_speech_processor(self):
         """Initialize Whisper with smart fallbacks"""
+        # Start with CPU to avoid CUDA/cuDNN errors
         configs = [
-            {"model": "base", "device": "cuda", "compute_type": "int8"},
             {"model": "base", "device": "cpu", "compute_type": "int8"}
         ]
         
+        # Only try CUDA if explicitly available and no cuDNN errors
+        try:
+            import torch
+            if torch.cuda.is_available():
+                # Try to import and use cuDNN to check if it's properly installed
+                try:
+                    import ctypes
+                    # This will fail if cuDNN is not properly installed
+                    ctypes.CDLL("cudnn_ops64_9.dll")
+                    configs.insert(0, {"model": "base", "device": "cuda", "compute_type": "int8"})
+                except:
+                    print("[Speech] CUDA available but cuDNN not properly installed, using CPU only")
+        except ImportError:
+            print("[Speech] PyTorch CUDA support not available, using CPU")
+        
         for config in configs:
             try:
-                self.recorder = AudioToTextRecorder(
-                    model=config["model"],
-                    language="en",
+                print(f"[Speech] Trying {config['device']} configuration...")
+                self.whisper_model = WhisperModel(
+                    config["model"],
                     device=config["device"],
-                    compute_type=config["compute_type"],
-                    use_microphone=False,  # We handle audio ourselves
-                    spinner=False,
-                    level=0
+                    compute_type=config["compute_type"]
                 )
-                print(f"[Speech] Ready: {config['device']} {config['model']}")
-                return
+                
+                # Test the model with a simple transcription
+                try:
+                    # Create a tiny test audio file
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                        test_path = f.name
+                    
+                    # Generate 0.1 seconds of silence
+                    wf = wave.open(test_path, 'wb')
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    silence = np.zeros(1600, dtype=np.int16)  # 0.1 sec at 16kHz
+                    wf.writeframes(silence.tobytes())
+                    wf.close()
+                    
+                    # Test transcription
+                    segments, info = self.whisper_model.transcribe(test_path)
+                    os.unlink(test_path)  # Cleanup
+                    
+                    print(f"[Speech] Ready: {config['device']} {config['model']}")
+                    return
+                    
+                except Exception as test_error:
+                    print(f"[Speech] Test failed for {config['device']}: {test_error}")
+                    if config["device"] == "cpu":
+                        # CPU should always work, so if it fails, something is seriously wrong
+                        raise
+                    continue
+                
             except Exception as e:
                 print(f"[Speech] Config failed: {e}")
+                if config["device"] == "cpu":
+                    # CPU initialization should not fail
+                    raise
         
         raise Exception("Could not initialize speech processor")
     
@@ -251,8 +295,42 @@ class VoiceFlowStreamlined:
             if not temp_path:
                 return
             
-            # Transcribe with Whisper
-            raw_text = self.recorder.transcribe(temp_path)
+            # Transcribe with Whisper (with CUDA fallback)
+            try:
+                segments, info = self.whisper_model.transcribe(
+                    temp_path,
+                    language="en",
+                    vad_filter=True,
+                    vad_parameters=dict(min_silence_duration_ms=500)
+                )
+                
+                # Combine segments into text
+                raw_text = " ".join([segment.text for segment in segments])
+                
+            except Exception as cuda_error:
+                print(f"[Speech] CUDA error, falling back to CPU: {cuda_error}")
+                
+                # Try CPU fallback
+                try:
+                    from faster_whisper import WhisperModel
+                    cpu_model = WhisperModel("base", device="cpu", compute_type="int8")
+                    segments, info = cpu_model.transcribe(
+                        temp_path,
+                        language="en",
+                        vad_filter=True,
+                        vad_parameters=dict(min_silence_duration_ms=500)
+                    )
+                    raw_text = " ".join([segment.text for segment in segments])
+                    print("[Speech] CPU fallback successful")
+                    
+                    # Update main model to CPU for future use
+                    self.whisper_model = cpu_model
+                    
+                except Exception as cpu_error:
+                    print(f"[Speech] CPU fallback failed: {cpu_error}")
+                    os.unlink(temp_path)
+                    return
+            
             os.unlink(temp_path)  # Cleanup
             
             if not raw_text or not raw_text.strip():
@@ -496,14 +574,28 @@ class VoiceFlowStreamlined:
             self.websocket_clients.discard(websocket)
     
     async def run_server(self):
-        """Run the WebSocket server"""
-        try:
-            async with websockets.serve(self.handle_websocket, "localhost", 8765):
-                print("[WebSocket] Server running on ws://localhost:8765")
-                while self.is_running:
-                    await asyncio.sleep(1)
-        except Exception as e:
-            print(f"[WebSocket] Error: {e}")
+        """Run the WebSocket server with port fallback"""
+        ports_to_try = [8765, 8766, 8767, 8768, 8769]
+        
+        for port in ports_to_try:
+            try:
+                async with websockets.serve(self.handle_websocket, "localhost", port):
+                    print(f"[WebSocket] Server running on ws://localhost:{port}")
+                    while self.is_running:
+                        await asyncio.sleep(1)
+                break
+            except OSError as e:
+                if e.errno == 10048:  # Address already in use
+                    print(f"[WebSocket] Port {port} in use, trying next...")
+                    continue
+                else:
+                    print(f"[WebSocket] Error on port {port}: {e}")
+                    break
+            except Exception as e:
+                print(f"[WebSocket] Error on port {port}: {e}")
+                break
+        else:
+            print("[WebSocket] No available ports found, continuing without WebSocket server")
     
     def run(self):
         """Main entry point"""

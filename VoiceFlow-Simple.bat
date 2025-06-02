@@ -30,11 +30,11 @@ if errorlevel 1 (
 echo.
 echo [Starting] VoiceFlow Streamlined...
 echo.
-echo ✅ Simple Ctrl+Alt hotkey (press and hold)
-echo ✅ Works in any Windows application
-echo ✅ Instant text injection at cursor
-echo ✅ AI enhancement via Ollama (if available)
-echo ✅ Clean, focused functionality
+echo [OK] Simple Ctrl+Alt hotkey (press and hold)
+echo [OK] Works in any Windows application
+echo [OK] Instant text injection at cursor
+echo [OK] AI enhancement via Ollama (if available)
+echo [OK] Clean, focused functionality
 echo.
 echo Usage:
 echo   1. Position cursor where you want text
