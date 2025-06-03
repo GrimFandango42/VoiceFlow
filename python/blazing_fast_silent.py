@@ -241,13 +241,35 @@ class BlazingFastVoiceFlow:
         except:
             return False
             
+    def cleanup(self):
+        """Clean shutdown"""
+        try:
+            # Unregister hotkeys
+            keyboard.unhook_all()
+            # Any other cleanup
+        except:
+            pass
+            
     def run(self):
-        """Run silently"""
+        """Run silently with proper shutdown"""
+        import signal
+        
+        def signal_handler(sig, frame):
+            """Handle Ctrl+C and other signals gracefully"""
+            print("\n\n🛑 Shutting down VoiceFlow...")
+            self.cleanup()
+            sys.exit(0)
+            
+        # Register signal handlers
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
         try:
             while True:
                 time.sleep(0.1)
         except KeyboardInterrupt:
             print("\n\n✅ VoiceFlow stopped")
+            self.cleanup()
             
 
 if __name__ == "__main__":
