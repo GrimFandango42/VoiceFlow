@@ -1,6 +1,8 @@
 """
-VoiceFlow Simple Server - WORKING VERSION
-Focuses on core transcription functionality without complex WebSocket server
+VoiceFlow Simple Server - FIXED VERSION
+- No infinite loops with timeout protection
+- Minimal logging (just timestamps and results)
+- Clean session toggle functionality
 """
 
 import time
@@ -8,6 +10,9 @@ import threading
 from datetime import datetime
 from pathlib import Path
 import sqlite3
+import signal
+import sys
+
 try:
     import requests
     OLLAMA_AVAILABLE = True
@@ -18,94 +23,93 @@ try:
     import pyautogui
     import keyboard
     SYSTEM_INTEGRATION = True
-    pyautogui.FAILSAFE = False  # Disable failsafe for automation
+    pyautogui.FAILSAFE = False
 except ImportError:
     SYSTEM_INTEGRATION = False
-    print("WARNING: System integration packages not installed. Text injection disabled.")
 
 try:
     from RealtimeSTT import AudioToTextRecorder
     STT_AVAILABLE = True
 except ImportError:
     STT_AVAILABLE = False
-    print("ERROR: RealtimeSTT not available")
 
 class SimpleVoiceFlowServer:
     def __init__(self):
-        print("[INIT] Starting Simple VoiceFlow Server...")
-        
-        # Initialize paths
         self.data_dir = Path.home() / ".voiceflow"
         self.data_dir.mkdir(exist_ok=True)
         self.db_path = self.data_dir / "transcriptions.db"
         
+        # State management for clean sessions
+        self.is_recording = False
+        self.is_processing = False
+        self.shutdown_flag = False
+        self.last_recording_time = 0
+        
         # Initialize database
         self.init_database()
         
-        # Test Ollama connectivity
-        self.ollama_url = None
+        # Test Ollama
         self.use_ai_enhancement = False
         if OLLAMA_AVAILABLE:
             self.test_ollama_connection()
         
-        # Statistics
-        self.stats = {
-            "total_transcriptions": 0,
-            "total_words": 0,
-            "session_start": datetime.now(),
-        }
-        
-        # Initialize STT recorder with STABLE settings
+        # Initialize STT
+        self.recorder = None
         if STT_AVAILABLE:
             self.init_recorder()
-        else:
-            print("[ERROR] Cannot initialize recorder - RealtimeSTT not available")
             
     def init_recorder(self):
-        """Initialize the STT recorder with stable settings"""
+        """Initialize STT recorder with timeout protection and minimal logging"""
         try:
-            print("[INIT] Initializing STT recorder...")
             self.recorder = AudioToTextRecorder(
-                model="tiny",  # Use tiny model for stability
-                language="en",
-                device="cpu",  # Force CPU to avoid GPU issues
-                compute_type="int8",  # Force int8 for compatibility
+                model="tiny",
+                language="en", 
+                device="cpu",
+                compute_type="int8",
                 use_microphone=True,
                 spinner=False,
-                level=0,  # Minimal logging
-                # Disable realtime for simplicity
+                level=0,
                 enable_realtime_transcription=False,
-                # Conservative VAD settings
-                silero_sensitivity=0.5,
+                silero_sensitivity=0.4,
                 webrtc_sensitivity=3,
-                post_speech_silence_duration=0.4,
+                post_speech_silence_duration=0.8,
                 min_length_of_recording=0.5,
                 min_gap_between_recordings=0.3,
+                on_recording_start=self.on_recording_start,
+                on_recording_stop=self.on_recording_stop
             )
-            print("[OK] STT recorder initialized successfully")
             return True
         except Exception as e:
-            print(f"[ERROR] Failed to initialize STT recorder: {e}")
+            print(f"[ERROR] STT initialization failed: {e}")
             return False
             
-    def test_ollama_connection(self):
-        """Test Ollama connectivity"""
-        try:
-            response = requests.get("http://localhost:11434/api/tags", timeout=2)
-            if response.status_code == 200:
-                self.ollama_url = "http://localhost:11434/api/generate"
-                self.use_ai_enhancement = True
-                models = response.json().get('models', [])
-                print(f"[OK] Ollama connected, found {len(models)} models")
-                return True
-        except Exception:
-            pass
+    def on_recording_start(self):
+        """Called when recording starts - minimal logging"""
+        self.is_recording = True
+        self.start_time = datetime.now()
+        print(f"Recording started: {self.start_time.strftime('%H:%M:%S')}")
         
-        print("[WARNING] Ollama not available - using basic text formatting")
+    def on_recording_stop(self):
+        """Called when recording stops - show duration"""
+        self.is_recording = False
+        if hasattr(self, 'start_time'):
+            end_time = datetime.now()
+            duration = (end_time - self.start_time).total_seconds()
+            print(f"Recording stopped: {end_time.strftime('%H:%M:%S')} - {duration:.1f}s duration")
+            
+    def test_ollama_connection(self):
+        """Test Ollama connection with short timeout"""
+        try:
+            response = requests.get("http://localhost:11434/api/tags", timeout=1)
+            if response.status_code == 200:
+                self.use_ai_enhancement = True
+                return True
+        except:
+            pass
         return False
         
     def init_database(self):
-        """Initialize SQLite database"""
+        """Initialize database for transcription history"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -113,41 +117,21 @@ class SimpleVoiceFlowServer:
                 CREATE TABLE IF NOT EXISTS transcriptions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    raw_text TEXT,
-                    enhanced_text TEXT,
-                    word_count INTEGER
+                    text TEXT,
+                    duration REAL
                 )
             ''')
             conn.commit()
             conn.close()
-            print("[OK] Database initialized")
-        except Exception as e:
-            print(f"[WARNING] Database initialization failed: {e}")
+        except:
+            pass
             
     def enhance_text(self, text):
-        """Enhance text with AI or basic formatting"""
+        """Basic text enhancement - simple and fast"""
         if not text:
             return ""
             
-        if self.use_ai_enhancement and self.ollama_url:
-            try:
-                prompt = f"Format this speech with proper punctuation and capitalization: {text}"
-                response = requests.post(self.ollama_url, json={
-                    "model": "llama3.3:latest",
-                    "prompt": prompt,
-                    "stream": False,
-                    "temperature": 0.3,
-                }, timeout=10)
-                
-                if response.status_code == 200:
-                    enhanced = response.json().get('response', text).strip()
-                    if enhanced.startswith('"') and enhanced.endswith('"'):
-                        enhanced = enhanced[1:-1]
-                    return enhanced
-            except Exception as e:
-                print(f"[WARNING] AI enhancement failed: {e}")
-        
-        # Basic formatting fallback
+        # Basic formatting only
         text = text.strip()
         if text:
             text = text[0].upper() + text[1:]
@@ -157,121 +141,170 @@ class SimpleVoiceFlowServer:
         
     def inject_text(self, text):
         """Inject text at cursor position"""
-        if not SYSTEM_INTEGRATION:
-            print(f"[TEXT] {text}")
+        if not SYSTEM_INTEGRATION or not text:
             return False
             
         try:
-            print(f"[INJECTING] {text}")
             pyautogui.typewrite(text)
-            print("[SUCCESS] Text injected successfully")
             return True
         except Exception as e:
             print(f"[ERROR] Text injection failed: {e}")
             return False
             
-    def save_transcription(self, raw_text, enhanced_text):
+    def save_transcription(self, text, duration):
         """Save transcription to database"""
         try:
-            word_count = len(enhanced_text.split()) if enhanced_text else 0
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO transcriptions (raw_text, enhanced_text, word_count)
-                VALUES (?, ?, ?)
-            ''', (raw_text, enhanced_text, word_count))
+                INSERT INTO transcriptions (text, duration)
+                VALUES (?, ?)
+            ''', (text, duration))
             conn.commit()
             conn.close()
+        except:
+            pass
             
-            # Update stats
-            self.stats["total_transcriptions"] += 1
-            self.stats["total_words"] += word_count
-            
-        except Exception as e:
-            print(f"[WARNING] Could not save transcription: {e}")
-            
-    def process_speech(self):
-        """Process one speech input"""
-        if not STT_AVAILABLE:
-            print("[ERROR] STT not available")
+    def process_speech_with_timeout(self):
+        """Process speech with timeout protection to prevent infinite loops"""
+        if not STT_AVAILABLE or not self.recorder:
             return False
             
+        # Prevent concurrent processing
+        if self.is_processing:
+            return False
+            
+        self.is_processing = True
+        
         try:
-            print("[LISTENING] Press Ctrl+Alt and speak...")
+            # Set timeout protection
+            start_process_time = time.time()
             
-            # Wait for speech input
-            raw_text = self.recorder.text()
+            # Use threading to implement timeout
+            result_container = {'text': None, 'completed': False, 'error': None}
             
-            if not raw_text or not raw_text.strip():
-                print("[WARNING] No speech detected")
+            def get_text():
+                try:
+                    result_container['text'] = self.recorder.text()
+                    result_container['completed'] = True
+                except Exception as e:
+                    result_container['error'] = str(e)
+                    result_container['completed'] = True
+            
+            # Start transcription in thread
+            thread = threading.Thread(target=get_text, daemon=True)
+            thread.start()
+            
+            # Wait with timeout (max 10 seconds to prevent infinite blocking)
+            timeout = 10
+            thread.join(timeout)
+            
+            if not result_container['completed']:
+                print("[TIMEOUT] Speech processing timed out")
                 return False
                 
-            print(f"[RAW] {raw_text}")
+            if result_container['error']:
+                print(f"[ERROR] {result_container['error']}")
+                return False
+                
+            raw_text = result_container['text']
             
-            # Enhance the text
+            if not raw_text or not raw_text.strip():
+                return False
+                
+            # Process the text
             enhanced_text = self.enhance_text(raw_text)
-            print(f"[ENHANCED] {enhanced_text}")
+            duration = time.time() - start_process_time
             
-            # Save to database
-            self.save_transcription(raw_text, enhanced_text)
+            # Output result (minimal logging)
+            print(enhanced_text)
+            
+            # Save transcription
+            self.save_transcription(enhanced_text, duration)
             
             # Inject text
-            success = self.inject_text(enhanced_text)
+            self.inject_text(enhanced_text)
             
-            return success
+            # Small delay to prevent rapid-fire recordings
+            time.sleep(0.5)
+            
+            return True
             
         except Exception as e:
-            print(f"[ERROR] Speech processing failed: {e}")
+            print(f"[ERROR] {e}")
             return False
+        finally:
+            self.is_processing = False
             
     def start_hotkey_listener(self):
-        """Start hotkey listener"""
+        """Start hotkey listener with debouncing to prevent rapid-fire"""
         if not SYSTEM_INTEGRATION:
-            print("[WARNING] Hotkey listener not available")
             return False
             
         def hotkey_handler():
-            print("[HOTKEY] Ctrl+Alt pressed - processing speech...")
-            self.process_speech()
+            current_time = time.time()
+            
+            # Debounce: prevent rapid-fire activations
+            if current_time - self.last_recording_time < 1.0:
+                return
+                
+            self.last_recording_time = current_time
+            
+            # Process in separate thread to avoid blocking
+            threading.Thread(target=self.process_speech_with_timeout, daemon=True).start()
             
         try:
             keyboard.add_hotkey('ctrl+alt', hotkey_handler)
-            print("[OK] Hotkey listener registered: Ctrl+Alt")
             return True
         except Exception as e:
-            print(f"[ERROR] Could not register hotkey: {e}")
+            print(f"[ERROR] Hotkey registration failed: {e}")
             return False
             
+    def cleanup(self):
+        """Clean shutdown to prevent hanging"""
+        self.shutdown_flag = True
+        if self.recorder:
+            try:
+                self.recorder.shutdown()
+            except:
+                pass
+                
+    def signal_handler(self, signum, frame):
+        """Handle Ctrl+C gracefully"""
+        print("\n[SHUTDOWN] Stopping VoiceFlow...")
+        self.cleanup()
+        sys.exit(0)
+        
     def run(self):
-        """Run the server"""
-        print("\n" + "="*60)
-        print("VoiceFlow Simple Server - READY")
-        print("="*60)
+        """Run the server with clean session management"""
+        print("\n" + "="*40)
+        print("VoiceFlow Simple - READY")
+        print("="*40)
         
         if not STT_AVAILABLE:
-            print("[ERROR] RealtimeSTT not available - cannot run")
+            print("[ERROR] RealtimeSTT not available")
             return
             
-        # Show configuration
-        print(f"[CONFIG] STT Model: tiny (CPU/int8)")
-        print(f"[CONFIG] AI Enhancement: {'Enabled' if self.use_ai_enhancement else 'Disabled'}")
-        print(f"[CONFIG] Text Injection: {'Enabled' if SYSTEM_INTEGRATION else 'Disabled'}")
-        print(f"[CONFIG] Data Directory: {self.data_dir}")
+        if not SYSTEM_INTEGRATION:
+            print("[ERROR] System integration not available")
+            return
+            
+        # Register signal handler for clean exit
+        signal.signal(signal.SIGINT, self.signal_handler)
         
         # Start hotkey listener
         if self.start_hotkey_listener():
-            print("\n[READY] Press Ctrl+Alt and speak to test VoiceFlow!")
-            print("[INFO] Press Ctrl+C to exit")
+            print("Press Ctrl+Alt and speak!")
+            print("Press Ctrl+C to exit\n")
             
             try:
-                # Keep the server running
-                while True:
-                    time.sleep(1)
+                # Keep running with proper exit conditions
+                while not self.shutdown_flag:
+                    time.sleep(0.1)  # Short sleep to reduce CPU usage
             except KeyboardInterrupt:
-                print("\n[SHUTDOWN] Server stopped by user")
+                self.cleanup()
         else:
-            print("\n[ERROR] Could not start hotkey listener")
-            print("[MANUAL] You can test manually by calling process_speech()")
+            print("[ERROR] Could not start hotkey listener")
 
 if __name__ == "__main__":
     try:
@@ -279,6 +312,4 @@ if __name__ == "__main__":
         server.run()
     except Exception as e:
         print(f"[FATAL] Server failed to start: {e}")
-        import traceback
-        traceback.print_exc()
-        input("Press Enter to exit...")
+        sys.exit(1)

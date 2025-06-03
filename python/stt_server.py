@@ -66,7 +66,7 @@ class VoiceFlowServer:
                 model="large-v3",
                 language="en",
                 device="cuda",
-                compute_type="float16",
+                compute_type="int8",
                 gpu_device_index=0,
                 on_recording_start=self.on_recording_start,
                 on_recording_stop=self.on_recording_stop,
@@ -78,6 +78,7 @@ class VoiceFlowServer:
                 enable_realtime_transcription=True,
                 realtime_processing_pause=0.1,
                 realtime_model_type="small",  # Use small model for preview
+                realtime_compute_type="int8",  # Force int8 for realtime model
                 on_realtime_transcription_update=self.on_realtime_update,
                 # VAD settings for better detection
                 silero_sensitivity=0.5,
@@ -109,6 +110,7 @@ class VoiceFlowServer:
                     enable_realtime_transcription=True,
                     realtime_processing_pause=0.1,
                     realtime_model_type="tiny",
+                    realtime_compute_type="int8",
                     on_realtime_transcription_update=self.on_realtime_update,
                     silero_sensitivity=0.5,
                     webrtc_sensitivity=3,
@@ -136,6 +138,7 @@ class VoiceFlowServer:
                     enable_realtime_transcription=True,
                     realtime_processing_pause=0.2,
                     realtime_model_type="tiny",
+                    realtime_compute_type="int8",
                     on_realtime_transcription_update=self.on_realtime_update,
                     silero_sensitivity=0.5,
                     webrtc_sensitivity=3,
