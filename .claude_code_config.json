@@ -1,0 +1,70 @@
+{
+  "mcpServers": {
+    "voiceflow": {
+      "command": "C:\\AI_Projects\\VoiceFlow\\python\\venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\AI_Projects\\VoiceFlow\\voiceflow_mcp_server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "C:\\AI_Projects\\VoiceFlow\\python"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\AI_Projects\\VoiceFlow"
+      ]
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": [
+        "-y", 
+        "@modelcontextprotocol/server-brave-search"
+      ],
+      "env": {
+        "BRAVE_API_KEY": "your-brave-api-key-here"
+      }
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "your-github-token-here"
+      }
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+    "puppeteer": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-puppeteer"
+      ]
+    },
+    "fetch": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-fetch"
+      ]
+    },
+    "sqlite": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sqlite",
+        "C:\\Users\\Nithin\\.voiceflow\\mcp_transcriptions.db"
+      ]
+    }
+  }
+}

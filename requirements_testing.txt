@@ -1,0 +1,30 @@
+# VoiceFlow Testing Framework Requirements
+# Additional dependencies for comprehensive testing
+
+# Core testing dependencies (already in main requirements)
+faster-whisper>=1.1.1
+keyboard>=0.13.5
+pyperclip>=1.9.0
+sounddevice>=0.5.1
+numpy<2.0
+
+# Performance monitoring
+psutil>=5.9.0
+
+# Audio generation and processing
+Pillow>=9.0.0  # Needed for image handling in tray tests
+pyttsx3>=2.90          # Text-to-speech for generating test audio
+SpeechRecognition>=3.10.0  # Alternative audio recording
+
+# Optional: Enhanced audio processing
+librosa>=0.10.0        # Advanced audio analysis
+scipy>=1.10.0          # Signal processing
+
+# Testing and analysis
+pytest>=7.0.0          # Unit testing framework
+matplotlib>=3.6.0      # Plotting for analysis reports
+pandas>=1.5.0          # Data analysis for test results
+
+# Development tools
+flake8>=6.0.0          # Code linting
+black>=22.0.0          # Code formatting

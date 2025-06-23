@@ -1,7 +1,0 @@
-{
-  "server_startup": true,
-  "websocket_connection": false,
-  "ollama_integration": false,
-  "text_injection_capability": true,
-  "overall_status": "NOT_FUNCTIONAL"
-}
