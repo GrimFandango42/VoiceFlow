@@ -12,7 +12,7 @@ A **100% free**, privacy-focused voice transcription app that replaces Wispr Flo
 ## 🚀 QUICK START
 
 ### Installation (One Time Only)
-``batch
+```batch
 INSTALL_ENHANCED_DEPS.bat
 Daily Usage
 # 🚀 NEW - Blazing Fast Version (Sub-500ms latency!)
