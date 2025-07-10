@@ -34,12 +34,15 @@ class VoiceFlowServer:
         # Initialize database
         self.init_database()
         
-        # Ollama configuration
-        # Try multiple Ollama endpoints (WSL and local)
+        # Ollama configuration - Use environment variables for security
+        ollama_host = os.getenv('OLLAMA_HOST', 'localhost')
+        ollama_port = os.getenv('OLLAMA_PORT', '11434')
+        ollama_protocol = 'https' if os.getenv('OLLAMA_USE_HTTPS', 'false').lower() == 'true' else 'http'
+        
         self.ollama_urls = [
-            "http://172.30.248.191:11434/api/generate",  # Your WSL IP
-            "http://localhost:11434/api/generate",  # Windows local
-            "http://127.0.0.1:11434/api/generate"  # Alternative local
+            f"{ollama_protocol}://{ollama_host}:{ollama_port}/api/generate",
+            "http://localhost:11434/api/generate",  # Fallback
+            "http://127.0.0.1:11434/api/generate"   # Alternative fallback
         ]
         self.ollama_url = None  # Will be set when we find a working endpoint
         self.deepseek_model = "llama3.3:latest"
@@ -316,7 +319,15 @@ Raw transcription: {text}
 
 Formatted text:"""
             
-            response = requests.post(self.ollama_url, json={
+            # Secure HTTPS request with certificate verification
+            session = requests.Session()
+            session.verify = True  # Always verify SSL certificates
+            session.headers.update({
+                'User-Agent': 'VoiceFlow/1.0',
+                'Content-Type': 'application/json'
+            })
+            
+            response = session.post(self.ollama_url, json={
                 "model": self.deepseek_model,
                 "prompt": prompt,
                 "stream": False,

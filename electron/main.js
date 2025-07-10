@@ -10,9 +10,11 @@ function createWindow() {
     width: 400,
     height: 600,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-      webSecurity: false
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: true,
+      sandbox: true,
+      preload: path.join(__dirname, 'preload.js')
     }
   });
 

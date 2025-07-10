@@ -63,10 +63,14 @@ class VoiceFlowMCPServer:
         self.is_recording = False
         self.current_session = None
         
-        # AI enhancement configuration
+        # AI enhancement configuration - Use environment variables for security
+        ollama_host = os.getenv('OLLAMA_HOST', 'localhost')
+        ollama_port = os.getenv('OLLAMA_PORT', '11434')
+        ollama_protocol = 'https' if os.getenv('OLLAMA_USE_HTTPS', 'false').lower() == 'true' else 'http'
+        
         self.ollama_urls = [
+            f"{ollama_protocol}://{ollama_host}:{ollama_port}/api/generate",
             "http://localhost:11434/api/generate",
-            "http://172.30.248.191:11434/api/generate",
             "http://127.0.0.1:11434/api/generate"
         ]
         self.ollama_url = None

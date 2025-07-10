@@ -14,16 +14,16 @@ pyaudio>=0.2.11
 webrtcvad>=2.0.10
 librosa>=0.10.0
 
-# GPU Support (CUDA)
-torch>=2.1.0
-torchaudio>=2.1.0
+# GPU Support (CUDA) - Updated for security fixes
+torch>=2.6.0
+torchaudio>=2.6.0
 
 # Database
 aiosqlite>=0.19.0
 
-# HTTP Requests (for Ollama)
-requests>=2.31.0
-aiohttp>=3.8.0
+# HTTP Requests (for Ollama) - Updated for security fixes
+requests>=2.32.0
+aiohttp>=3.10.2
 
 # System Integration (Native Mode)
 pyautogui>=0.9.54

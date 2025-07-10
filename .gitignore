@@ -54,6 +54,28 @@ lerna-debug.log*
 .env.production.local
 .env.development.local
 
+# Security - Never commit these files
+.claude_code_config.json
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+auth_tokens.json
+credentials.json
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+.voiceflow/
+
+# Audio files with potentially sensitive content
+*.wav
+*.mp3
+*.m4a
+*.aac
+
 # Temporary files
 *.tmp
 *.temp
