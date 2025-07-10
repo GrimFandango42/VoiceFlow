@@ -18,8 +18,9 @@ librosa>=0.10.0
 torch>=2.6.0
 torchaudio>=2.6.0
 
-# Database
+# Database and Security
 aiosqlite>=0.19.0
+cryptography>=41.0.0  # For encrypted database storage
 
 # HTTP Requests (for Ollama) - Updated for security fixes
 requests>=2.32.0

@@ -13,6 +13,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 
+# Import secure database utilities
+try:
+    from utils.secure_db import create_secure_database
+    ENCRYPTION_AVAILABLE = True
+except ImportError:
+    ENCRYPTION_AVAILABLE = False
+    print("[WARNING] Encryption not available - install cryptography package")
+
 try:
     from RealtimeSTT import AudioToTextRecorder
     import pyautogui
@@ -42,6 +50,14 @@ class VoiceFlowEngine:
         self.data_dir = Path.home() / ".voiceflow"
         self.data_dir.mkdir(exist_ok=True)
         self.db_path = self.data_dir / "transcriptions.db"
+        
+        # Initialize secure database if encryption available
+        if ENCRYPTION_AVAILABLE:
+            self.secure_db = create_secure_database(self.data_dir)
+            print("[DB] ✅ Encrypted database initialized")
+        else:
+            self.secure_db = None
+            print("[DB] ⚠️  Using unencrypted database - install cryptography for security")
         
         # Audio configuration
         self.recorder = None
@@ -181,8 +197,23 @@ class VoiceFlowEngine:
                 print("[STT] No speech detected")
                 return None
                 
+        except KeyboardInterrupt:
+            print("[INFO] Recording interrupted by user")
+            return None
+        except MemoryError:
+            error_msg = "Out of memory during speech processing"
+            print(f"[ERROR] {error_msg}")
+            if self.on_error:
+                self.on_error(error_msg)
+            return None
+        except PermissionError:
+            error_msg = "Permission denied accessing microphone"
+            print(f"[ERROR] {error_msg}")
+            if self.on_error:
+                self.on_error(error_msg)
+            return None
         except Exception as e:
-            error_msg = f"Speech processing error: {e}"
+            error_msg = f"Speech processing error: {type(e).__name__}: {e}"
             print(f"[ERROR] {error_msg}")
             if self.on_error:
                 self.on_error(error_msg)
@@ -194,6 +225,12 @@ class VoiceFlowEngine:
         """
         Inject text into the active application.
         Consolidated text injection logic from multiple files.
+        
+        Args:
+            text: Text to inject into active application
+            
+        Returns:
+            True if injection succeeded, False otherwise
         """
         if not SYSTEM_INTEGRATION or not text:
             return False
@@ -201,10 +238,14 @@ class VoiceFlowEngine:
         try:
             # Basic text injection using pyautogui
             pyautogui.typewrite(text)
-            print(f"[TEXT] ✅ Injected: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            safe_text = text[:50] + ('...' if len(text) > 50 else '')
+            print(f"[TEXT] ✅ Injected: '{safe_text}'")
             return True
+        except PermissionError:
+            print("[ERROR] Permission denied for text injection")
+            return False
         except Exception as e:
-            print(f"[ERROR] Text injection failed: {e}")
+            print(f"[ERROR] Text injection failed: {type(e).__name__}: {e}")
             return False
     
     def setup_hotkeys(self, hotkey: str = 'ctrl+alt', callback: Optional[Callable] = None):
@@ -232,27 +273,59 @@ class VoiceFlowEngine:
             print(f"[ERROR] Hotkey registration failed: {e}")
     
     def store_transcription(self, text: str, processing_time: float):
-        """Store transcription in database."""
+        """Store transcription in secure encrypted database."""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                INSERT INTO transcriptions 
-                (raw_text, processing_time_ms, word_count, model_used, session_id)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (
-                text,
-                int(processing_time),
-                len(text.split()),
-                self.config.get('model', 'unknown'),
-                str(self.stats["session_start"])
-            ))
-            
-            conn.commit()
-            conn.close()
+            if self.secure_db:
+                # Use encrypted storage
+                success = self.secure_db.store_transcription(
+                    text=text,
+                    processing_time=processing_time,
+                    word_count=len(text.split()),
+                    model_used=self.config.get('model', 'unknown'),
+                    session_id=str(self.stats["session_start"])
+                )
+                if not success:
+                    print("[WARNING] Encrypted storage failed, falling back to plaintext")
+                    self._store_fallback(text, processing_time)
+            else:
+                # Fallback to unencrypted storage
+                self._store_fallback(text, processing_time)
+                
         except Exception as e:
             print(f"[ERROR] Failed to store transcription: {e}")
+    
+    def _store_fallback(self, text: str, processing_time: float):
+        """Fallback unencrypted storage method."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Create legacy table if needed
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transcriptions_legacy (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                raw_text TEXT NOT NULL,
+                processing_time_ms INTEGER NOT NULL,
+                word_count INTEGER NOT NULL,
+                model_used TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute('''
+            INSERT INTO transcriptions_legacy 
+            (raw_text, processing_time_ms, word_count, model_used, session_id)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            text,
+            int(processing_time),
+            len(text.split()),
+            self.config.get('model', 'unknown'),
+            str(self.stats["session_start"])
+        ))
+        
+        conn.commit()
+        conn.close()
     
     def get_stats(self) -> Dict[str, Any]:
         """Get current processing statistics."""

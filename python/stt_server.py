@@ -11,11 +11,30 @@ import numpy as np
 from datetime import datetime
 import sqlite3
 import os
+import sys
 from pathlib import Path
 from RealtimeSTT import AudioToTextRecorder
 import threading
 import queue
 import time
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Import authentication and validation utilities
+try:
+    from utils.auth import get_auth_manager, extract_auth_token
+    AUTH_AVAILABLE = True
+except ImportError:
+    AUTH_AVAILABLE = False
+    print("[WARNING] Authentication not available - WebSocket connections unprotected")
+
+try:
+    from utils.validation import InputValidator, ValidationError
+    VALIDATION_AVAILABLE = True
+except ImportError:
+    VALIDATION_AVAILABLE = False
+    print("[WARNING] Input validation not available - security risk")
 try:
     import pyautogui
     import keyboard
@@ -153,7 +172,18 @@ class VoiceFlowServer:
                 )
                 print("[CPU] Using CPU fallback with int8")
         
+        # WebSocket clients and authentication
         self.websocket_clients = set()
+        self.auth_manager = get_auth_manager() if AUTH_AVAILABLE else None
+        
+        if self.auth_manager:
+            print(f"[AUTH] WebSocket authentication enabled")
+            token_info = self.auth_manager.get_token_info()
+            print(f"[AUTH] Token: {token_info['token_preview']}")
+            print(f"[AUTH] Connect with: ws://localhost:8765?token=YOUR_TOKEN")
+        else:
+            print("[WARNING] WebSocket authentication DISABLED - security risk!")
+        
         self.current_transcription = {
             "id": None,
             "start_time": None,
@@ -445,16 +475,48 @@ Formatted text:"""
         self.websocket_clients -= disconnected_clients
         
     async def handle_websocket(self, websocket, path):
-        """Handle WebSocket connections"""
+        """Handle WebSocket connections with authentication"""
+        # Authenticate connection
+        if self.auth_manager:
+            auth_token = extract_auth_token(websocket)
+            if not self.auth_manager.validate_token(auth_token):
+                await websocket.close(code=1008, reason="Authentication required")
+                print(f"[AUTH] Rejected unauthenticated connection from {websocket.remote_address}")
+                return
+            
+            # Create session
+            client_id = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+            session_id = self.auth_manager.create_session(client_id)
+            print(f"[AUTH] Authenticated connection from {websocket.remote_address}")
+        
         self.websocket_clients.add(websocket)
         try:
             await websocket.send(json.dumps({
-                "type": "connected",
-                "message": "VoiceFlow STT Server Connected"
+                "type": "connected", 
+                "message": "VoiceFlow STT Server Connected",
+                "authenticated": self.auth_manager is not None
             }))
             
             async for message in websocket:
-                data = json.loads(message)
+                try:
+                    # Validate incoming message
+                    if VALIDATION_AVAILABLE:
+                        data = InputValidator.validate_json_message(message)
+                    else:
+                        data = json.loads(message)
+                except ValidationError as e:
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "message": f"Invalid input: {e.message}",
+                        "field": e.field
+                    }))
+                    continue
+                except json.JSONDecodeError:
+                    await websocket.send(json.dumps({
+                        "type": "error", 
+                        "message": "Invalid JSON format"
+                    }))
+                    continue
                 
                 if data["type"] == "get_history":
                     history = self.get_history(data.get("limit", 50))

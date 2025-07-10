@@ -8,7 +8,19 @@ Combines functionality from stt_server.py, speech_processor.py, and voiceflow_mc
 import os
 import requests
 import time
+import sys
+from pathlib import Path
 from typing import Optional, List, Dict, Any
+
+# Add parent directory for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Import validation utilities
+try:
+    from utils.validation import InputValidator, ValidationError
+    VALIDATION_AVAILABLE = True
+except ImportError:
+    VALIDATION_AVAILABLE = False
 
 
 class AIEnhancer:
@@ -89,8 +101,17 @@ class AIEnhancer:
     def enhance_text(self, text: str, context: str = 'general') -> str:
         """
         Enhance transcribed text with AI formatting and correction.
-        Consolidated enhancement logic from multiple implementations.
+        Consolidated enhancement logic with input validation.
         """
+        # Validate input text
+        if VALIDATION_AVAILABLE:
+            try:
+                text = InputValidator.validate_text(text, max_length=5000, allow_empty=True)
+                context = InputValidator.validate_text(context, max_length=100, allow_empty=True)
+            except ValidationError as e:
+                print(f"[AI] Input validation failed: {e.message}")
+                return self.basic_format(text)
+        
         if not self.use_ai_enhancement or not text.strip():
             return self.basic_format(text)
         
