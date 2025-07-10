@@ -32,13 +32,27 @@ cd voiceflow
 # Install dependencies
 pip install -r python/requirements.txt
 
-# Run simple implementation
-python implementations/simple.py
+# Start with simple mode
+python voiceflow_simple.py
 ```
+
+### Two Simple Options
+
+#### Option 1: **Simple Mode** (Recommended for new users)
+```bash
+python voiceflow_simple.py
+```
+Perfect for trying VoiceFlow and daily usage.
+
+#### Option 2: **Tray Mode** (For background usage)
+```bash
+python voiceflow_tray.py
+```
+Runs in background with system tray icon. Use once you're confident it works well.
 
 ### Basic Usage
 
-1. **Start VoiceFlow**: Run any implementation (simple, server, native)
+1. **Start VoiceFlow**: Choose simple or tray mode above
 2. **Position Cursor**: Click in any text field (browser, IDE, document)
 3. **Record**: Press `Ctrl+Alt` and speak clearly
 4. **Result**: Enhanced text appears instantly where you clicked
@@ -95,36 +109,26 @@ voiceflow/
 └── docs/                      # Documentation
 ```
 
-## 🎛️ Implementation Options
+## 🎛️ Advanced Options
 
-### 1. Simple Implementation (Recommended)
-Perfect for daily use with minimal setup:
-```bash
-python implementations/simple.py
-```
+For developers and advanced users, additional implementations are available:
 
-### 2. WebSocket Server
+### WebSocket Server
 For integration with web applications:
 ```bash
 python python/stt_server.py
 ```
 
-### 3. Native Windows Service
-For background operation and system integration:
-```bash
-python native/voiceflow_native.py
-```
-
-### 4. MCP Integration
+### MCP Integration
 For Claude MCP ecosystem integration:
 ```bash
 python voiceflow_mcp_server.py
 ```
 
-### 5. Electron Desktop App
-Cross-platform desktop application:
+### Native Windows Service
+For advanced system integration:
 ```bash
-cd electron && npm start
+python native/voiceflow_native.py
 ```
 
 ## ⚙️ Configuration
