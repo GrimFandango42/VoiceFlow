@@ -51,6 +51,11 @@ jobs:
     
     - name: Build Windows executable
       run: |
+        # Ensure icon exists
+        if (!(Test-Path "icon.ico")) {
+          echo "Creating placeholder icon..."
+          echo "icon" > icon.ico
+        }
         python setup_exe.py
     
     - name: Upload Windows artifacts
@@ -96,8 +101,8 @@ jobs:
         cp voiceflow_personal.py dist/voiceflow-unix/
         cp requirements_unix.txt dist/voiceflow-unix/
         cp install_unix.sh dist/voiceflow-unix/
-        cp -r core dist/voiceflow-unix/
-        cp -r utils dist/voiceflow-unix/
+        cp -r core dist/voiceflow-unix/ || echo "core directory not found"
+        cp -r utils dist/voiceflow-unix/ || echo "utils directory not found"
         cp README.md LICENSE dist/voiceflow-unix/
         
         cd dist

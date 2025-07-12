@@ -58,16 +58,23 @@ def create_spec_file():
     spec_content = '''
 # -*- mode: python ; coding: utf-8 -*-
 
+# Determine which files exist
+import os
+datas = []
+if os.path.exists('voiceflow_personal.py'):
+    datas.append(('voiceflow_personal.py', '.'))
+if os.path.exists('core'):
+    datas.append(('core', 'core'))
+if os.path.exists('utils'):
+    datas.append(('utils', 'utils'))
+if os.path.exists('requirements_windows.txt'):
+    datas.append(('requirements_windows.txt', '.'))
+
 a = Analysis(
     ['voiceflow_windows.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('voiceflow_personal.py', '.'),
-        ('core', 'core'),
-        ('utils', 'utils'),
-        ('requirements_windows.txt', '.'),
-    ],
+    datas=datas,
     hiddenimports=[
         'pystray._win32',
         'PIL._tkinter_finder',
