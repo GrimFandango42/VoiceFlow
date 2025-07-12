@@ -1,0 +1,68 @@
+{
+  "timestamp": "2025-07-12T13:44:37.960745",
+  "total_duration": 0.7127256393432617,
+  "phases": {
+    "Unit Testing": {
+      "phase": "Unit Testing",
+      "script": "test_voiceflow_personal.py",
+      "description": "Core component testing (MemoryCache, AsyncAIEnhancer, SecurityLimiter)",
+      "duration": 0.30689501762390137,
+      "success": false,
+      "output": "",
+      "error": "Traceback (most recent call last):\n  File \"/data/data/com.termux/files/home/projexta/voiceflow/test_voiceflow_personal.py\", line 18, in <module>\n    import psutil\nModuleNotFoundError: No module named 'psutil'\n",
+      "return_code": 1
+    },
+    "Security Validation": {
+      "phase": "Security Validation",
+      "script": "security_validation.py",
+      "description": "Comprehensive security testing for all implemented fixes",
+      "duration": 0.3221776485443115,
+      "success": false,
+      "output": "",
+      "error": "Traceback (most recent call last):\n  File \"/data/data/com.termux/files/home/projexta/voiceflow/security_validation.py\", line 20, in <module>\n    from voiceflow_personal import (\n  File \"/data/data/com.termux/files/home/projexta/voiceflow/voiceflow_personal.py\", line 28, in <module>\n    from RealtimeSTT import AudioToTextRecorder\nModuleNotFoundError: No module named 'RealtimeSTT'\n",
+      "return_code": 1
+    },
+    "Performance Benchmarking": {
+      "phase": "Performance Benchmarking",
+      "script": "benchmark_voiceflow.py",
+      "description": "Performance comparison with enterprise implementations",
+      "duration": 0.08331131935119629,
+      "success": false,
+      "output": "",
+      "error": "Traceback (most recent call last):\n  File \"/data/data/com.termux/files/home/projexta/voiceflow/benchmark_voiceflow.py\", line 8, in <module>\n    import psutil\nModuleNotFoundError: No module named 'psutil'\n",
+      "return_code": 1
+    },
+    "Integration Testing": {
+      "phase": "Integration Testing",
+      "script": "test_comprehensive_integration.py",
+      "description": "End-to-end component interaction testing",
+      "duration": 0,
+      "success": false,
+      "output": "Script test_comprehensive_integration.py not found",
+      "error": ""
+    }
+  },
+  "metadata": {
+    "voiceflow_version": "VoiceFlow Personal 2.0",
+    "python_version": "3.12.11 (main, Jun 10 2025, 09:01:37) [Clang 18.0.3 (https://android.googlesource.com/toolchain/llvm-project d8003a456",
+    "platform": "linux",
+    "working_directory": "/data/data/com.termux/files/home/projexta/voiceflow"
+  },
+  "test_files": {
+    "voiceflow_personal.py": {
+      "exists": true,
+      "size_bytes": 20857,
+      "modified": "2025-07-12T12:05:31.068031"
+    },
+    "run_personal.py": {
+      "exists": true,
+      "size_bytes": 4341,
+      "modified": "2025-07-12T10:49:41.912029"
+    },
+    "requirements_personal.txt": {
+      "exists": true,
+      "size_bytes": 561,
+      "modified": "2025-07-12T10:48:44.496028"
+    }
+  }
+}
