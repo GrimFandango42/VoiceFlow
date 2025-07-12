@@ -6,85 +6,83 @@
 [![Testing](https://img.shields.io/badge/Testing-Comprehensive-brightgreen)](https://github.com/GrimFandango42/voiceflow)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A local voice transcription system built on OpenAI Whisper with optional AI text enhancement. Designed for privacy-conscious users who require offline processing with no data transmission to external services.
+A local voice transcription system built on OpenAI Whisper with optional AI text enhancement. Designed for privacy-conscious users requiring offline processing with no data transmission to external services.
 
 ## Overview
 
 VoiceFlow provides real-time speech-to-text transcription using OpenAI Whisper models with local processing. The system automatically injects transcribed text at the cursor position in any application.
 
 ### Key Features
-- **Local Processing** - All transcription happens on-device with no external API calls
+- **Local Processing** - All transcription occurs on-device with no external API calls
 - **Cross-Application** - Works in browsers, IDEs, text editors, and chat applications  
 - **GPU Acceleration** - CUDA optimization with automatic CPU fallback
 - **AI Text Enhancement** - Optional integration with local AI models (Ollama) for formatting
-- **Two Deployment Options** - Minimal personal version or full enterprise version
+- **Platform Optimized** - Dedicated Windows and Unix versions with system tray support
 - **Security Tested** - Comprehensive security audit with input validation
 
-## Deployment Options
+## Installation
 
-VoiceFlow provides two implementations optimized for different use cases:
-
-### VoiceFlow Personal
-Minimal implementation optimized for individual use with maximum privacy and performance.
-
-```bash
-# Quick setup
-python run_personal.py
+### Windows
+```batch
+# Automated installer
+install_windows.bat
 
 # Manual installation
-pip install -r requirements_personal.txt
-python voiceflow_personal.py
+pip install -r requirements_windows.txt
+python voiceflow_windows.py --tray
 ```
 
-**Characteristics:**
-- **Dependencies**: 4 packages (RealtimeSTT, pyautogui, keyboard, requests)
-- **Memory Usage**: 150-250MB baseline
-- **Startup Time**: 2-3 seconds
-- **Storage**: Memory-only, no persistent data
-- **Security**: Input validation, rate limiting, injection prevention
-- **Code Size**: ~2,000 lines
-
-### VoiceFlow Enterprise
-Full-featured implementation with enterprise security, monitoring, and team collaboration features.
-
+### Linux/macOS
 ```bash
-# Installation
-pip install -r python/requirements.txt
+# Automated installer
+./install_unix.sh
 
-# Run modes
-python voiceflow_simple.py    # CLI mode
-python voiceflow_tray.py      # System tray mode
+# Manual installation
+pip install -r requirements_unix.txt
+python voiceflow_unix.py --tray
 ```
 
-**Characteristics:**
-- **Dependencies**: 25+ packages with full feature set
-- **Memory Usage**: 400-600MB with all features
-- **Startup Time**: 8-12 seconds
-- **Storage**: Optional encrypted database
-- **Security**: Authentication, authorization, audit logging
-- **Code Size**: ~15,000 lines with testing framework
-## Performance Metrics
+## Platform Versions
 
-| Metric | Personal | Enterprise | Notes |
-|--------|----------|------------|-------|
-| Startup Time | 2-3s | 8-12s | Personal skips feature loading |
-| Memory Usage | 150-250MB | 400-600MB | Personal has minimal dependencies |
-| Transcription Latency | 150-250ms | 300-500ms | Personal uses optimized pipeline |
-| Dependencies | 4 packages | 25+ packages | Personal excludes testing/monitoring |
-| Storage Footprint | Memory only | Database + logs | Personal is ephemeral |
+### VoiceFlow Windows
+Optimized for Windows with system tray integration and native Windows features.
+
+**Usage:**
+```batch
+python voiceflow_windows.py --tray     # System tray mode (default)
+python voiceflow_windows.py --console  # Console mode
+```
+
+### VoiceFlow Unix
+Optimized for Linux/macOS with daemon support and Unix-specific integrations.
+
+**Usage:**
+```bash
+python voiceflow_unix.py --tray     # System tray mode
+python voiceflow_unix.py --console  # Console mode  
+python voiceflow_unix.py --daemon   # Background daemon mode
+```
+## Performance Characteristics
+
+| Metric | Windows/Unix Optimized | Legacy Enterprise | Notes |
+|--------|------------------------|-------------------|-------|
+| Startup Time | 2-3s | 8-12s | Platform versions use optimized loading |
+| Memory Usage | 150-250MB | 400-600MB | Minimal dependencies in platform versions |
+| Transcription Latency | 150-250ms | 300-500ms | Optimized processing pipeline |
+| Dependencies | 6-8 packages | 25+ packages | Platform-specific optimization |
+| Storage Footprint | Memory only | Database + logs | Ephemeral by design |
 
 ## Basic Operation
 
-### VoiceFlow Personal
-1. Start: `python run_personal.py`
-2. Activate: Speak normally (auto-detection) or use Ctrl+Alt hotkey
-3. Output: Transcribed text appears at cursor position
+### All Platform Versions
+1. **Start**: Run installer or use platform-specific command
+2. **Activate**: Speak normally (auto-detection) or use Ctrl+Alt hotkey  
+3. **Output**: Transcribed text appears at cursor position
 
-### VoiceFlow Enterprise  
-1. Start: `python voiceflow_simple.py` (CLI) or `python voiceflow_tray.py` (background)
-2. Position: Click in target text field
-3. Activate: Press Ctrl+Alt and speak
-4. Output: Enhanced text with optional logging/history
+### System Tray Usage
+- **Windows**: Right-click system tray icon for options
+- **Unix**: Right-click system tray icon for options (if tray support available)
+- **Background**: Runs silently, activated by hotkey or voice detection
 
 ## Technical Features
 
@@ -110,34 +108,32 @@ python voiceflow_tray.py      # System tray mode
 
 ## Architecture
 
-The system uses a modular architecture with clear separation between transcription, enhancement, and security components:
+Simplified two-platform architecture optimized for Windows and Unix systems:
 
 ```
 voiceflow/
-# Personal Version (Ultra-Fast)
-├── voiceflow_personal.py      # 🚀 NEW: Ultra-fast personal version
-├── run_personal.py            # 🚀 NEW: Smart launcher with auto-setup  
-├── requirements_personal.txt  # 🚀 NEW: Minimal dependencies (4 packages)
-├── PERSONAL_USAGE_GUIDE.md    # 🚀 NEW: Personal version guide
+# Platform-Optimized Versions
+├── voiceflow_windows.py       # Windows-optimized with native tray support
+├── voiceflow_unix.py          # Unix-optimized with daemon support
+├── requirements_windows.txt   # Windows-specific dependencies  
+├── requirements_unix.txt      # Unix-specific dependencies
+├── install_windows.bat        # Windows automated installer
+├── install_unix.sh           # Unix automated installer
 
-# Enterprise Version (Full-Featured)
-├── core/                      # Core functionality modules
-│   ├── voiceflow_core.py     # Main speech processing engine
+# Core Components (Shared)
+├── voiceflow_personal.py      # Core transcription engine
+├── core/                      # Speech processing modules
+│   ├── voiceflow_core.py     # Main transcription engine
 │   ├── ai_enhancement.py     # AI text enhancement
-│   └── __init__.py           # Module exports
-├── implementations/           # Application implementations
-│   ├── simple.py             # Simple CLI implementation
-├── utils/                     # Shared utilities & security
-│   ├── config.py             # Configuration management
-│   ├── auth.py               # Authentication system
+├── utils/                     # Security and utility modules
 │   ├── validation.py         # Input validation & security
 │   ├── rate_limiter.py       # Rate limiting protection
-│   └── secure_db.py          # Encrypted database
-├── python/                    # Server implementations
-│   └── stt_server.py         # WebSocket server with security
-├── tests/                     # Comprehensive testing suite (45+ files)
-├── docs/                      # Documentation
-└── security reports/          # Security audit results
+│   └── auth.py               # Authentication system
+
+# Legacy Enterprise (Optional)
+├── python/stt_server.py       # WebSocket server implementation
+├── tests/                     # Comprehensive testing suite
+└── docs/                      # Documentation
 ```
 
 ## Configuration

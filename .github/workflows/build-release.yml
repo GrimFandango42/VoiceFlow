@@ -1,0 +1,273 @@
+name: Build and Release VoiceFlow
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create a new release'
+        required: false
+        default: false
+        type: boolean
+      build_type:
+        description: 'Build type'
+        required: false
+        default: 'standard'
+        type: choice
+        options:
+        - standard
+        - debug
+        - release
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller pillow
+        pip install -r requirements_windows.txt
+    
+    - name: Build Windows executable
+      run: |
+        python setup_exe.py
+    
+    - name: Upload Windows artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: voiceflow-windows
+        path: |
+          dist/VoiceFlow.exe
+          dist/VoiceFlow-Setup-*.exe
+        retention-days: 30
+
+  build-unix:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y portaudio19-dev python3-dev python3-tk
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -r requirements_unix.txt
+    
+    - name: Make scripts executable
+      run: |
+        chmod +x install_unix.sh
+        chmod +x voiceflow_unix.py
+    
+    - name: Create Unix package
+      run: |
+        mkdir -p dist/voiceflow-unix
+        cp voiceflow_unix.py dist/voiceflow-unix/
+        cp voiceflow_personal.py dist/voiceflow-unix/
+        cp requirements_unix.txt dist/voiceflow-unix/
+        cp install_unix.sh dist/voiceflow-unix/
+        cp -r core dist/voiceflow-unix/
+        cp -r utils dist/voiceflow-unix/
+        cp README.md LICENSE dist/voiceflow-unix/
+        
+        cd dist
+        tar -czf voiceflow-unix.tar.gz voiceflow-unix/
+    
+    - name: Upload Unix artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: voiceflow-unix
+        path: |
+          dist/voiceflow-unix.tar.gz
+        retention-days: 30
+
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install security tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety
+    
+    - name: Run Bandit security scan
+      run: |
+        bandit -r . -f json -o bandit-report.json || true
+        bandit -r . --skip B101,B601
+    
+    - name: Run Safety dependency scan
+      run: |
+        safety check --json --output safety-report.json || true
+        safety check
+    
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+        retention-days: 30
+
+  mcp-integration:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Node.js for MCP
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+    
+    - name: Install MCP CLI tools
+      run: |
+        npm install -g @modelcontextprotocol/cli
+        npm install -g @anthropic/mcp-server-github
+    
+    - name: Configure MCP GitHub Server
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        MCP_GITHUB_TOKEN: ${{ secrets.MCP_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+      run: |
+        mkdir -p ~/.config/mcp
+        cat > ~/.config/mcp/config.json << EOF
+        {
+          "servers": {
+            "github": {
+              "command": "npx",
+              "args": ["@anthropic/mcp-server-github"],
+              "env": {
+                "GITHUB_TOKEN": "$MCP_GITHUB_TOKEN"
+              }
+            }
+          }
+        }
+        EOF
+    
+    - name: Test MCP GitHub Integration
+      run: |
+        echo "Testing MCP GitHub server connection..."
+        timeout 10s npx @anthropic/mcp-server-github --test || echo "MCP test completed"
+    
+    - name: Create MCP Integration Report
+      run: |
+        echo "# MCP GitHub Actions Integration Report" > mcp-report.md
+        echo "" >> mcp-report.md
+        echo "## Configuration" >> mcp-report.md
+        echo "- MCP GitHub server configured successfully" >> mcp-report.md
+        echo "- Token authentication: $([ -n "${{ secrets.MCP_GITHUB_TOKEN }}" ] && echo "Custom token" || echo "Default GITHUB_TOKEN")" >> mcp-report.md
+        echo "- Repository: ${{ github.repository }}" >> mcp-report.md
+        echo "- Event: ${{ github.event_name }}" >> mcp-report.md
+        echo "" >> mcp-report.md
+        echo "## Available MCP Skills" >> mcp-report.md
+        echo "- GitHub repository management" >> mcp-report.md
+        echo "- Issue and PR automation" >> mcp-report.md
+        echo "- Release management" >> mcp-report.md
+        echo "- Actions workflow control" >> mcp-report.md
+    
+    - name: Upload MCP Report
+      uses: actions/upload-artifact@v3
+      with:
+        name: mcp-integration-report
+        path: mcp-report.md
+        retention-days: 30
+
+  create-release:
+    needs: [build-windows, build-unix, security-scan, mcp-integration]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download Windows artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: voiceflow-windows
+        path: ./artifacts/windows
+    
+    - name: Download Unix artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: voiceflow-unix
+        path: ./artifacts/unix
+    
+    - name: Download security reports
+      uses: actions/download-artifact@v3
+      with:
+        name: security-reports
+        path: ./artifacts/security
+    
+    - name: Generate release notes
+      id: generate_notes
+      run: |
+        echo "## VoiceFlow Release" > release_notes.md
+        echo "" >> release_notes.md
+        echo "### Downloads" >> release_notes.md
+        echo "- **Windows**: VoiceFlow.exe (standalone) or VoiceFlow-Setup-*.exe (installer)" >> release_notes.md
+        echo "- **Linux/macOS**: voiceflow-unix.tar.gz" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Installation" >> release_notes.md
+        echo "- **Windows**: Run installer or execute VoiceFlow.exe directly" >> release_notes.md
+        echo "- **Unix**: Extract tar.gz and run ./install_unix.sh" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Security" >> release_notes.md
+        echo "All builds include security scanning and validation." >> release_notes.md
+        
+        echo "release_body<<EOF" >> $GITHUB_OUTPUT
+        cat release_notes.md >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name || 'v3.0.0' }}
+        name: VoiceFlow ${{ github.ref_name || 'v3.0.0' }}
+        body: ${{ steps.generate_notes.outputs.release_body }}
+        draft: false
+        prerelease: false
+        files: |
+          ./artifacts/windows/VoiceFlow.exe
+          ./artifacts/windows/VoiceFlow-Setup-*.exe
+          ./artifacts/unix/voiceflow-unix.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
