@@ -1,0 +1,55 @@
+{
+  "metadata": {
+    "timestamp": "2025-07-11T06:47:40.015340",
+    "duration": 0.451226,
+    "arguments": {
+      "workflows": true,
+      "system": false,
+      "implementations": false,
+      "scenarios": false,
+      "validation": false,
+      "all": false,
+      "fast": false,
+      "verbose": true,
+      "report": true,
+      "parallel": false,
+      "health_check": false
+    },
+    "system_info": {
+      "python_version": "3.12.11 (main, Jun 10 2025, 09:01:37) [Clang 18.0.3 (https://android.googlesource.com/toolchain/llvm-project d8003a456",
+      "platform": "linux",
+      "cwd": "/data/data/com.termux/files/home/projexta/voiceflow"
+    }
+  },
+  "results": {
+    "success": false,
+    "passed": 0,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "total": 0,
+    "duration": 0,
+    "output": "ERROR: usage: __main__.py [options] [file_or_dir] [file_or_dir] [...]\n__main__.py: error: unrecognized arguments: --html /data/data/com.termux/files/home/projexta/voiceflow/e2e_test_reports/e2e_report_20250711_064740.html --self-contained-html --cov=core --cov=utils --cov=implementations --cov-report=html:/data/data/com.termux/files/home/projexta/voiceflow/e2e_test_reports/coverage\n  inifile: /data/data/com.termux/files/home/projexta/voiceflow/pytest.ini\n  rootdir: /data/data/com.termux/files/home/projexta/voiceflow\n\n",
+    "command": [
+      "/data/data/com.termux/files/usr/bin/python",
+      "-m",
+      "pytest",
+      "tests/test_end_to_end.py",
+      "-v",
+      "--tb=short",
+      "--strict-markers",
+      "--color=yes",
+      "-k",
+      "TestCompleteUserWorkflows",
+      "--html",
+      "/data/data/com.termux/files/home/projexta/voiceflow/e2e_test_reports/e2e_report_20250711_064740.html",
+      "--self-contained-html",
+      "-s",
+      "--cov=core",
+      "--cov=utils",
+      "--cov=implementations",
+      "--cov-report=html:/data/data/com.termux/files/home/projexta/voiceflow/e2e_test_reports/coverage"
+    ],
+    "timestamp": "2025-07-11T06:47:40.466501"
+  }
+}

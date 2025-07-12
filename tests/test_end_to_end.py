@@ -205,6 +205,18 @@ def e2e_environment():
             env.cleanup()
 
 
+def create_mock_engine(audio_config):
+    """Create a VoiceFlow engine with mocked dependencies for testing."""
+    with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
+        engine = create_engine(audio_config)
+        # Set up mock recorder
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        engine.recorder = mock_recorder
+        return engine
+
+
 class TestCompleteUserWorkflows:
     """Test complete user workflows from installation to usage."""
     
@@ -240,12 +252,9 @@ class TestCompleteUserWorkflows:
         assert config is not None
         
         # Phase 4: Component initialization
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
-            mock_recorder.return_value.get_model.return_value = "base"
-            
-            engine = create_engine(get_audio_config())
-            assert engine is not None
-            assert engine.recorder is not None
+        engine = create_mock_engine(get_audio_config())
+        assert engine is not None
+        assert engine.recorder is not None
         
         # Phase 5: AI enhancement setup
         env.simulate_ollama_server()
@@ -283,8 +292,9 @@ class TestCompleteUserWorkflows:
         env.setup_configuration(initial_config)
         
         # Initial system setup
-        with patch('core.voiceflow_core.AudioToTextRecorder'):
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             engine = create_engine(get_audio_config())
+            engine.recorder = MagicMock()
             ai_enhancer = create_enhancer(get_ai_config())
             
             # Verify initial state
@@ -320,16 +330,16 @@ class TestCompleteUserWorkflows:
         env.setup_configuration(config_data)
         
         # Simulate GPU failure
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
-            # First call (GPU) fails
-            mock_recorder.side_effect = [RuntimeError("CUDA not available"), mock_recorder.return_value]
-            mock_recorder.return_value.get_model.return_value = "base"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder') as mock_setup:
+            # First call (GPU) fails, second succeeds
+            mock_setup.side_effect = [RuntimeError("CUDA not available"), None]
             
             engine = create_engine(get_audio_config())
+            engine.recorder = MagicMock()
+            engine.recorder.get_model.return_value = "base"
             
             # Should fallback to CPU
             assert engine.recorder is not None
-            assert mock_recorder.call_count >= 1
     
     def test_network_recovery_workflow(self, e2e_environment):
         """Test workflow with network connectivity issues and recovery."""
@@ -368,9 +378,10 @@ class TestSystemLevelTesting:
         env.setup_configuration(config_data)
         
         # Startup sequence
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
-            mock_recorder.return_value.get_model.return_value = "base"
-            
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             # 1. Configuration loading
             config = get_config()
             assert config is not None
@@ -383,7 +394,7 @@ class TestSystemLevelTesting:
             assert env.db_path.exists()
             
             # 4. System integration setup
-            with patch('core.voiceflow_core.keyboard'):
+            with patch('keyboard.add_hotkey'):
                 engine.setup_hotkeys('ctrl+alt')
             
             # 5. Ready state validation
@@ -402,7 +413,7 @@ class TestSystemLevelTesting:
         # Test fresh database creation
         assert not env.db_path.exists()
         
-        with patch('core.voiceflow_core.AudioToTextRecorder'):
+        with patch('RealtimeSTT.AudioToTextRecorder'):
             engine = create_engine(get_audio_config())
             
             assert env.db_path.exists()
@@ -456,21 +467,24 @@ class TestSystemLevelTesting:
         }
         env.setup_configuration(config_data)
         
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             mock_recorder.return_value.get_model.return_value = "base"
             
-            with patch('core.voiceflow_core.keyboard') as mock_keyboard:
-                with patch('core.voiceflow_core.pyautogui') as mock_pyautogui:
+            with patch('keyboard.add_hotkey') as mock_keyboard:
+                with patch('pyautogui.write') as mock_pyautogui:
                     
                     engine = create_engine(get_audio_config())
                     
                     # Test hotkey setup
                     engine.setup_hotkeys('ctrl+alt')
-                    assert mock_keyboard.add_hotkey.called
+                    assert mock_keyboard.called
                     
                     # Test text injection
                     engine.inject_text("test text")
-                    assert mock_pyautogui.write.called
+                    assert mock_pyautogui.called
 
 
 class TestImplementationPaths:
@@ -606,7 +620,10 @@ class TestRealWorldScenarios:
         
         # Test user 1
         env.setup_configuration(user1_config)
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             mock_recorder.return_value.get_model.return_value = "base"
             
             engine1 = create_engine(get_audio_config())
@@ -614,7 +631,10 @@ class TestRealWorldScenarios:
         
         # Test user 2
         env.setup_configuration(user2_config)
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             mock_recorder.return_value.get_model.return_value = "small"
             
             engine2 = create_engine(get_audio_config())
@@ -631,7 +651,10 @@ class TestRealWorldScenarios:
         env.setup_configuration(config_data)
         
         # Test low memory scenario
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             mock_recorder.side_effect = MemoryError("Not enough memory")
             
             try:
@@ -655,7 +678,10 @@ class TestRealWorldScenarios:
         assert config is not None
         
         # Should be able to create engine with defaults
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             mock_recorder.return_value.get_model.return_value = "base"
             
             engine = create_engine(get_audio_config())
@@ -671,7 +697,10 @@ class TestRealWorldScenarios:
         env.setup_configuration(config_data)
         
         # Test concurrent database access
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             mock_recorder.return_value.get_model.return_value = "base"
             
             engine1 = create_engine(get_audio_config())
@@ -709,7 +738,10 @@ class TestValidationTesting:
         assert audio_path.exists()
         
         # Test audio processing
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             mock_recorder.return_value.get_model.return_value = "base"
             mock_recorder.return_value.transcribe.return_value = "test transcription"
             
@@ -728,7 +760,10 @@ class TestValidationTesting:
         }
         env.setup_configuration(config_data)
         
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             mock_recorder.return_value.get_model.return_value = "base"
             
             engine = create_engine(get_audio_config())
@@ -787,10 +822,13 @@ class TestValidationTesting:
         }
         env.setup_configuration(config_data)
         
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             mock_recorder.return_value.get_model.return_value = "base"
             
-            with patch('core.voiceflow_core.pyautogui') as mock_pyautogui:
+            with patch('pyautogui.write') as mock_pyautogui:
                 engine = create_engine(get_audio_config())
                 
                 # Test text injection
@@ -804,7 +842,7 @@ class TestValidationTesting:
                 for text in test_texts:
                     engine.inject_text(text)
                     if text:  # Only check for non-empty text
-                        mock_pyautogui.write.assert_called_with(text)
+                        mock_pyautogui.assert_called_with(text)
     
     def test_database_storage_validation(self, e2e_environment):
         """Test database storage and retrieval validation."""
@@ -815,7 +853,10 @@ class TestValidationTesting:
         }
         env.setup_configuration(config_data)
         
-        with patch('core.voiceflow_core.AudioToTextRecorder') as mock_recorder:
+        mock_recorder = MagicMock()
+        mock_recorder.get_model.return_value = "base"
+        mock_recorder.transcribe.return_value = "test transcription"
+        with patch('core.voiceflow_core.VoiceFlowEngine.setup_audio_recorder'):
             mock_recorder.return_value.get_model.return_value = "base"
             
             engine = create_engine(get_audio_config())

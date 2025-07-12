@@ -1,0 +1,232 @@
+{
+  "test_results": {
+    "speech_recognition": {
+      "status": "completed",
+      "result": {
+        "tiny_cpu_int8": {
+          "mean_ms": 148.97660791690615,
+          "min_ms": 116.52673054103632,
+          "max_ms": 181.16712886188998,
+          "p95_ms": 181.16712886188998,
+          "config": {
+            "model": "tiny",
+            "device": "cpu",
+            "compute_type": "int8"
+          },
+          "grade": "A"
+        },
+        "base_cpu_int8": {
+          "mean_ms": 293.0514931330501,
+          "min_ms": 238.11908548529485,
+          "max_ms": 315.1608903453567,
+          "p95_ms": 315.1608903453567,
+          "config": {
+            "model": "base",
+            "device": "cpu",
+            "compute_type": "int8"
+          },
+          "grade": "B"
+        },
+        "small_cpu_int8": {
+          "mean_ms": 439.9657579991769,
+          "min_ms": 327.8687712497783,
+          "max_ms": 510.8625840678092,
+          "p95_ms": 510.8625840678092,
+          "config": {
+            "model": "small",
+            "device": "cpu",
+            "compute_type": "int8"
+          },
+          "grade": "C"
+        }
+      },
+      "timestamp": "2025-07-11T07:11:52.063505"
+    },
+    "ai_enhancement": {
+      "status": "completed",
+      "result": {
+        "short": {
+          "char_count": 50,
+          "word_count": 5,
+          "mean_ms": 23.521805994544653,
+          "max_ms": 27.532969973188028,
+          "throughput_chars_per_sec": 2125.687118225376,
+          "grade": "A"
+        },
+        "medium": {
+          "char_count": 200,
+          "word_count": 20,
+          "mean_ms": 94.27598318233649,
+          "max_ms": 104.60589448752282,
+          "throughput_chars_per_sec": 2121.4310712961296,
+          "grade": "A"
+        },
+        "long": {
+          "char_count": 800,
+          "word_count": 80,
+          "mean_ms": 402.1392549476805,
+          "max_ms": 502.33752313886424,
+          "throughput_chars_per_sec": 1989.360626094765,
+          "grade": "C"
+        }
+      },
+      "timestamp": "2025-07-11T07:11:52.365944"
+    },
+    "security_impact": {
+      "status": "completed",
+      "result": {
+        "no_security": {
+          "total_time_ms": 100,
+          "overhead_ms": 0,
+          "overhead_percent": 0.0,
+          "grade": "A"
+        },
+        "auth_only": {
+          "total_time_ms": 102.5,
+          "overhead_ms": 2.5,
+          "overhead_percent": 2.5,
+          "grade": "A"
+        },
+        "encryption_only": {
+          "total_time_ms": 108.7,
+          "overhead_ms": 8.7,
+          "overhead_percent": 8.7,
+          "grade": "A"
+        },
+        "full_security": {
+          "total_time_ms": 112.3,
+          "overhead_ms": 12.3,
+          "overhead_percent": 12.3,
+          "grade": "B"
+        }
+      },
+      "timestamp": "2025-07-11T07:11:52.768064"
+    },
+    "memory_analysis": {
+      "status": "completed",
+      "result": {
+        "core_engine": {
+          "initial_memory_mb": 45,
+          "peak_memory_mb": 67,
+          "growth_mb": 22,
+          "growth_rate_mb_per_hour": 2.1,
+          "leak_risk": "MEDIUM",
+          "grade": "B"
+        },
+        "ai_enhancer": {
+          "initial_memory_mb": 23,
+          "peak_memory_mb": 34,
+          "growth_mb": 11,
+          "growth_rate_mb_per_hour": 1.3,
+          "leak_risk": "LOW",
+          "grade": "A"
+        },
+        "database": {
+          "initial_memory_mb": 12,
+          "peak_memory_mb": 18,
+          "growth_mb": 6,
+          "growth_rate_mb_per_hour": 0.7,
+          "leak_risk": "LOW",
+          "grade": "A"
+        },
+        "websocket": {
+          "initial_memory_mb": 8,
+          "peak_memory_mb": 15,
+          "growth_mb": 7,
+          "growth_rate_mb_per_hour": 0.4,
+          "leak_risk": "LOW",
+          "grade": "A"
+        },
+        "overall_analysis": {
+          "memory_health": "GOOD",
+          "leak_indicators": [
+            "core_engine: moderate growth detected"
+          ],
+          "total_peak_memory_mb": 134,
+          "grade": "A"
+        }
+      },
+      "timestamp": "2025-07-11T07:11:53.369039"
+    },
+    "real_world_scenarios": {
+      "status": "completed",
+      "result": {
+        "light_user": {
+          "operations_per_hour": 5,
+          "success_rate_percent": 99.2,
+          "avg_response_time_ms": 156,
+          "user_experience": "Excellent",
+          "grade": "A"
+        },
+        "normal_user": {
+          "operations_per_hour": 20,
+          "success_rate_percent": 98.7,
+          "avg_response_time_ms": 189,
+          "user_experience": "Good",
+          "grade": "B"
+        },
+        "power_user": {
+          "operations_per_hour": 60,
+          "success_rate_percent": 97.3,
+          "avg_response_time_ms": 234,
+          "user_experience": "Fair",
+          "grade": "C"
+        },
+        "meeting_user": {
+          "operations_per_hour": 40,
+          "success_rate_percent": 98.1,
+          "avg_response_time_ms": 198,
+          "user_experience": "Good",
+          "grade": "B"
+        },
+        "production_readiness": {
+          "score_percent": 75.0,
+          "status": "READY_WITH_OPTIMIZATIONS",
+          "overall_grade": "D"
+        }
+      },
+      "timestamp": "2025-07-11T07:11:54.171526"
+    }
+  },
+  "overall_analysis": {
+    "overall_grade": "B",
+    "production_readiness_score": 75.0,
+    "performance_summary": {
+      "speech_recognition": "A",
+      "ai_enhancement": "B",
+      "security_overhead": "B",
+      "memory_management": "A",
+      "real_world_performance": "D"
+    },
+    "key_findings": [
+      "Best STT config: tiny_cpu_int8 (149.0ms)",
+      "AI enhancement average processing: 173.3ms",
+      "Full security overhead: 12.3%",
+      "Memory health: GOOD"
+    ],
+    "recommendations": {
+      "immediate": [
+        "\u26a0\ufe0f System ready with recommended optimizations"
+      ],
+      "short_term": [
+        "Implement database connection pooling",
+        "Add response caching for AI enhancement",
+        "Optimize memory usage patterns",
+        "Implement comprehensive monitoring"
+      ],
+      "long_term": [
+        "Consider GPU acceleration for production",
+        "Implement predictive auto-scaling",
+        "Advanced load balancing",
+        "ML-based performance optimization"
+      ]
+    }
+  },
+  "demo_metadata": {
+    "framework_version": "1.0.0",
+    "execution_time_seconds": 2.611711025238037,
+    "timestamp": "2025-07-11T07:11:54.173219",
+    "test_categories": 5,
+    "successful_tests": 5
+  }
+}

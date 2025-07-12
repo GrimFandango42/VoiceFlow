@@ -35,6 +35,13 @@ try:
 except ImportError:
     VALIDATION_AVAILABLE = False
     print("[WARNING] Input validation not available - security risk")
+
+try:
+    from utils.rate_limiter import get_websocket_limiter
+    RATE_LIMITING_AVAILABLE = True
+except ImportError:
+    RATE_LIMITING_AVAILABLE = False
+    print("[WARNING] Rate limiting not available - DoS risk")
 try:
     import pyautogui
     import keyboard
@@ -172,9 +179,10 @@ class VoiceFlowServer:
                 )
                 print("[CPU] Using CPU fallback with int8")
         
-        # WebSocket clients and authentication
+        # WebSocket clients, authentication, and rate limiting
         self.websocket_clients = set()
         self.auth_manager = get_auth_manager() if AUTH_AVAILABLE else None
+        self.rate_limiter = get_websocket_limiter() if RATE_LIMITING_AVAILABLE else None
         
         if self.auth_manager:
             print(f"[AUTH] WebSocket authentication enabled")
@@ -475,9 +483,24 @@ Formatted text:"""
         self.websocket_clients -= disconnected_clients
         
     async def handle_websocket(self, websocket, path):
-        """Handle WebSocket connections with authentication"""
+        """Handle WebSocket connections with authentication and rate limiting"""
+        client_ip = websocket.remote_address[0] if websocket.remote_address else "unknown"
+        client_id = f"{client_ip}:{websocket.remote_address[1] if websocket.remote_address else 0}"
+        
+        # Check connection rate limiting
+        if self.rate_limiter and not self.rate_limiter.can_connect(client_ip):
+            await websocket.close(code=1008, reason="Rate limit exceeded")
+            print(f"[RATE] Connection rate limit exceeded for {client_ip}")
+            return
+        
         # Authenticate connection
         if self.auth_manager:
+            # Check authentication rate limiting
+            if self.rate_limiter and not self.rate_limiter.can_authenticate(client_ip):
+                await websocket.close(code=1008, reason="Authentication rate limit exceeded")
+                print(f"[RATE] Auth rate limit exceeded for {client_ip}")
+                return
+            
             auth_token = extract_auth_token(websocket)
             if not self.auth_manager.validate_token(auth_token):
                 await websocket.close(code=1008, reason="Authentication required")
@@ -485,7 +508,6 @@ Formatted text:"""
                 return
             
             # Create session
-            client_id = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
             session_id = self.auth_manager.create_session(client_id)
             print(f"[AUTH] Authenticated connection from {websocket.remote_address}")
         
@@ -499,6 +521,15 @@ Formatted text:"""
             
             async for message in websocket:
                 try:
+                    # Check message rate limiting
+                    if self.rate_limiter and not self.rate_limiter.can_send_message(client_id):
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "message": "Message rate limit exceeded",
+                            "retry_after": self.rate_limiter.get_message_reset_time(client_id)
+                        }))
+                        continue
+                    
                     # Validate incoming message
                     if VALIDATION_AVAILABLE:
                         data = InputValidator.validate_json_message(message)

@@ -22,13 +22,14 @@ class ValidationError(Exception):
 class InputValidator:
     """Input validation utilities for VoiceFlow."""
     
-    # Safe patterns for common inputs
+    # Safe patterns for common inputs (strengthened)
     SAFE_TEXT_PATTERN = re.compile(r'^[a-zA-Z0-9\s\.,;:!?\-\'\"()]+$')
     SAFE_FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9_\-\.]+$')
-    SAFE_PATH_PATTERN = re.compile(r'^[a-zA-Z0-9_/\-\.\\:]+$')
+    SAFE_PATH_PATTERN = re.compile(r'^[a-zA-Z0-9_\-\.]+$')  # Removed / and \ to prevent traversal
     
-    # Dangerous patterns to block
+    # Dangerous patterns to block (enhanced)
     DANGEROUS_PATTERNS = [
+        # XSS patterns
         re.compile(r'<script[^>]*>', re.IGNORECASE),
         re.compile(r'javascript:', re.IGNORECASE),
         re.compile(r'on\w+\s*=', re.IGNORECASE),
@@ -37,11 +38,43 @@ class InputValidator:
         re.compile(r'<\s*embed[^>]*>', re.IGNORECASE),
         re.compile(r'<\s*link[^>]*>', re.IGNORECASE),
         re.compile(r'<\s*meta[^>]*>', re.IGNORECASE),
+        
+        # Command injection patterns
         re.compile(r'eval\s*\(', re.IGNORECASE),
         re.compile(r'exec\s*\(', re.IGNORECASE),
         re.compile(r'__import__', re.IGNORECASE),
         re.compile(r'subprocess', re.IGNORECASE),
         re.compile(r'os\.system', re.IGNORECASE),
+        re.compile(r'system\s*\(', re.IGNORECASE),
+        re.compile(r'shell_exec', re.IGNORECASE),
+        re.compile(r'passthru', re.IGNORECASE),
+        re.compile(r'popen', re.IGNORECASE),
+        
+        # Path traversal patterns
+        re.compile(r'\.\./', re.IGNORECASE),
+        re.compile(r'\.\.\\', re.IGNORECASE),
+        re.compile(r'%2e%2e%2f', re.IGNORECASE),
+        re.compile(r'%2e%2e%5c', re.IGNORECASE),
+        re.compile(r'/etc/', re.IGNORECASE),
+        re.compile(r'/bin/', re.IGNORECASE),
+        re.compile(r'/usr/', re.IGNORECASE),
+        re.compile(r'/var/', re.IGNORECASE),
+        re.compile(r'C:\\\\', re.IGNORECASE),
+        
+        # SQL injection patterns
+        re.compile(r'union\s+select', re.IGNORECASE),
+        re.compile(r'drop\s+table', re.IGNORECASE),
+        re.compile(r'delete\s+from', re.IGNORECASE),
+        re.compile(r'insert\s+into', re.IGNORECASE),
+        re.compile(r'update\s+\w+\s+set', re.IGNORECASE),
+        re.compile(r';\s*drop', re.IGNORECASE),
+        re.compile(r';\s*delete', re.IGNORECASE),
+        
+        # XXE patterns
+        re.compile(r'<!entity', re.IGNORECASE),
+        re.compile(r'<!doctype[^>]*entity', re.IGNORECASE),
+        re.compile(r'&\w+;', re.IGNORECASE),
+        re.compile(r'SYSTEM\s+["\'"][^"\']*["\'"]', re.IGNORECASE),
     ]
     
     @staticmethod
@@ -108,9 +141,10 @@ class InputValidator:
         except Exception:
             raise ValidationError("Invalid file path format", "file_path")
         
-        # Check for path traversal attempts
-        if '..' in str(path):
-            raise ValidationError("Path traversal not allowed", "file_path")
+        # Check for path traversal attempts (enhanced)
+        path_str = str(path).lower()
+        if any(dangerous in path_str for dangerous in ['..', '%2e%2e', '/etc/', '/bin/', '/usr/', '/var/', 'c:\\', 'system32']):
+            raise ValidationError("Path traversal or system directory access not allowed", "file_path")
         
         # Check if path is within allowed directories
         allowed_dirs = [
@@ -143,7 +177,7 @@ class InputValidator:
         return path
     
     @staticmethod
-    def validate_json_message(message: str, max_size: int = 1024 * 1024) -> Dict[str, Any]:
+    def validate_json_message(message: str, max_size: int = 64 * 1024) -> Dict[str, Any]:  # Reduced from 1MB to 64KB
         """
         Validate and parse JSON message safely.
         
