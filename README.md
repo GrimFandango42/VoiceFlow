@@ -1,121 +1,116 @@
-# VoiceFlow - Ultra-Fast Privacy-First Voice Transcription
+# VoiceFlow - Local Voice Transcription System
 
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen)](https://github.com/GrimFandango42/voiceflow)
 [![Version](https://img.shields.io/badge/Version-v3.0.0-blue)](https://github.com/GrimFandango42/voiceflow/releases)
-[![Security](https://img.shields.io/badge/Security-Hardened-green)](https://github.com/GrimFandango42/voiceflow)
+[![Security](https://img.shields.io/badge/Security-Audited-green)](https://github.com/GrimFandango42/voiceflow)
 [![Testing](https://img.shields.io/badge/Testing-Comprehensive-brightgreen)](https://github.com/GrimFandango42/voiceflow)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Ultra-fast, privacy-first local voice transcription system.** Choose between enterprise-grade features or lightning-fast personal use. A free, secure alternative to commercial services featuring 3-5x speed improvements, zero permanent storage, and military-grade privacy protection.
+A local voice transcription system built on OpenAI Whisper with optional AI text enhancement. Designed for privacy-conscious users who require offline processing with no data transmission to external services.
 
-## 🎯 Overview
+## Overview
 
-VoiceFlow transforms speech into text using state-of-the-art OpenAI Whisper models running entirely on your machine. Enhanced with local AI for intelligent formatting and context-aware text processing. Perfect for developers, writers, professionals, and anyone who values privacy and performance.
+VoiceFlow provides real-time speech-to-text transcription using OpenAI Whisper models with local processing. The system automatically injects transcribed text at the cursor position in any application.
 
-### Key Benefits
-- **🔒 100% Private** - All processing happens locally, your voice never leaves your device
-- **⚡ Lightning Fast** - Sub-500ms transcription with optimized GPU acceleration
-- **🧠 AI-Enhanced** - Intelligent punctuation, formatting, and context awareness
-- **🎯 Universal** - Works in any application (browsers, IDEs, documents, chat)
-- **💰 Completely Free** - No subscriptions, API costs, or usage limits
-- **🛡️ Enterprise Security** - Security-audited with comprehensive testing
+### Key Features
+- **Local Processing** - All transcription happens on-device with no external API calls
+- **Cross-Application** - Works in browsers, IDEs, text editors, and chat applications  
+- **GPU Acceleration** - CUDA optimization with automatic CPU fallback
+- **AI Text Enhancement** - Optional integration with local AI models (Ollama) for formatting
+- **Two Deployment Options** - Minimal personal version or full enterprise version
+- **Security Tested** - Comprehensive security audit with input validation
 
-## 🚀 Choose Your Version
+## Deployment Options
 
-VoiceFlow now offers **two optimized versions** to match your needs:
+VoiceFlow provides two implementations optimized for different use cases:
 
-### 🏃‍♂️ **VoiceFlow Personal** - Ultra-Fast & Private (NEW!)
-**Perfect for individual users who want maximum speed and privacy**
+### VoiceFlow Personal
+Minimal implementation optimized for individual use with maximum privacy and performance.
 
 ```bash
-# Quick setup for personal use
+# Quick setup
 python run_personal.py
 
-# Or manually
+# Manual installation
 pip install -r requirements_personal.txt
 python voiceflow_personal.py
 ```
 
-**Benefits:**
-- **⚡ 3-5x faster** - Optimized for speed (2-3s startup vs 8-12s)
-- **🔒 Zero storage** - Ephemeral mode, no permanent data
-- **🛡️ Military-grade privacy** - No logging, no traces
-- **📦 Minimal** - 85% smaller codebase, 4 dependencies vs 25+
-- **⚡ 150ms transcription** - Ultra-fast processing pipeline
+**Characteristics:**
+- **Dependencies**: 4 packages (RealtimeSTT, pyautogui, keyboard, requests)
+- **Memory Usage**: 150-250MB baseline
+- **Startup Time**: 2-3 seconds
+- **Storage**: Memory-only, no persistent data
+- **Security**: Input validation, rate limiting, injection prevention
+- **Code Size**: ~2,000 lines
 
-### 🏢 **VoiceFlow Enterprise** - Full-Featured
-**Perfect for teams, development, and advanced features**
+### VoiceFlow Enterprise
+Full-featured implementation with enterprise security, monitoring, and team collaboration features.
 
 ```bash
-# Enterprise setup
+# Installation
 pip install -r python/requirements.txt
 
-# Simple mode
-python voiceflow_simple.py
-
-# Tray mode  
-python voiceflow_tray.py
+# Run modes
+python voiceflow_simple.py    # CLI mode
+python voiceflow_tray.py      # System tray mode
 ```
 
-**Benefits:**
-- **🔒 Enterprise security** - Authentication, encryption, auditing
-- **📊 Advanced features** - WebSocket APIs, monitoring, testing
-- **👥 Multi-user support** - Team collaboration features
-- **🔧 Developer tools** - MCP integration, extensive testing
-## 📊 Performance Comparison
+**Characteristics:**
+- **Dependencies**: 25+ packages with full feature set
+- **Memory Usage**: 400-600MB with all features
+- **Startup Time**: 8-12 seconds
+- **Storage**: Optional encrypted database
+- **Security**: Authentication, authorization, audit logging
+- **Code Size**: ~15,000 lines with testing framework
+## Performance Metrics
 
-| Feature | VoiceFlow Personal | VoiceFlow Enterprise | Improvement |
-|---------|-------------------|---------------------|-------------|
-| **Startup Time** | 2-3 seconds | 8-12 seconds | 70% faster ⚡ |
-| **Memory Usage** | 150-250MB | 400-600MB | 60% less 📉 |
-| **Transcription Speed** | 150-250ms | 300-500ms | 50% faster ⚡ |
-| **Dependencies** | 4 packages | 25+ packages | 85% fewer 📦 |
-| **Code Size** | 2,000 lines | 15,000+ lines | 85% smaller 📦 |
-| **Storage** | Memory only | Database + logs | 100% ephemeral 🔒 |
-| **Privacy** | Zero traces | Auditable logs | Military-grade 🛡️ |
+| Metric | Personal | Enterprise | Notes |
+|--------|----------|------------|-------|
+| Startup Time | 2-3s | 8-12s | Personal skips feature loading |
+| Memory Usage | 150-250MB | 400-600MB | Personal has minimal dependencies |
+| Transcription Latency | 150-250ms | 300-500ms | Personal uses optimized pipeline |
+| Dependencies | 4 packages | 25+ packages | Personal excludes testing/monitoring |
+| Storage Footprint | Memory only | Database + logs | Personal is ephemeral |
 
-### 🎯 Basic Usage
+## Basic Operation
 
-**VoiceFlow Personal:**
-1. **Start**: `python run_personal.py`
-2. **Speak**: Auto-detection or Ctrl+Alt hotkey
-3. **Result**: Text appears instantly at cursor
+### VoiceFlow Personal
+1. Start: `python run_personal.py`
+2. Activate: Speak normally (auto-detection) or use Ctrl+Alt hotkey
+3. Output: Transcribed text appears at cursor position
 
-**VoiceFlow Enterprise:**
-1. **Start**: `python voiceflow_simple.py` or `python voiceflow_tray.py`
-2. **Position Cursor**: Click in any text field
-3. **Record**: Press `Ctrl+Alt` and speak clearly
-4. **Result**: Enhanced text appears with full logging
+### VoiceFlow Enterprise  
+1. Start: `python voiceflow_simple.py` (CLI) or `python voiceflow_tray.py` (background)
+2. Position: Click in target text field
+3. Activate: Press Ctrl+Alt and speak
+4. Output: Enhanced text with optional logging/history
 
-## ✨ Features
+## Technical Features
 
-### Core Capabilities
-- **Universal Text Input** - Works in any Windows/Linux application
-- **GPU Acceleration** - CUDA-optimized Whisper with automatic CPU fallback
-- **Smart Formatting** - Context-aware punctuation and capitalization
-- **Multi-Model Support** - Choose speed vs accuracy (tiny/base/small/large)
-- **Real-time Processing** - Live transcription with minimal latency
-- **Error Recovery** - Graceful handling of network, hardware, and software issues
+### Speech Processing
+- **Whisper Integration** - OpenAI Whisper models (tiny/base/small/large)
+- **GPU Acceleration** - CUDA optimization with automatic CPU fallback
+- **Voice Activity Detection** - Automatic speech start/stop detection
+- **Real-time Processing** - Configurable latency vs accuracy trade-offs
+- **Multi-language Support** - Language detection and model selection
 
-### AI Enhancement
-- **Local AI Processing** - Ollama/DeepSeek integration for text enhancement
-- **Context Awareness** - Adapts formatting based on application context
-- **Custom Vocabulary** - Personal dictionary for technical terms and names
-- **Voice Commands** - Support for "new line", "new paragraph", editing commands
-- **Multi-Language** - Support for multiple languages and dialects
+### Text Enhancement
+- **AI Integration** - Optional Ollama integration for text formatting
+- **Context Awareness** - Punctuation and capitalization correction
+- **Caching System** - Local enhancement cache for repeated phrases
+- **Fallback Formatting** - Basic formatting when AI is unavailable
 
-### Privacy & Security
-- **Zero Data Collection** - No telemetry, analytics, or data transmission
-- **Local Processing** - All AI and speech processing happens on your device  
-- **Ephemeral Storage** - Personal version: zero permanent storage
-- **Encrypted Storage** - Enterprise version: optional database encryption
-- **Security Hardened** - Military-grade injection prevention and validation
-- **Comprehensive Testing** - 92.9% security score with full audit
-- **Open Source** - Fully auditable codebase with MIT license
+### Security Implementation
+- **Input Validation** - Pattern-based injection prevention
+- **Rate Limiting** - Configurable request throttling
+- **Memory Management** - Automatic cleanup and bounded memory usage
+- **Access Controls** - Enterprise version includes authentication/authorization
+- **Audit Logging** - Optional comprehensive logging (Enterprise only)
 
-## 🏗️ Architecture
+## Architecture
 
-VoiceFlow features a clean, modular architecture designed for reliability and extensibility:
+The system uses a modular architecture with clear separation between transcription, enhancement, and security components:
 
 ```
 voiceflow/
@@ -145,165 +140,133 @@ voiceflow/
 └── security reports/          # Security audit results
 ```
 
-## 🎛️ Advanced Options
-
-For developers and advanced users, additional implementations are available:
-
-### WebSocket Server
-For integration with web applications:
-```bash
-python python/stt_server.py
-```
-
-### MCP Integration
-For Claude MCP ecosystem integration:
-```bash
-python voiceflow_mcp_server.py
-```
-
-### Native Windows Service
-For advanced system integration:
-```bash
-python native/voiceflow_native.py
-```
-
-## ⚙️ Configuration
-
-VoiceFlow supports flexible configuration through environment variables, config files, and runtime options:
+## Configuration
 
 ### Environment Variables
 ```bash
-# Audio Configuration
-export VOICEFLOW_MODEL=base          # Model size (tiny/base/small/large)
-export VOICEFLOW_DEVICE=auto         # Device (auto/cuda/cpu)
+# Core settings
+export VOICEFLOW_MODEL=base          # Whisper model (tiny/base/small/large)
+export VOICEFLOW_DEVICE=auto         # Processing device (auto/cuda/cpu)
 
-# AI Enhancement
-export ENABLE_AI_ENHANCEMENT=true    # Enable AI text enhancement
+# AI enhancement (optional)
 export OLLAMA_HOST=localhost         # Ollama server host
-export AI_MODEL=llama3.3:latest      # AI model for enhancement
+export AI_MODEL=llama3.3:latest      # Enhancement model
 
 # Security
-export ENABLE_DEBUG_LOGGING=false    # Debug logging
-export MAX_AUDIO_DURATION=30         # Max recording duration
+export MAX_AUDIO_DURATION=30         # Maximum recording length (seconds)
 ```
 
 ### Configuration File
-Create `.voiceflow/config.json` in your home directory:
+Optional configuration file at `~/.voiceflow/config.json`:
 ```json
 {
   "audio": {
     "model": "base",
-    "device": "auto",
+    "device": "auto", 
     "language": "en"
   },
   "ai": {
     "enabled": true,
-    "model": "llama3.3:latest",
     "temperature": 0.3
-  },
-  "hotkeys": {
-    "record_and_inject": "ctrl+alt"
   }
 }
 ```
 
-## 🧪 Testing
+## Additional Implementations
 
-VoiceFlow includes a comprehensive testing framework with 95%+ code coverage:
-
-### Run All Tests
+### WebSocket Server (Enterprise)
+For web application integration:
 ```bash
-# Complete testing suite
-python run_tests.py --all --report
-
-# Specific test categories
-python run_tests.py unit integration e2e ux
+python python/stt_server.py
 ```
 
-### Test Categories
-- **Unit Tests** - Core module functionality
-- **Integration Tests** - Component interactions
-- **End-to-End Tests** - Complete user workflows
-- **UX Tests** - User experience and accessibility
-- **Performance Tests** - Load and stress testing
-- **Security Tests** - Security implementation validation
+### MCP Integration (Enterprise)
+For Claude MCP ecosystem:
+```bash
+python voiceflow_mcp_server.py
+```
 
-## 🚀 Performance
+## Testing (Enterprise)
 
-### Benchmarks
-- **Latency**: <500ms end-to-end transcription
-- **Accuracy**: 95%+ for clear speech
-- **Throughput**: 50+ transcriptions/minute
-- **Memory**: <2GB RAM for base model
-- **CPU Usage**: <20% during transcription
+The Enterprise version includes comprehensive testing framework:
 
-### Hardware Requirements
-- **Minimum**: 4GB RAM, modern CPU
-- **Recommended**: 8GB RAM, NVIDIA GPU with 2GB+ VRAM
-- **Optimal**: 16GB RAM, NVIDIA GPU with 4GB+ VRAM
+```bash
+# Run test suite
+python run_tests.py
 
-## 🛡️ Security
+# Specific test types
+python run_tests.py unit integration security
+```
 
-VoiceFlow has undergone comprehensive security auditing:
+Test coverage includes unit tests, integration tests, security validation, and performance benchmarks.
 
-- ✅ **No exposed secrets or API keys**
-- ✅ **Secure network communications (HTTPS/WSS)**
-- ✅ **Input validation and sanitization**
-- ✅ **Dependency vulnerability scanning**
-- ✅ **File permission and access control validation**
-- ✅ **Security configuration best practices**
+## System Requirements
+
+### Minimum
+- **RAM**: 4GB available
+- **CPU**: Modern multi-core processor
+- **Python**: 3.8+
+- **Storage**: 2GB for models
+
+### Recommended  
+- **RAM**: 8GB available
+- **GPU**: NVIDIA GPU with 2GB+ VRAM for acceleration
+- **Python**: 3.9+
+- **Storage**: 5GB for multiple models
+
+### Performance Characteristics
+- **Transcription Latency**: 150-500ms depending on model and hardware
+- **Accuracy**: 90-95% for clear speech
+- **CPU Usage**: 10-30% during active transcription
+- **Memory Growth**: Bounded with automatic cleanup
+
+## Security
+
+Both versions implement security best practices:
+
+- **Input Validation**: Pattern-based injection prevention
+- **Rate Limiting**: Configurable request throttling  
+- **Memory Safety**: Bounded memory usage with automatic cleanup
+- **Local Processing**: No external API calls required
+- **Dependency Management**: Regular security updates
 
 See [SECURITY_AUDIT_REPORT.md](SECURITY_AUDIT_REPORT.md) for detailed security analysis.
 
-## 📚 Documentation
+## Documentation
 
-- **[Architecture Guide](docs/ARCHITECTURE.md)** - Technical architecture overview
-- **[User Guide](docs/USER_GUIDE.md)** - Detailed usage instructions
-- **[Build Guide](docs/BUILD_GUIDE.md)** - Build and development setup
-- **[Contributing Guide](docs/CONTRIBUTING.md)** - Development guidelines
+- **[Personal Usage Guide](PERSONAL_USAGE_GUIDE.md)** - VoiceFlow Personal setup and usage
+- **[Architecture Guide](docs/ARCHITECTURE.md)** - Technical architecture details  
+- **[User Guide](docs/USER_GUIDE.md)** - Enterprise version usage
 - **[Security Report](SECURITY_AUDIT_REPORT.md)** - Security audit results
-- **[Testing Guide](COMPREHENSIVE_TESTING_REPORT.md)** - Testing framework overview
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
-**No transcription appears**
-- Check microphone permissions
-- Verify audio input device selection
-- Test with `python tests/test_audio.py`
+**No transcription output**
+- Verify microphone permissions and device selection
+- Check audio input levels
+- Test model loading: `python -c "import whisper; whisper.load_model('base')"`
 
-**Slow performance**
-- Try smaller model: `export VOICEFLOW_MODEL=tiny`
-- Check GPU availability: `nvidia-smi`
-- Verify system resources
+**Performance issues**
+- Use smaller model: `export VOICEFLOW_MODEL=tiny`
+- Check GPU availability: `nvidia-smi` (if applicable)
+- Monitor system resources during operation
 
-**AI enhancement not working**
-- Check Ollama installation and models
-- Verify network connectivity
-- Test with: `python tests/test_ai_enhancement.py`
+**AI enhancement failures**  
+- Verify Ollama installation: `curl http://localhost:11434/api/tags`
+- Check model availability: `ollama list`
+- Test without AI: disable enhancement in configuration
 
-### Debug Mode
-Enable detailed logging for troubleshooting:
+## Contributing
+
+VoiceFlow is open source. See [Contributing Guide](docs/CONTRIBUTING.md) for development setup and guidelines.
+
+### Development
 ```bash
-export ENABLE_DEBUG_LOGGING=true
-python implementations/simple.py
-```
-
-## 🤝 Contributing
-
-VoiceFlow welcomes contributions! See our [Contributing Guide](docs/CONTRIBUTING.md) for details.
-
-### Development Setup
-```bash
-# Clone and setup development environment
 git clone https://github.com/GrimFandango42/voiceflow.git
 cd voiceflow
-
-# Install development dependencies
 pip install -r requirements_testing.txt
-
-# Run tests
 python run_tests.py
 
 # Make your changes and submit a pull request
