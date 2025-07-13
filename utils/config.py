@@ -36,15 +36,23 @@ class VoiceFlowConfig:
     def _load_defaults(self):
         """Load default configuration values."""
         self._config = {
-            # Audio Configuration
+            # Audio Configuration - UPDATED with cutoff fix
             'audio': {
                 'model': 'base',
                 'device': 'auto',
                 'language': 'en',
-                'post_speech_silence_duration': 0.8,
-                'min_length_of_recording': 0.2,
-                'silero_sensitivity': 0.4,
-                'webrtc_sensitivity': 3
+                
+                # FIXED: VAD parameters to prevent audio tail-end cutoff
+                'post_speech_silence_duration': 1.3,  # Increased from 0.8 to capture speech tails
+                'min_length_of_recording': 0.15,      # Optimized for responsiveness
+                'silero_sensitivity': 0.3,            # Reduced from 0.4 for less aggressive detection
+                'webrtc_sensitivity': 2,              # Reduced from 3 for better tail capture
+                'min_gap_between_recordings': 0.25,   # Optimized gap between recordings
+                
+                # VAD Profile Configuration
+                'vad_profile': 'balanced',             # Default to balanced (cutoff fix applied)
+                'enable_vad_debugging': False,         # Enable VAD debugging output
+                'adaptive_vad': False,                 # Enable adaptive VAD adjustments
             },
             
             # AI Enhancement
@@ -114,6 +122,16 @@ class VoiceFlowConfig:
             'VOICEFLOW_MODEL': ('audio', 'model'),
             'VOICEFLOW_DEVICE': ('audio', 'device'),
             'VOICEFLOW_LANGUAGE': ('audio', 'language'),
+            
+            # VAD Configuration - NEW environment variables for cutoff fix
+            'VOICEFLOW_VAD_PROFILE': ('audio', 'vad_profile'),
+            'VOICEFLOW_POST_SPEECH_SILENCE': ('audio', 'post_speech_silence_duration', float),
+            'VOICEFLOW_SILERO_SENSITIVITY': ('audio', 'silero_sensitivity', float),
+            'VOICEFLOW_WEBRTC_SENSITIVITY': ('audio', 'webrtc_sensitivity', int),
+            'VOICEFLOW_MIN_RECORDING_LENGTH': ('audio', 'min_length_of_recording', float),
+            'VOICEFLOW_MIN_GAP_RECORDINGS': ('audio', 'min_gap_between_recordings', float),
+            'VOICEFLOW_ENABLE_VAD_DEBUG': ('audio', 'enable_vad_debugging', bool),
+            'VOICEFLOW_ADAPTIVE_VAD': ('audio', 'adaptive_vad', bool),
             
             # AI
             'ENABLE_AI_ENHANCEMENT': ('ai', 'enabled', bool),
@@ -239,3 +257,66 @@ def get_ai_config() -> Dict[str, Any]:
 def get_security_config() -> Dict[str, Any]:
     """Get security configuration section."""
     return get_config().get_section('security')
+
+
+def get_vad_config() -> Dict[str, Any]:
+    """Get VAD configuration section with cutoff fix applied."""
+    return get_config().get_section('audio')
+
+
+def set_vad_profile(profile: str) -> bool:
+    """
+    Set VAD profile in configuration.
+    
+    Args:
+        profile: VAD profile ('conservative', 'balanced', 'aggressive')
+        
+    Returns:
+        True if profile is valid and set, False otherwise
+    """
+    if profile not in ['conservative', 'balanced', 'aggressive']:
+        return False
+    
+    config = get_config()
+    config.set('audio', 'vad_profile', profile)
+    return True
+
+
+def get_vad_profile_settings(profile: str) -> Optional[Dict[str, Any]]:
+    """
+    Get VAD settings for a specific profile.
+    
+    Args:
+        profile: VAD profile name
+        
+    Returns:
+        Dictionary of VAD settings or None if invalid profile
+    """
+    profiles = {
+        'conservative': {
+            'description': 'Maximum speech capture, minimal cutoff risk',
+            'silero_sensitivity': 0.2,
+            'webrtc_sensitivity': 1,
+            'post_speech_silence_duration': 1.8,
+            'min_length_of_recording': 0.1,
+            'min_gap_between_recordings': 0.1,
+        },
+        'balanced': {
+            'description': 'Optimized for general use (fixes cutoff issue)',
+            'silero_sensitivity': 0.3,
+            'webrtc_sensitivity': 2,
+            'post_speech_silence_duration': 1.3,
+            'min_length_of_recording': 0.15,
+            'min_gap_between_recordings': 0.25,
+        },
+        'aggressive': {
+            'description': 'Fast response, higher performance',
+            'silero_sensitivity': 0.5,
+            'webrtc_sensitivity': 4,
+            'post_speech_silence_duration': 0.6,
+            'min_length_of_recording': 0.3,
+            'min_gap_between_recordings': 0.4,
+        }
+    }
+    
+    return profiles.get(profile)

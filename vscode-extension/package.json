@@ -1,0 +1,166 @@
+{
+  "name": "voiceflow-ide-integration",
+  "displayName": "VoiceFlow IDE Integration",
+  "description": "Advanced voice-to-text integration with syntax-aware text injection and programming language support",
+  "version": "1.0.0",
+  "publisher": "voiceflow",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Other",
+    "Productivity",
+    "Snippets"
+  ],
+  "keywords": [
+    "voice",
+    "speech-to-text",
+    "dictation",
+    "accessibility",
+    "programming",
+    "code-injection"
+  ],
+  "activationEvents": [
+    "onCommand:voiceflow.startListening",
+    "onCommand:voiceflow.stopListening",
+    "onCommand:voiceflow.injectText",
+    "onCommand:voiceflow.toggleSmartMode",
+    "onLanguage:python",
+    "onLanguage:javascript",
+    "onLanguage:typescript",
+    "onLanguage:java",
+    "onLanguage:cpp",
+    "onLanguage:html",
+    "onLanguage:css"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "voiceflow.startListening",
+        "title": "Start Voice Input",
+        "category": "VoiceFlow"
+      },
+      {
+        "command": "voiceflow.stopListening",
+        "title": "Stop Voice Input",
+        "category": "VoiceFlow"
+      },
+      {
+        "command": "voiceflow.injectText",
+        "title": "Inject Text at Cursor",
+        "category": "VoiceFlow"
+      },
+      {
+        "command": "voiceflow.toggleSmartMode",
+        "title": "Toggle Smart Programming Mode",
+        "category": "VoiceFlow"
+      },
+      {
+        "command": "voiceflow.showStatus",
+        "title": "Show VoiceFlow Status",
+        "category": "VoiceFlow"
+      },
+      {
+        "command": "voiceflow.openSettings",
+        "title": "Open VoiceFlow Settings",
+        "category": "VoiceFlow"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "voiceflow.startListening",
+        "key": "ctrl+alt+v",
+        "mac": "cmd+alt+v",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "voiceflow.stopListening",
+        "key": "escape",
+        "when": "voiceflow.listening"
+      },
+      {
+        "command": "voiceflow.toggleSmartMode",
+        "key": "ctrl+alt+shift+v",
+        "mac": "cmd+alt+shift+v"
+      }
+    ],
+    "configuration": {
+      "title": "VoiceFlow",
+      "properties": {
+        "voiceflow.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "VoiceFlow server URL"
+        },
+        "voiceflow.smartMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable smart programming mode with context awareness"
+        },
+        "voiceflow.autoFormat": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically format injected text based on language context"
+        },
+        "voiceflow.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show VoiceFlow status in status bar"
+        },
+        "voiceflow.aiEnhancement": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable AI-powered text enhancement"
+        },
+        "voiceflow.languageSpecificPrompts": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use language-specific prompts for better code generation"
+        },
+        "voiceflow.preserveSyntaxHighlighting": {
+          "type": "boolean",
+          "default": true,
+          "description": "Preserve syntax highlighting when injecting text"
+        },
+        "voiceflow.debugMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable debug logging"
+        }
+      }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "voiceflowStatus",
+          "name": "VoiceFlow Status",
+          "when": "voiceflow.enabled"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "voiceflow",
+          "title": "VoiceFlow",
+          "icon": "$(mic)"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^16.x",
+    "@types/vscode": "^1.70.0",
+    "typescript": "^4.7.4"
+  },
+  "dependencies": {
+    "axios": "^1.4.0",
+    "ws": "^8.13.0"
+  }
+}

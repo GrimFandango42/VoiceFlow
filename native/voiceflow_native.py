@@ -30,6 +30,13 @@ import tempfile
 import asyncio
 import queue
 
+# Import terminal integration
+try:
+    from core.terminal_integration import create_terminal_injector, TerminalDetector
+    TERMINAL_INTEGRATION_AVAILABLE = True
+except ImportError:
+    TERMINAL_INTEGRATION_AVAILABLE = False
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -48,7 +55,7 @@ class VoiceFlowNative:
     """
     
     def __init__(self):
-        self.version = "2.0.0-native"
+        self.version = "2.0.0-native-terminal"
         self.is_running = True
         self.is_recording = False
         self.audio_queue = queue.Queue()
@@ -57,6 +64,16 @@ class VoiceFlowNative:
         # Application context detection
         self.current_app = None
         self.app_context = {}
+        
+        # Terminal integration
+        if TERMINAL_INTEGRATION_AVAILABLE:
+            self.terminal_injector = create_terminal_injector()
+            self.terminal_detector = TerminalDetector()
+            logger.info("Terminal integration enabled")
+        else:
+            self.terminal_injector = None
+            self.terminal_detector = None
+            logger.warning("Terminal integration not available")
         
         # Audio configuration
         self.audio_format = pyaudio.paInt16
@@ -75,7 +92,9 @@ class VoiceFlowNative:
             'total_words': 0,
             'average_latency': 0,
             'successful_injections': 0,
-            'failed_injections': 0
+            'failed_injections': 0,
+            'terminal_injections': 0,
+            'terminal_detections': 0
         }
         
         logger.info(f"VoiceFlow Native {self.version} initializing...")
@@ -176,9 +195,22 @@ class VoiceFlowNative:
             else:
                 return 'web'
         
-        # Code editors
+        # Code editors and terminals
         if any(editor in app_name for editor in ['code', 'notepad++', 'sublime', 'atom', 'pycharm', 'visual studio']):
+            # Check if it's a terminal within VS Code
+            if self.terminal_detector and 'code' in app_name:
+                terminal_type, metadata = self.terminal_detector.detect_terminal_type(app_info)
+                if terminal_type.value != 'unknown':
+                    self.stats['terminal_detections'] += 1
+                    return 'terminal'
             return 'code'
+        
+        # Terminal applications
+        if self.terminal_detector:
+            terminal_type, metadata = self.terminal_detector.detect_terminal_type(app_info)
+            if terminal_type.value != 'unknown':
+                self.stats['terminal_detections'] += 1
+                return 'terminal'
         
         # Office applications
         if any(office in app_name for office in ['winword', 'excel', 'powerpoint']):
@@ -226,6 +258,11 @@ class VoiceFlowNative:
             # Technical formatting, preserve exact speech
             # Don't auto-capitalize or add punctuation
             pass
+        
+        elif context == 'terminal':
+            # Terminal-specific formatting - preserve exact commands
+            # Don't modify capitalization or punctuation for commands
+            pass
             
         elif context == 'document':
             # Formal document formatting
@@ -255,7 +292,7 @@ class VoiceFlowNative:
     def inject_text_universal(self, text, app_info=None):
         """
         Universal text injection that works across all Windows applications.
-        Uses multiple fallback methods for maximum compatibility.
+        Uses multiple fallback methods for maximum compatibility, with terminal-aware injection.
         """
         if not text:
             return False
@@ -264,6 +301,18 @@ class VoiceFlowNative:
         method_used = None
         
         try:
+            # Terminal-specific injection (highest priority for terminal apps)
+            if self.terminal_injector and app_info:
+                context = self.detect_application_context(app_info)
+                if context == 'terminal':
+                    success = self.terminal_injector.inject_enhanced_text(text, enable_command_processing=True)
+                    if success:
+                        method_used = 'terminal_enhanced'
+                        self.stats['terminal_injections'] += 1
+                        logger.info(f"Terminal injection successful: '{text[:50]}...'")
+                        self.stats['successful_injections'] += 1
+                        return True
+            
             # Method 1: Direct SendKeys (fastest, works in most apps)
             if self.settings.get('inject_method') == 'sendkeys':
                 success = self.inject_via_sendkeys(text)
@@ -586,6 +635,8 @@ Transcriptions: {self.stats['total_transcriptions']}
 Words: {self.stats['total_words']}
 Successful Injections: {self.stats['successful_injections']}
 Failed Injections: {self.stats['failed_injections']}
+Terminal Injections: {self.stats['terminal_injections']}
+Terminal Detections: {self.stats['terminal_detections']}
 Success Rate: {(self.stats['successful_injections'] / max(1, self.stats['successful_injections'] + self.stats['failed_injections']) * 100):.1f}%"""
         
         logger.info(f"Statistics:\n{stats_text}")

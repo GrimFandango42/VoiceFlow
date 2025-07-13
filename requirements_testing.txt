@@ -25,6 +25,12 @@ pytest>=7.0.0          # Unit testing framework
 matplotlib>=3.6.0      # Plotting for analysis reports
 pandas>=1.5.0          # Data analysis for test results
 
+# Browser automation testing
+selenium>=4.15.0        # WebDriver for browser automation
+webdriver-manager>=4.0.0  # Automatic driver management
+pytest-selenium>=4.1.0 # Selenium pytest integration
+pytest-html>=3.2.0     # HTML test reports
+
 # Development tools
 flake8>=6.0.0          # Code linting
 black>=22.0.0          # Code formatting

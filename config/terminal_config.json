@@ -1,0 +1,199 @@
+{
+  "terminal_integration": {
+    "enabled": true,
+    "version": "1.0.0",
+    "priority_order": [
+      "vscode_advanced",
+      "terminal_specific",
+      "clipboard",
+      "direct_typing"
+    ]
+  },
+  "detection": {
+    "enable_process_detection": true,
+    "enable_window_class_detection": true,
+    "enable_title_heuristics": true,
+    "detection_timeout_ms": 500,
+    "cache_detection_results": true,
+    "cache_duration_seconds": 5
+  },
+  "injection_methods": {
+    "terminal_specific": {
+      "enabled": true,
+      "timeout_ms": 2000,
+      "retry_attempts": 2
+    },
+    "vscode_advanced": {
+      "enabled": true,
+      "extension_api_ports": [3000, 3001, 3002, 8080, 8081],
+      "api_timeout_ms": 1000,
+      "fallback_to_standard": true
+    },
+    "clipboard": {
+      "enabled": true,
+      "restore_original": true,
+      "restore_delay_ms": 500,
+      "timeout_ms": 1000
+    },
+    "direct_typing": {
+      "enabled": true,
+      "character_delay_ms": 10,
+      "timeout_ms": 5000
+    },
+    "windows_api": {
+      "enabled": true,
+      "focus_window": true,
+      "focus_delay_ms": 100
+    }
+  },
+  "terminal_configs": {
+    "cmd": {
+      "escape_characters": ["^", "&", "<", ">", "|", "%"],
+      "escape_prefix": "^",
+      "line_continuation": "^",
+      "command_separator": "&",
+      "supports_multiline": false,
+      "preferred_injection": "clipboard"
+    },
+    "powershell": {
+      "escape_characters": ["`", "$", "\"", "'", "&", "|"],
+      "escape_prefix": "`",
+      "line_continuation": "`",
+      "command_separator": ";",
+      "supports_multiline": true,
+      "preferred_injection": "clipboard"
+    },
+    "powershell_core": {
+      "escape_characters": ["`", "$", "\"", "'", "&", "|"],
+      "escape_prefix": "`",
+      "line_continuation": "`",
+      "command_separator": ";",
+      "supports_multiline": true,
+      "preferred_injection": "clipboard"
+    },
+    "wsl": {
+      "escape_characters": ["\\", "$", "\"", "'", "`", "&", "|", ";"],
+      "escape_prefix": "\\",
+      "line_continuation": "\\",
+      "command_separator": "&&",
+      "supports_multiline": true,
+      "preferred_injection": "clipboard"
+    },
+    "git_bash": {
+      "escape_characters": ["\\", "$", "\"", "'", "`", "&", "|"],
+      "escape_prefix": "\\",
+      "line_continuation": "\\",
+      "command_separator": "&&",
+      "supports_multiline": true,
+      "preferred_injection": "clipboard"
+    },
+    "vscode_terminal": {
+      "escape_characters": [],
+      "escape_prefix": "",
+      "line_continuation": "",
+      "command_separator": "",
+      "supports_multiline": true,
+      "preferred_injection": "vscode_advanced"
+    },
+    "windows_terminal": {
+      "escape_characters": [],
+      "escape_prefix": "",
+      "line_continuation": "",
+      "command_separator": "",
+      "supports_multiline": true,
+      "preferred_injection": "clipboard"
+    }
+  },
+  "command_processing": {
+    "enabled": true,
+    "voice_command_patterns": {
+      "navigation": {
+        "change_directory": "change directory (.+)",
+        "go_to": "go to (.+)",
+        "list_files": "list (?:files|directory)",
+        "show_directory": "(?:show directory|where am i|print working directory)"
+      },
+      "file_operations": {
+        "create_file": "(?:create|make|touch) file (.+)",
+        "remove_file": "(?:remove|delete|rm) file (.+)",
+        "copy_file": "copy (.+) to (.+)",
+        "move_file": "move (.+) to (.+)"
+      },
+      "git_commands": {
+        "git_status": "git status",
+        "git_add_all": "git add (?:all|everything|\\.)",
+        "git_add_file": "git add (.+)",
+        "git_commit": "git commit (.+)",
+        "git_push": "git push",
+        "git_pull": "git pull"
+      },
+      "process_management": {
+        "kill_process": "kill process (.+)",
+        "find_process": "find process (.+)",
+        "show_processes": "(?:show|list) processes"
+      },
+      "system_info": {
+        "disk_space": "(?:show|check) disk space",
+        "memory_usage": "(?:show|check) memory",
+        "system_uptime": "(?:show|check) uptime"
+      }
+    },
+    "command_adaptations": {
+      "windows": {
+        "ls": "dir",
+        "ls -la": "dir",
+        "pwd": "cd",
+        "rm": "del",
+        "cp": "copy",
+        "mv": "move",
+        "touch": "echo. >",
+        "cat": "type",
+        "grep": "findstr",
+        "ps aux": "tasklist",
+        "kill": "taskkill /PID",
+        "df -h": "wmic logicaldisk get size,freespace,caption",
+        "free -h": "wmic OS get TotalVisibleMemorySize,FreePhysicalMemory",
+        "uptime": "systeminfo | findstr \"System Boot Time\""
+      }
+    }
+  },
+  "security": {
+    "validate_commands": true,
+    "blocked_commands": [
+      "rm -rf /",
+      "del /s",
+      "format",
+      "fdisk",
+      "shutdown",
+      "reboot"
+    ],
+    "require_confirmation": [
+      "rm -rf",
+      "del /s",
+      "git reset --hard",
+      "git clean -fd"
+    ],
+    "max_command_length": 1000
+  },
+  "logging": {
+    "enabled": true,
+    "log_level": "INFO",
+    "log_injections": true,
+    "log_detections": true,
+    "log_commands": true,
+    "log_errors": true
+  },
+  "performance": {
+    "enable_caching": true,
+    "cache_size": 100,
+    "detection_throttle_ms": 100,
+    "injection_timeout_ms": 5000,
+    "max_retry_attempts": 3
+  },
+  "debugging": {
+    "enabled": false,
+    "verbose_logging": false,
+    "save_detection_metadata": false,
+    "test_mode": false
+  }
+}
