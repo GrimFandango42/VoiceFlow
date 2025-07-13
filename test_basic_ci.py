@@ -52,17 +52,42 @@ def test_config_module():
         # Add current directory to path for imports
         sys.path.insert(0, str(Path.cwd()))
         
+        print(f"  Current working directory: {Path.cwd()}")
+        print(f"  Python path includes: {sys.path[0]}")
+        
+        # Check if utils module exists
+        utils_path = Path("utils")
+        if not utils_path.exists():
+            print(f"  ❌ utils directory not found at {utils_path.absolute()}")
+            return False
+        
+        config_path = utils_path / "config.py"
+        if not config_path.exists():
+            print(f"  ❌ config.py not found at {config_path.absolute()}")
+            return False
+        
+        print(f"  ✅ Found config module at {config_path.absolute()}")
+        
         from utils.config import VoiceFlowConfig
         config = VoiceFlowConfig()
         
         # Test basic config access
-        assert config.get('audio', 'model') == 'base'
-        assert config.get('audio', 'post_speech_silence_duration') == 1.3
+        model = config.get('audio', 'model')
+        silence_duration = config.get('audio', 'post_speech_silence_duration')
+        
+        print(f"  Config audio.model: {model}")
+        print(f"  Config audio.post_speech_silence_duration: {silence_duration}")
+        
+        assert model == 'base', f"Expected 'base', got '{model}'"
+        assert silence_duration == 1.3, f"Expected 1.3, got {silence_duration}"
         
         print("✅ Config module test passed")
         return True
     except Exception as e:
         print(f"❌ Config test failed: {e}")
+        print(f"  Exception type: {type(e).__name__}")
+        import traceback
+        print(f"  Traceback: {traceback.format_exc()}")
         return False
 
 def main():
