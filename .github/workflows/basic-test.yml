@@ -24,6 +24,10 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyyaml psutil
     
+    - name: Run debug script
+      run: |
+        python debug_ci.py
+    
     - name: Run basic test
       run: |
         python test_basic_ci.py
