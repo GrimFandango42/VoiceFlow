@@ -1,0 +1,22 @@
+VoiceFlow Comprehensive Test Results
+==================================================
+Timestamp: 2025-07-13T10:45:52.155876
+Total Duration: 1.05 seconds
+Total Tests: 4
+Passed: 0
+Failed: 4
+Errors: 0
+Timeouts: 0
+Skipped: 0
+Success Rate: 0.00%
+
+Test Results:
+------------------------------
+✗ validation_tests (unit) - 0.59s
+  Error: ...
+✗ config_tests (unit) - 0.71s
+  Error: ...
+✗ core_unit_tests (unit) - 1.05s
+  Error: ...
+✗ ai_enhancement_tests (unit) - 1.05s
+  Error: ...

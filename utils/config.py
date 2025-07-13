@@ -212,7 +212,8 @@ class VoiceFlowConfig:
     
     def to_dict(self) -> Dict[str, Any]:
         """Get complete configuration as dictionary."""
-        return self._config.copy()
+        import copy
+        return copy.deepcopy(self._config)
     
     def create_example_config(self):
         """Create example configuration file."""

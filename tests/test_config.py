@@ -14,7 +14,7 @@ import json
 import tempfile
 import shutil
 from pathlib import Path
-from unittest.mock import patch, mock_open
+from unittest.mock import patch, mock_open, Mock
 
 # Import the module to test
 import sys
@@ -23,6 +23,14 @@ from utils.config import (
     VoiceFlowConfig, get_config, load_config,
     get_audio_config, get_ai_config, get_security_config
 )
+
+
+@pytest.fixture
+def temp_dir():
+    """Create a temporary directory for testing."""
+    temp_dir = tempfile.mkdtemp()
+    yield temp_dir
+    shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class TestVoiceFlowConfig:
@@ -82,8 +90,8 @@ class TestVoiceFlowConfig:
         assert config.get('audio', 'model') == 'base'
         assert config.get('audio', 'device') == 'auto'
         assert config.get('audio', 'language') == 'en'
-        assert config.get('audio', 'post_speech_silence_duration') == 0.8
-        assert config.get('audio', 'silero_sensitivity') == 0.4
+        assert config.get('audio', 'post_speech_silence_duration') == 1.3
+        assert config.get('audio', 'silero_sensitivity') == 0.3
         
         # AI defaults
         assert config.get('ai', 'enabled') is True

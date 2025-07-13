@@ -57,9 +57,16 @@ jobs:
         pip install -r requirements_testing.txt
         pip install pytest-cov pytest-xdist pytest-html
     
+    - name: Start virtual display
+      run: |
+        export DISPLAY=:99
+        Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+    
     - name: Run unit tests
       run: |
         python test_orchestrator.py --types unit --parallel --output-dir test_results
+      env:
+        DISPLAY: ':99'
     
     - name: Upload unit test results
       uses: actions/upload-artifact@v3

@@ -1,0 +1,78 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>VoiceFlow Test Results</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { background: #f0f0f0; padding: 20px; border-radius: 5px; }
+        .summary { margin: 20px 0; }
+        .test-result { margin: 10px 0; padding: 10px; border-radius: 3px; }
+        .passed { background: #d4edda; }
+        .failed { background: #f8d7da; }
+        .error { background: #fff3cd; }
+        .timeout { background: #e2e3e5; }
+        .skipped { background: #cce5ff; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+        .stat { background: #e9ecef; padding: 15px; border-radius: 5px; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>VoiceFlow Comprehensive Test Results</h1>
+        <p>Generated: 2025-07-13T10:46:19.963294</p>
+        <p>Duration: 0.96 seconds</p>
+    </div>
+    
+    <div class="summary">
+        <h2>Summary</h2>
+        <div class="stats">
+            <div class="stat">
+                <h3>4</h3>
+                <p>Total Tests</p>
+            </div>
+            <div class="stat">
+                <h3>0</h3>
+                <p>Passed</p>
+            </div>
+            <div class="stat">
+                <h3>4</h3>
+                <p>Failed</p>
+            </div>
+            <div class="stat">
+                <h3>0.0%</h3>
+                <p>Success Rate</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="results">
+        <h2>Test Results</h2>
+
+        <div class="test-result failed">
+            <h4>config_tests (unit)</h4>
+            <p>Status: failed | Duration: 0.42s</p>
+            
+        </div>
+
+        <div class="test-result failed">
+            <h4>validation_tests (unit)</h4>
+            <p>Status: failed | Duration: 0.58s</p>
+            
+        </div>
+
+        <div class="test-result failed">
+            <h4>ai_enhancement_tests (unit)</h4>
+            <p>Status: failed | Duration: 0.93s</p>
+            
+        </div>
+
+        <div class="test-result failed">
+            <h4>core_unit_tests (unit)</h4>
+            <p>Status: failed | Duration: 0.96s</p>
+            
+        </div>
+
+    </div>
+</body>
+</html>

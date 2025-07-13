@@ -22,6 +22,7 @@ scipy>=1.10.0          # Signal processing
 
 # Testing and analysis
 pytest>=7.0.0          # Unit testing framework
+pytest-mock>=3.12.0    # Mock fixtures for testing
 matplotlib>=3.6.0      # Plotting for analysis reports
 pandas>=1.5.0          # Data analysis for test results
 
@@ -34,3 +35,9 @@ pytest-html>=3.2.0     # HTML test reports
 # Development tools
 flake8>=6.0.0          # Code linting
 black>=22.0.0          # Code formatting
+
+# Additional testing framework dependencies
+pyyaml>=6.0.0          # YAML configuration parsing
+requests>=2.31.0       # HTTP requests
+beautifulsoup4>=4.12.0 # HTML parsing
+lxml>=4.9.0           # XML parsing
