@@ -16,7 +16,7 @@ Run
 
 Config
 - Edit `localflow/config.py`:
-  - `model_name`: `small.en` (fast) or `medium.en` (more accurate). `distil-large-v3` optional.
+  - `model_name`: defaults to `small.en` for faster first run; switch to `medium.en` for higher accuracy. `distil-large-v3` optional.
   - `device`: `cuda` (GPU) or `cpu`.
   - `hotkey_*`: change to Ctrl+Alt by setting `hotkey_shift=False`, `hotkey_ctrl=True`, `hotkey_alt=True`.
   - You can also choose presets from the tray under “PTT Hotkey” (easiest).
@@ -42,6 +42,8 @@ Notes
 - Clipboard content is restored after paste (best effort). Disable via `restore_clipboard=False`.
 - Toggle code mode with Ctrl+Alt+C. Toggle paste vs type injection with Ctrl+Alt+P.
 - Privacy: to avoid clipboard exposure for short texts, set `type_if_len_le` > 0 to prefer typing.
+ - First run downloads the selected model to your local cache. `small.en` is ~hundreds of MB; `medium.en` can be ~1–2 GB.
+ - If you prefer not to involve Space (e.g., Notepad inserts a space), pick “Ctrl+Alt (no key)” from the tray PTT menu.
 
 Technical overview
 - See `docs/TECHNICAL_OVERVIEW.md` for component details, security considerations, and extension points.

@@ -24,6 +24,14 @@ except Exception:  # pragma: no cover
         def wait():
             pass
 
+        @staticmethod
+        def block_key(key: str):
+            return None
+
+        @staticmethod
+        def unblock_key(key: str):
+            return None
+
 from .config import Config
 
 
@@ -41,6 +49,7 @@ class PTTHotkeyListener:
         self._recording = False
         self._lock = threading.Lock()
         self._hook: Optional[Callable] = None
+        self._blocked_key: Optional[str] = None
 
     def _chord_active(self) -> bool:
         # Evaluate chord from current keyboard state
@@ -62,12 +71,27 @@ class PTTHotkeyListener:
             active = self._chord_active()
             if active and not self._recording:
                 self._recording = True
+                # Block the primary key while recording to avoid stray characters (e.g., space)
+                key = (self.cfg.hotkey_key or '').strip()
+                if key:
+                    try:
+                        keyboard.block_key(key)
+                        self._blocked_key = key
+                    except Exception:
+                        self._blocked_key = None
                 try:
                     self.on_start()
                 except Exception:
                     self._recording = False
             elif not active and self._recording:
                 self._recording = False
+                # Unblock previously blocked key
+                if self._blocked_key:
+                    try:
+                        keyboard.unblock_key(self._blocked_key)
+                    except Exception:
+                        pass
+                    self._blocked_key = None
                 try:
                     self.on_stop()
                 except Exception:
@@ -83,6 +107,12 @@ class PTTHotkeyListener:
                 keyboard.unhook(self._hook)
             finally:
                 self._hook = None
+        if self._blocked_key:
+            try:
+                keyboard.unblock_key(self._blocked_key)
+            except Exception:
+                pass
+            self._blocked_key = None
 
     def run_forever(self):
         print("Ready. Hold your configured hotkey to dictate. Press Ctrl+C to exit.")

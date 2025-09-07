@@ -17,7 +17,7 @@ class Config:
     blocksize: int = 1024  # frames per callback, ~64 ms at 16k
 
     # ASR
-    model_name: str = "medium.en"  # good balance for 4080; change to small.en for ultra-low latency
+    model_name: str = "small.en"  # fast first run; switch to medium.en for accuracy
     device: str = "cuda"  # "cuda" | "cpu"
     compute_type: str = "float16"  # 4080 supports fp16 nicely
     vad_filter: bool = True
