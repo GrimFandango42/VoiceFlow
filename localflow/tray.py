@@ -17,9 +17,12 @@ def _make_icon(size: int = 16):
         return None
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    # Simple microphone-like glyph: circle + stem
-    d.ellipse((3, 2, 13, 12), fill=(0, 0, 0, 255))
-    d.rectangle((7, 12, 9, 15), fill=(0, 0, 0, 255))
+    # Background circle (Windows-accent-like blue)
+    d.ellipse((0, 0, size - 1, size - 1), fill=(0, 120, 215, 255))
+    # Simple microphone glyph in white
+    pad = 3
+    d.ellipse((pad, pad, size - pad - 1, size - pad - 3), fill=(255, 255, 255, 255))
+    d.rectangle((size // 2 - 1, size - pad - 3, size // 2 + 1, size - 1), fill=(255, 255, 255, 255))
     return img
 
 
@@ -82,6 +85,7 @@ class TrayController:
                 save_config(self.app.cfg)
             except Exception:
                 pass
+            self._notify("LocalFlow", f"PTT set to: {'Ctrl+' if ctrl else ''}{'Shift+' if shift else ''}{'Alt+' if alt else ''}{key.upper() if key else ''}")
 
         def is_ptt(ctrl: bool, shift: bool, alt: bool, key: str):
             return (
@@ -119,6 +123,9 @@ class TrayController:
             ),
         )
 
+        def set_ctrl_alt_default(icon, item):  # noqa: ARG001
+            set_ptt(True, False, True, "")
+
         return pystray.Menu(
             pystray.MenuItem(
                 lambda item: f"Code Mode: {'ON' if self.app.code_mode else 'OFF'}",
@@ -136,9 +143,18 @@ class TrayController:
                 checked=lambda item: self.app.cfg.press_enter_after_paste,
             ),
             pystray.MenuItem("PTT Hotkey", ptt_menu),
+            pystray.MenuItem("Set Ctrl+Alt as default PTT", set_ctrl_alt_default),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", quit_app),
         )
+
+    def _notify(self, title: str, message: str):
+        try:
+            if self._icon and hasattr(self._icon, "notify"):
+                # pystray API: notify(message, title="...")
+                self._icon.notify(message, title=title)
+        except Exception:
+            pass
 
     def start(self):
         if pystray is None:
@@ -155,6 +171,12 @@ class TrayController:
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
+        # Brief notification after start
+        def _post_start_notif():
+            import time
+            time.sleep(1.0)
+            self._notify("LocalFlow", "Running. PTT: see tray > PTT Hotkey.")
+        threading.Thread(target=_post_start_notif, daemon=True).start()
 
     def stop(self):
         if self._icon is not None:
