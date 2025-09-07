@@ -30,7 +30,8 @@ class WhisperASR:
 
         # Warmup with a second of silence to reduce first-call latency
         silence = np.zeros(16000, dtype=np.float32)
-        list(self._model.transcribe(silence, language=self.cfg.language))
+        segs, _info = self._model.transcribe(silence, language=self.cfg.language)
+        _ = list(segs)
 
     def transcribe(self, audio: np.ndarray) -> str:
         if self._model is None:
@@ -38,7 +39,7 @@ class WhisperASR:
         assert self._model is not None
 
         # faster-whisper accepts numpy float32 PCM at 16k
-        segments = self._model.transcribe(
+        segments, _info = self._model.transcribe(
             audio,
             language=self.cfg.language,
             vad_filter=self.cfg.vad_filter,

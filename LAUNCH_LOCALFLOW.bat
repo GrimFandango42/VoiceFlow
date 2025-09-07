@@ -23,6 +23,7 @@ echo  LocalFlow is starting
 echo  Hold Ctrl+Shift+Space to dictate
 echo  Toggles: Ctrl+Alt+C (code mode), Ctrl+Alt+P (paste/type), Ctrl+Alt+Enter (send Enter)
 echo  Change PTT hotkey from tray (PTT Hotkey menu)
+echo  Note: first run will download the model (small.en by default).
 echo ======================
 echo.
 

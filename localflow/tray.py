@@ -93,27 +93,27 @@ class TrayController:
 
         ptt_menu = pystray.Menu(
             pystray.MenuItem(
-                lambda: "Ctrl+Shift+Space (default)",
+                lambda item: "Ctrl+Shift+Space (default)",
                 lambda icon, item: set_ptt(True, True, False, "space"),
                 checked=lambda item: is_ptt(True, True, False, "space"),
             ),
             pystray.MenuItem(
-                lambda: "Ctrl+Alt+Space",
+                lambda item: "Ctrl+Alt+Space",
                 lambda icon, item: set_ptt(True, False, True, "space"),
                 checked=lambda item: is_ptt(True, False, True, "space"),
             ),
             pystray.MenuItem(
-                lambda: "Ctrl+Alt (no key)",
+                lambda item: "Ctrl+Alt (no key)",
                 lambda icon, item: set_ptt(True, False, True, ""),
                 checked=lambda item: is_ptt(True, False, True, ""),
             ),
             pystray.MenuItem(
-                lambda: "Ctrl+Space",
+                lambda item: "Ctrl+Space",
                 lambda icon, item: set_ptt(True, False, False, "space"),
                 checked=lambda item: is_ptt(True, False, False, "space"),
             ),
             pystray.MenuItem(
-                lambda: "Alt+Space",
+                lambda item: "Alt+Space",
                 lambda icon, item: set_ptt(False, False, True, "space"),
                 checked=lambda item: is_ptt(False, False, True, "space"),
             ),
@@ -121,17 +121,17 @@ class TrayController:
 
         return pystray.Menu(
             pystray.MenuItem(
-                lambda: f"Code Mode: {'ON' if self.app.code_mode else 'OFF'}",
+                lambda item: f"Code Mode: {'ON' if self.app.code_mode else 'OFF'}",
                 toggle_code_mode,
                 checked=lambda item: self.app.code_mode,
             ),
             pystray.MenuItem(
-                lambda: f"Injection: {'Paste' if self.app.cfg.paste_injection else 'Type'}",
+                lambda item: f"Injection: {'Paste' if self.app.cfg.paste_injection else 'Type'}",
                 toggle_paste,
                 checked=lambda item: self.app.cfg.paste_injection,
             ),
             pystray.MenuItem(
-                lambda: f"Send Enter: {'ON' if self.app.cfg.press_enter_after_paste else 'OFF'}",
+                lambda item: f"Send Enter: {'ON' if self.app.cfg.press_enter_after_paste else 'OFF'}",
                 toggle_enter,
                 checked=lambda item: self.app.cfg.press_enter_after_paste,
             ),
