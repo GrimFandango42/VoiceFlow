@@ -6,12 +6,14 @@ Overview
 - Code mode: converts spoken symbols (e.g., “open bracket”) into code characters.
 - Toggle hotkeys: Ctrl+Alt+C (code mode), Ctrl+Alt+P (paste vs type injection).
 - Optional: Ctrl+Alt+Enter toggles sending Enter after paste.
- - Tray: lightweight system tray with mode toggles (if `pystray` + `Pillow` are installed).
+- Tray: lightweight system tray with mode toggles (if `pystray` + `Pillow` are installed).
+ - Tray shows a brief notification on launch (3–5 seconds, OS-dependent) and includes a one-click action to set Ctrl+Alt as the default PTT.
 
 Run
 - Double-click `LAUNCH_LOCALFLOW.bat` (creates `venv`, installs deps, runs app).
 - Hold `Ctrl+Shift+Space` to speak, release to transcribe and paste.
 - Change the PTT hotkey from the tray (e.g., Ctrl+Alt+Space, Ctrl+Alt, Ctrl+Space, Alt+Space). Default is Ctrl+Shift+Space to avoid conflicts.
+ - One-click: tray → “Set Ctrl+Alt as default PTT” to switch and persist when you’re ready.
  - Preferences (hotkey, injection mode, send Enter) are saved to `%LOCALAPPDATA%\LocalFlow\config.json` and loaded on startup.
 
 Config
