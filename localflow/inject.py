@@ -35,9 +35,6 @@ except Exception:  # pragma: no cover - fallback for minimal environments
 
     keyboard = _KeyboardFallback()  # type: ignore
 
-import pyperclip
-import keyboard
-
 from .config import Config
 
 

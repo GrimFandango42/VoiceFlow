@@ -32,7 +32,6 @@ class Config:
     max_inject_chars: int = 4000  # safety limit to avoid huge payloads
     min_inject_interval_ms: int = 100  # simple rate limit to avoid spam
     type_if_len_le: int = 0  # if >0, use typing (not clipboard) for short texts
-    press_enter_after_paste: bool = False
 
     # Misc
     language: str | None = "en"
@@ -40,3 +39,4 @@ class Config:
     code_mode_default: bool = True
     code_mode_lowercase: bool = True
     use_tray: bool = True
+
