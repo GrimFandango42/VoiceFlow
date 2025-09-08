@@ -69,11 +69,18 @@ def apply_code_mode(text: str, lowercase: bool = True) -> str:
     phrases = sorted(SYMBOL_MAP.keys(), key=len, reverse=True)
     for phrase in phrases:
         pattern = r"\b" + re.escape(phrase) + r"\b"
-        s = re.sub(pattern, SYMBOL_MAP[phrase], s)
-    # Collapse extra spaces around brackets and punctuation
+        repl = SYMBOL_MAP[phrase]
+        # Use a function replacement so backslashes in replacements (e.g., "\\", "\n", "\t")
+        # are not interpreted as regex group escapes.
+        s = re.sub(pattern, lambda _m, r=repl: r, s)
+    # Collapse extra spaces around brackets, punctuation, and control chars
     s = re.sub(r"\s+([\]\)\}\,\.;:!\?])", r"\1", s)
     s = re.sub(r"([\[\(\{])\s+", r"\1", s)
+    # Also trim spaces adjacent to newlines and tabs introduced by replacements
+    s = re.sub(r" +\n", "\n", s)      # spaces before newline
+    s = re.sub(r"\n +", "\n", s)      # spaces after newline
+    s = re.sub(r" +\t", "\t", s)      # spaces before tab
+    s = re.sub(r"\t +", "\t", s)      # spaces after tab
     # Minor tidy
     s = s.replace("\u00a0", " ")
     return s
-
