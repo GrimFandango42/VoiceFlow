@@ -98,3 +98,11 @@ python/models/
 user_data/
 history/
 config.json
+
+# Test artifacts
+test_results/
+tests/reports/
+tests/temp_audio/
+
+# Windows reserved name (can appear accidentally)
+nul

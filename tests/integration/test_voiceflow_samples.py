@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.integration
+
 """VoiceFlow transcription accuracy tests using pre-generated audio samples.
 
 This harness scans `tests/audio_samples` for WAV files produced by
@@ -61,3 +64,4 @@ def test_sample_transcription(wav_path: Path, expected_text: str):
     assert expected_text.lower() in transcript, (
         f"Expected text not found.\nExpected: '{expected_text}'\nGot: '{transcript}'"
     )
+

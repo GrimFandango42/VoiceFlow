@@ -71,6 +71,28 @@ venv\Scripts\python -m localflow.cli
 - Lite: `python voiceflow_lite.py` (CPU‑friendly defaults)
 - Debug: `python voiceflow_debug.py` (verbose logging; streaming enabled)
 
+## Build (Optional)
+
+You can package a standalone Windows executable using PyInstaller.
+
+Prerequisites:
+- Windows 10/11, Python 3.9+ (3.10–3.12 recommended)
+- Visual C++ Build Tools (for some wheels, if needed)
+
+Commands (from repo root):
+
+```powershell
+py -3 -m venv venv
+venv\Scripts\python -m pip install --upgrade pip
+venv\Scripts\python -m pip install -r requirements-localflow.txt
+venv\Scripts\python -m pip install pyinstaller
+
+# Example: build VoiceFlow tray app
+venv\Scripts\pyinstaller -F -n VoiceFlow-Tray voiceflow_tray.py
+```
+
+Or use the provided scripts under `scripts/` (e.g., `scripts/BUILD-Windows-Executable.bat`).
+
 ## Privacy / Security
 
 - Transcription runs locally after first model download.

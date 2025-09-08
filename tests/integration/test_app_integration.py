@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.integration
+
 """Integration tests for the complete VoiceFlow application."""
 
 import os
@@ -166,5 +169,6 @@ class TestVoiceFlowIntegration:
         assert app.is_recording is False
         assert app.is_running is False
     
+
 
 

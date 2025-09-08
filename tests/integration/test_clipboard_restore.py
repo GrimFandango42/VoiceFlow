@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.integration
+
 from __future__ import annotations
 
 import time
@@ -19,4 +22,5 @@ def test_clipboard_restore_roundtrip():
     current = pyperclip.paste()
     # If pyperclip fails to fetch older value on this platform, at least ensure it's a string
     assert isinstance(current, str)
+
 

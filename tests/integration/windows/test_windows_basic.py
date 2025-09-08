@@ -1,3 +1,6 @@
+import pytest
+pytestmark = [pytest.mark.integration, pytest.mark.windows]
+
 """
 Windows integration tests for VoiceFlow.
 
@@ -133,3 +136,4 @@ class TestWindowsBasic(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.integration
+
 """Smoke tests for `voiceflow_tray`.
 
 These tests monkey-patch *pystray* so they can run in headless CI environments
@@ -150,3 +153,4 @@ def test_tray_menu_and_callbacks(mock_get_icon, monkeypatch):
     exit_item = menu_items[-1]
     exit_item.action(icon, exit_item)
     vft.exit_action.assert_called_once_with(icon, exit_item)
+

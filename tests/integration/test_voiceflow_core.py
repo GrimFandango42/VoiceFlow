@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.integration
+
 import subprocess
 import os
 import csv
@@ -323,3 +326,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

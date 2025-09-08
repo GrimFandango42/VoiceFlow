@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.integration
+
 import unittest
 from unittest.mock import patch, MagicMock
 import numpy as np
@@ -199,3 +202,4 @@ class TestVoiceFlowAppCore(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
