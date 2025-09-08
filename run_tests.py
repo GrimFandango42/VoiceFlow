@@ -1,141 +1,107 @@
 #!/usr/bin/env python3
 """
-Test runner for VoiceFlow unit tests.
-
-This script provides a convenient way to run all tests with various options.
-"""
-
-import sys
-import subprocess
-from pathlib import Path
-
-# Test categories
-TEST_SUITES = {
-    'core': 'tests/test_voiceflow_core.py',
-    'ai': 'tests/test_ai_enhancement.py',
-    'config': 'tests/test_config.py',
-    'integration': 'tests/test_integration.py',
-    'e2e': 'tests/test_end_to_end.py',
-    'all': 'tests/'
-}
-
-# Common pytest options
-PYTEST_BASE_ARGS = [
-    '-v',  # Verbose output
-    '--tb=short',  # Shorter traceback format
-    '--strict-markers',  # Enforce marker declarations
-    '--color=yes'  # Colored output
-]
-
-
-def print_usage():
-    """Print usage information."""
-    print("""
 VoiceFlow Test Runner
 
-Usage: python run_tests.py [suite] [options]
+Runs unit (default), integration, or performance tests and writes JSON/summary reports.
+"""
+import os
+import sys
+import json
+import time
+import argparse
+import subprocess
+from pathlib import Path
+from typing import Dict, Any
 
-Test Suites:
-  core         - Test core VoiceFlow engine functionality
-  ai           - Test AI enhancement module
-  config       - Test configuration management
-  integration  - Test component integration
-  e2e          - Test end-to-end user workflows
-  all          - Run all tests (default)
+TEST_RESULTS_DIR = Path("test_results")
 
-Options:
-  --coverage   - Generate coverage report
-  --fast       - Skip slow tests
-  --unit       - Run only unit tests (skip integration)
-  --markers    - Show available test markers
-  --failed     - Run only previously failed tests
-  --pdb        - Drop into debugger on failures
+class TestRunner:
+    def __init__(self, test_type: str = "unit", output_dir: Path = TEST_RESULTS_DIR):
+        self.test_type = test_type
+        self.output_dir = output_dir
+        self.results: Dict[str, Any] = {
+            "start_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "environment": self._get_environment_info(),
+            "tests": {},
+            "summary": {"passed": 0, "failed": 0, "skipped": 0},
+        }
 
-Examples:
-  python run_tests.py                    # Run all tests
-  python run_tests.py core              # Run only core tests
-  python run_tests.py e2e               # Run end-to-end tests
-  python run_tests.py --coverage        # Run all tests with coverage
-  python run_tests.py core --fast       # Run core tests, skip slow ones
-  python run_tests.py --unit            # Run only unit tests
-  
-For comprehensive E2E testing, use the dedicated E2E test runner:
-  python tests/run_e2e_tests.py         # Run all E2E tests with reporting
-""")
+    def _get_environment_info(self) -> Dict[str, Any]:
+        import platform
+        try:
+            import torch  # type: ignore
+            torch_version = getattr(torch, "__version__", "installed")
+            cuda_available = bool(getattr(torch, "cuda", None) and torch.cuda.is_available())
+        except Exception:
+            torch_version = "not_installed"
+            cuda_available = False
+        return {
+            "platform": platform.platform(),
+            "python_version": platform.python_version(),
+            "pytorch_version": torch_version,
+            "cuda_available": cuda_available,
+            "cpu_count": os.cpu_count(),
+        }
 
+    def run_tests(self) -> bool:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        suites = []
+        if self.test_type in ("all", "unit"):
+            suites.append(("Unit Tests", [sys.executable, "-m", "pytest", "tests/unit", "-q"]))
+        if self.test_type in ("all", "integration"):
+            suites.append(("Integration Tests", [sys.executable, "-m", "pytest", "tests/integration", "-q"]))
+        if self.test_type == "performance":
+            suites.append(("Performance Tests", [sys.executable, "-m", "pytest", "tests", "-k", "performance", "-v"]))
+        if not suites:
+            print(f"Unknown test type: {self.test_type}")
+            return False
 
-def run_tests(suite='all', extra_args=None):
-    """Run the specified test suite."""
-    if extra_args is None:
-        extra_args = []
-    
-    # Build pytest command
-    cmd = [sys.executable, '-m', 'pytest'] + PYTEST_BASE_ARGS
-    
-    # Add test path
-    test_path = TEST_SUITES.get(suite, TEST_SUITES['all'])
-    cmd.append(test_path)
-    
-    # Add extra arguments
-    cmd.extend(extra_args)
-    
-    # Print command
-    print(f"\nRunning: {' '.join(cmd)}\n")
-    
-    # Run tests
-    try:
-        result = subprocess.run(cmd, cwd=Path(__file__).parent)
-        return result.returncode
-    except KeyboardInterrupt:
-        print("\n\nTests interrupted by user")
-        return 1
-    except Exception as e:
-        print(f"\nError running tests: {e}")
-        return 1
+        overall = True
+        for name, cmd in suites:
+            print("\n" + "=" * 80)
+            print(f"Running {name}...")
+            print("Command:", " ".join(cmd))
+            start = time.time()
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            dur = time.time() - start
+            passed = proc.returncode == 0
+            self.results["tests"][name] = {
+                "command": " ".join(cmd),
+                "duration": round(dur, 2),
+                "passed": passed,
+                "output": proc.stdout,
+                "error": proc.stderr,
+            }
+            self.results["summary"]["passed" if passed else "failed"] += 1
+            overall &= passed
+            print(f"\n{name} {'PASSED' if passed else 'FAILED'} in {dur:.2f}s")
+        self._write_reports()
+        return overall
 
-
-def main():
-    """Main entry point."""
-    args = sys.argv[1:]
-    
-    if not args or '--help' in args or '-h' in args:
-        print_usage()
-        return 0
-    
-    # Parse arguments
-    suite = 'all'
-    extra_args = []
-    
-    # Check for test suite
-    if args and args[0] in TEST_SUITES:
-        suite = args[0]
-        args = args[1:]
-    
-    # Process options
-    for arg in args:
-        if arg == '--coverage':
-            extra_args.extend([
-                '--cov=core',
-                '--cov=utils',
-                '--cov-report=html',
-                '--cov-report=term-missing'
-            ])
-        elif arg == '--fast':
-            extra_args.extend(['-m', 'not slow'])
-        elif arg == '--unit':
-            extra_args.extend(['-m', 'not integration'])
-        elif arg == '--markers':
-            extra_args.append('--markers')
-        elif arg == '--failed':
-            extra_args.append('--lf')
-        elif arg == '--pdb':
-            extra_args.append('--pdb')
-        else:
-            extra_args.append(arg)
-    
-    # Run tests
-    return run_tests(suite, extra_args)
+    def _write_reports(self) -> None:
+        self.results["end_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        (self.output_dir / "test_report.json").write_text(json.dumps(self.results, indent=2))
+        summary = (
+            f"VoiceFlow Test Report\n"
+            f"======================\n"
+            f"Start Time: {self.results['start_time']}\n"
+            f"End Time:   {self.results['end_time']}\n\n"
+            f"Passed:  {self.results['summary']['passed']}\n"
+            f"Failed:  {self.results['summary']['failed']}\n"
+            f"Skipped: {self.results['summary']['skipped']}\n"
+        )
+        print("\n" + summary)
+        (self.output_dir / "test_summary.txt").write_text(summary)
 
 
-if __name__ == '__main__':
-    sys.exit(main())
+def parse_args():
+    p = argparse.ArgumentParser(description="Run VoiceFlow tests")
+    p.add_argument("--type", choices=["unit", "integration", "performance", "all"], default="unit")
+    p.add_argument("--output-dir", type=Path, default=TEST_RESULTS_DIR)
+    return p.parse_args()
+
+if __name__ == "__main__":
+    a = parse_args()
+    ok = TestRunner(test_type=a.type, output_dir=a.output_dir).run_tests()
+    sys.exit(0 if ok else 1)
