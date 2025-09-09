@@ -35,6 +35,10 @@ class BufferSafeWhisperASR:
         self.total_audio_duration = 0.0
         self.total_processing_time = 0.0
         
+        # Progressive degradation prevention
+        self._transcriptions_since_reload = 0
+        self._max_transcriptions_before_reload = 5  # Reload model every 5 transcriptions
+        
         # Critical: NO persistent state between recordings
         # Each transcription starts with a clean slate
     
@@ -76,6 +80,21 @@ class BufferSafeWhisperASR:
                 logger.error(f"Failed to load Whisper model: {e}")
                 raise
     
+    def _reload_model_fresh(self):
+        """Force reload the model with completely fresh state"""
+        with self._model_lock:
+            # Explicitly delete the old model
+            if self._model is not None:
+                del self._model
+                self._model = None
+            
+            # Force garbage collection to clear memory
+            import gc
+            gc.collect()
+            
+            # Load fresh model
+            self.load()
+    
     def transcribe(self, audio: np.ndarray) -> str:
         """
         Transcribe audio with complete buffer isolation.
@@ -83,6 +102,13 @@ class BufferSafeWhisperASR:
         """
         if self._model is None:
             self.load()
+        
+        # CRITICAL: Prevent progressive degradation with model reinitialization
+        self._transcriptions_since_reload += 1
+        if self._transcriptions_since_reload >= self._max_transcriptions_before_reload:
+            logger.info(f"Reloading Whisper model after {self._transcriptions_since_reload} transcriptions to prevent degradation")
+            self._reload_model_fresh()
+            self._transcriptions_since_reload = 0
         
         # CRITICAL: Create completely isolated transcription state
         recording_state = self._create_clean_recording_state(audio)
