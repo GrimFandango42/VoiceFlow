@@ -93,7 +93,7 @@ class EnhancedAudioRecorder:
         self._ring_buffer = BoundedRingBuffer(max_duration, cfg.sample_rate)
         
         # PRE-RECORDING BUFFER: Continuously captures audio to prevent word loss
-        self._pre_buffer_duration = 1.0  # 1000ms pre-buffer (increased for better capture)
+        self._pre_buffer_duration = 1.5  # 1500ms pre-buffer (optimized for key-press timing)
         self._pre_buffer = BoundedRingBuffer(self._pre_buffer_duration, cfg.sample_rate)
         self._continuous_stream: Optional[sd.InputStream] = None
         self._continuous_recording = False
@@ -134,10 +134,10 @@ class EnhancedAudioRecorder:
         audio_data = data.reshape(-1).astype(np.float32)
         self._ring_buffer.append(audio_data)
         
-        # Performance logging every 100 callbacks (~6.4 seconds at 64ms blocks)
-        if self._callback_count % 100 == 0:
+        # Reduced logging: only log every 200 callbacks (~12.8 seconds)
+        if self._callback_count % 200 == 0:
             duration = self._ring_buffer.get_duration_seconds()
-            print(f"[AudioRecorder] Recording: {duration:.1f}s ({self._callback_count} callbacks)")
+            print(f"[AudioRecorder] Recording: {duration:.1f}s")
     
     def _continuous_callback(self, indata, frames, time, status):
         """Continuous pre-recording callback for seamless capture"""
@@ -163,19 +163,30 @@ class EnhancedAudioRecorder:
         
         print("[AudioRecorder] Starting enhanced recording with pre-buffer...")
         
+        # CRITICAL FIX: Always clear main buffer at start to prevent accumulation
+        self._ring_buffer.clear()
+        
         # Start continuous recording if not already running
         if not self._continuous_recording:
             self.start_continuous()
         
-        # Get pre-buffer data and add to main buffer
+        # Get pre-buffer data BEFORE clearing to use for this recording
         pre_buffer_data = self._pre_buffer.get_data()
+        
+        # CRITICAL FIX: Clear pre-buffer IMMEDIATELY after getting data
+        # This prevents any accumulation while we process
+        self._pre_buffer.clear()
+        
         if len(pre_buffer_data) > 0:
-            duration_ms = (len(pre_buffer_data) / self.cfg.sample_rate) * 1000
-            print(f"[AudioRecorder] Adding {len(pre_buffer_data)} samples ({duration_ms:.1f}ms) from pre-buffer")
+            # Take only the most recent portion to minimize latency
+            min_pre_buffer_samples = int(0.3 * self.cfg.sample_rate)  # 300ms minimum
+            if len(pre_buffer_data) > min_pre_buffer_samples:
+                # Use recent 800ms of pre-buffer for optimal key-press timing
+                recent_samples = int(0.8 * self.cfg.sample_rate)
+                pre_buffer_data = pre_buffer_data[-recent_samples:]
+            
+            # Add pre-buffer to main buffer for this recording only
             self._ring_buffer.append(pre_buffer_data)
-        else:
-            print("[AudioRecorder] WARNING: Pre-buffer is empty!")
-            self._ring_buffer.clear()
         
         self._callback_count = 0
         self._total_frames = 0

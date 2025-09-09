@@ -12,6 +12,13 @@ from .config import Config
 
 logger = logging.getLogger(__name__)
 
+# Production logging integration
+try:
+    from .production_logging import get_production_logger, log_info
+    PRODUCTION_LOGGING_AVAILABLE = True
+except ImportError:
+    PRODUCTION_LOGGING_AVAILABLE = False
+
 
 class BufferSafeWhisperASR:
     """
@@ -35,9 +42,16 @@ class BufferSafeWhisperASR:
         self.total_audio_duration = 0.0
         self.total_processing_time = 0.0
         
-        # Progressive degradation prevention
+        # Progressive degradation prevention - REDUCED frequency for stability
         self._transcriptions_since_reload = 0
-        self._max_transcriptions_before_reload = 5  # Reload model every 5 transcriptions
+        self._max_transcriptions_before_reload = 20  # Reload model every 20 transcriptions (was 5)
+        
+        # Smart conversation management - less aggressive timeouts
+        self._last_transcription_time = time.time()
+        self._conversation_timeout = 300.0  # Clear after 5 MINUTES of inactivity (was 30s - too aggressive!)
+        self._total_conversation_duration = 0.0
+        self._max_conversation_duration = 600.0  # Force reload after 10 minutes of total conversation (was 3min)
+        self._is_processing = False  # Track if actively processing to prevent timeout during transcription
         
         # Critical: NO persistent state between recordings
         # Each transcription starts with a clean slate
@@ -103,6 +117,28 @@ class BufferSafeWhisperASR:
         if self._model is None:
             self.load()
         
+        # CRITICAL: Smart timeout checking - don't reload during active processing
+        current_time = time.time()
+        time_since_last = current_time - self._last_transcription_time
+        
+        # Only check timeouts if not actively processing (prevents mid-transcription reloads)
+        if not self._is_processing:
+            # Force model reload if conversation has been too long or inactive too long
+            conversation_too_long = self._total_conversation_duration > self._max_conversation_duration
+            inactive_too_long = time_since_last > self._conversation_timeout
+            
+            if conversation_too_long or inactive_too_long:
+                reason = "long conversation" if conversation_too_long else "inactivity timeout"
+                logger.info(f"Model reload triggered: {reason} (total duration: {self._total_conversation_duration:.1f}s, idle: {time_since_last:.1f}s)")
+                self._reload_model_fresh()
+                self._transcriptions_since_reload = 0
+                # Reset conversation tracking
+                self._total_conversation_duration = 0.0
+                self._last_transcription_time = current_time
+        
+        # Mark as processing to prevent timeouts during transcription
+        self._is_processing = True
+        
         # CRITICAL: Prevent progressive degradation with model reinitialization
         self._transcriptions_since_reload += 1
         if self._transcriptions_since_reload >= self._max_transcriptions_before_reload:
@@ -119,10 +155,33 @@ class BufferSafeWhisperASR:
             # Update only persistent session stats (no per-recording state kept)
             self._update_session_stats(recording_state, result)
             
+            # Mark processing complete to allow timeout checks again
+            self._is_processing = False
+            
             return result
             
         except Exception as e:
             logger.error(f"Transcription error: {e}")
+            
+            # Emit error metrics for dashboard monitoring
+            if PRODUCTION_LOGGING_AVAILABLE:
+                try:
+                    from .production_logging import log_error
+                    error_metrics = {
+                        'transcription_error': True,
+                        'error_message': str(e),
+                        'audio_duration': recording_state.get('audio_duration', 0.0),
+                        'model_name': self.cfg.model_name,
+                        'transcription_id': recording_state.get('recording_id', 'unknown'),
+                        'session_count': self.session_transcription_count
+                    }
+                    
+                    log_error("BufferSafeWhisperASR", f"Transcription failed: {str(e)}", error_metrics)
+                except:
+                    pass  # Don't let logging errors compound the problem
+            
+            # Mark processing complete even on error
+            self._is_processing = False
             # Don't persist error state - each recording is isolated
             return ""
         finally:
@@ -185,7 +244,7 @@ class BufferSafeWhisperASR:
                 prefix=None,                # No prefix context
                 condition_on_previous_text=False,  # CRITICAL: Don't use previous text as context
                 compression_ratio_threshold=2.4,   # Standard threshold
-                logprob_threshold=-1.0,     # Standard threshold  
+                log_prob_threshold=-1.0,     # Standard threshold  
                 no_speech_threshold=0.6,    # Standard threshold
             )
             
@@ -261,8 +320,36 @@ class BufferSafeWhisperASR:
         self.total_audio_duration += recording_state['audio_duration']
         self.total_processing_time += processing_time
         
+        # Update conversation tracking for long conversation management
+        self._total_conversation_duration += recording_state['audio_duration']
+        self._last_transcription_time = time.time()
+        
         # Calculate performance
         speed_factor = recording_state['audio_duration'] / processing_time if processing_time > 0 else 0
+        word_count = len(result.split()) if result else 0
+        
+        # Emit performance metrics for dashboard monitoring
+        if PRODUCTION_LOGGING_AVAILABLE:
+            try:
+                metrics = {
+                    'transcription_complete': True,
+                    'audio_duration': recording_state['audio_duration'],
+                    'processing_time': processing_time,
+                    'speed_factor': speed_factor,
+                    'word_count': word_count,
+                    'model_name': self.cfg.model_name,
+                    'transcription_id': recording_state['recording_id'],
+                    'session_count': self.session_transcription_count,
+                    'chars_transcribed': len(result)
+                }
+                
+                log_info("BufferSafeWhisperASR", 
+                        f"Transcription complete: {speed_factor:.1f}x realtime, {word_count} words", 
+                        metrics)
+                        
+            except Exception as e:
+                # Don't let logging errors affect transcription
+                pass
         
         logger.info(f"Recording {self.session_transcription_count}: "
                    f"{len(result)} chars, "

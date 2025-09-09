@@ -52,10 +52,10 @@ def main():
         tray_executable = shutil.which('voiceflow-tray') or 'voiceflow-tray'
         try:
             subprocess.Popen([tray_executable])
-            print("🖥️  VoiceFlow system-tray GUI launched. Exiting CLI.")
+            print("[GUI] VoiceFlow system-tray GUI launched. Exiting CLI.")
             return
         except Exception as gui_err:
-            print(f"❌ Failed to launch GUI: {gui_err}", file=sys.stderr)
+            print(f"[ERROR] Failed to launch GUI: {gui_err}", file=sys.stderr)
             sys.exit(1)
     
     try:
