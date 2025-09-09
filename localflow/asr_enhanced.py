@@ -89,6 +89,64 @@ class EnhancedWhisperASR:
         
         return True
     
+    def _enhance_segment_text(self, original_text: str) -> str:
+        """
+        Enhanced text processing to handle phonetic transcription better.
+        Instead of defaulting to "read this", try to preserve phonetic sounds.
+        """
+        if not original_text or original_text.strip() == "":
+            return ""
+        
+        text = original_text.strip()
+        
+        # Identify and handle common Whisper fallbacks that lose phonetic information
+        fallback_phrases = [
+            "read this",
+            "thank you",
+            "thanks for watching",
+            "subscribe", 
+            "like and subscribe",
+            "please subscribe",
+            "thank you for watching"
+        ]
+        
+        # Check if this is a fallback phrase
+        is_fallback = any(text.lower().strip() == fallback.lower() for fallback in fallback_phrases)
+        
+        if is_fallback:
+            logger.warning(f"Detected fallback phrase: '{text}' - this indicates poor audio quality or recognition failure")
+            # In production, we could:
+            # 1. Retry with different parameters
+            # 2. Apply phonetic analysis
+            # 3. Use alternative transcription method
+            # For now, we flag it but keep the text
+            text = f"[UNCERTAIN: {text}]"  # Mark uncertain transcriptions
+        
+        # Clean up common transcription artifacts while preserving phonetics
+        text = self._clean_transcription_artifacts(text)
+        
+        return text
+    
+    def _clean_transcription_artifacts(self, text: str) -> str:
+        """Clean up transcription while preserving phonetic information"""
+        if not text:
+            return text
+        
+        # Remove excessive repetition but preserve intentional repetition
+        import re
+        
+        # Fix spacing around punctuation
+        text = re.sub(r'\s+([,.!?])', r'\1', text)
+        text = re.sub(r'([,.!?])\s*([A-Z])', r'\1 \2', text)
+        
+        # Handle common transcription errors while preserving sounds
+        text = re.sub(r'\b([A-Za-z])\s+\1\b', r'\1', text)  # Remove single letter repetitions
+        
+        # Preserve non-English sounds and made-up words (important for phonetic transcription)
+        # Don't aggressively filter "nonsense" words as they might be phonetic attempts
+        
+        return text.strip()
+    
     def _monitor_vad_behavior(self, result: str, audio_duration: float):
         """Monitor VAD behavior and trigger fallback if needed"""
         if not self.vad_enabled:
@@ -145,14 +203,23 @@ class EnhancedWhisperASR:
                 temperature=self.cfg.temperature,
             )
             
-            # Collect text from segments
+            # Collect text from segments in chronological order
             parts = []
             segment_count = 0
-            for seg in segments:
-                parts.append(seg.text)
-                segment_count += 1
+            segments_list = list(segments)  # Convert iterator to list for sorting
             
-            text = " ".join(p.strip() for p in parts).strip()
+            # Sort segments by start time to ensure proper order
+            segments_list.sort(key=lambda s: s.start if hasattr(s, 'start') else 0)
+            
+            for seg in segments_list:
+                # Enhanced text processing for better phonetic handling
+                segment_text = self._enhance_segment_text(seg.text)
+                parts.append(segment_text)
+                segment_count += 1
+                logger.debug(f"Segment {segment_count}: [{seg.start:.2f}s-{seg.end:.2f}s] '{segment_text}'" 
+                           if hasattr(seg, 'start') else f"Segment {segment_count}: '{segment_text}'")
+            
+            text = " ".join(p.strip() for p in parts if p.strip()).strip()
             
             # Monitor VAD behavior
             self._monitor_vad_behavior(text, audio_duration)
