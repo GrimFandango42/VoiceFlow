@@ -147,13 +147,20 @@ class BufferSafeWhisperASR:
         """Perform transcription with complete isolation"""
         
         with self._model_lock:  # Thread-safe model access
-            # CRITICAL: Use completely isolated parameters
+            # CRITICAL: Use completely isolated parameters with explicit state clearing
             segments, info = self._model.transcribe(
                 recording_state['audio'],
                 language=recording_state['language'],
                 vad_filter=recording_state['use_vad'],  # Always False for safety
                 beam_size=recording_state['beam_size'],
                 temperature=recording_state['temperature'],
+                word_timestamps=False,      # Disable to prevent timestamp buffer issues
+                initial_prompt=None,        # CRITICAL: No context from previous calls
+                prefix=None,                # No prefix context
+                condition_on_previous_text=False,  # CRITICAL: Don't use previous text as context
+                compression_ratio_threshold=2.4,   # Standard threshold
+                logprob_threshold=-1.0,     # Standard threshold  
+                no_speech_threshold=0.6,    # Standard threshold
             )
             
             # Process segments with isolation
