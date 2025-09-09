@@ -188,15 +188,15 @@ Examples:
                 from voiceflow.ui.systray import start_tray_app
                 start_tray_app(config)
             else:
-                # Use fallback entry points for now
+                # Use enhanced LocalFlow core for better performance
                 if args.lite:
-                    print("Starting VoiceFlow Lite...")
-                    import subprocess
-                    subprocess.run([sys.executable, "voiceflow_lite.py"])
+                    print("Starting VoiceFlow Lite (Enhanced LocalFlow core)...")
+                    from localflow.cli_enhanced import main as enhanced_main
+                    enhanced_main()
                 else:
-                    print("Starting VoiceFlow...")
-                    import subprocess  
-                    subprocess.run([sys.executable, "voiceflow_main.py"])
+                    print("Starting VoiceFlow (Enhanced LocalFlow core)...")
+                    from localflow.cli_enhanced import main as enhanced_main
+                    enhanced_main()
                     
     except KeyboardInterrupt:
         print("\nGoodbye!")

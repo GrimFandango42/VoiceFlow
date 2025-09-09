@@ -35,7 +35,7 @@ class App:
     def start_recording(self):
         try:
             if not self.rec.is_recording():
-                print("🎙️  Listening…")
+                print("[MIC] Listening...")
                 self._log.info("recording_started")
                 self.rec.start()
         except Exception as e:
@@ -63,7 +63,7 @@ class App:
 
         def worker(buf: np.ndarray):
             try:
-                print("⌛ Transcribing…")
+                print("[PROCESSING] PROCESSING...")
                 import time as _t
                 t0 = _t.perf_counter()
                 text = self.asr.transcribe(buf)

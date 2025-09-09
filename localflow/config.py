@@ -5,27 +5,27 @@ from dataclasses import dataclass
 
 @dataclass
 class Config:
-    # Hotkey: toggle PTT on/off. We'll detect Ctrl+Shift+Space by default.
+    # Hotkey: toggle PTT on/off. We'll detect F4 by default.
     hotkey_ctrl: bool = True
     hotkey_shift: bool = True
     hotkey_alt: bool = False
-    hotkey_key: str = "space"  # primary key pressed along with modifiers
+    hotkey_key: str = ""  # primary key pressed along with modifiers
 
     # Audio - Optimized for speed
     sample_rate: int = 16000
     channels: int = 1
-    blocksize: int = 1024  # frames per callback, ~64 ms at 16k
+    blocksize: int = 512  # frames per callback, ~64 ms at 16k
     
     # Performance optimizations
     enable_batching: bool = True  # Enable VAD-based batching for 12.5x speedup
-    max_batch_size: int = 16  # Process multiple segments together
+    max_batch_size: int = 4  # Process multiple segments together
     enable_streaming: bool = True  # Enable real-time streaming feedback
 
     # ASR
-    model_name: str = "large-v3-turbo"  # 5.4x faster than large-v2, better accuracy than small.en
-    device: str = "cuda"  # "cuda" | "cpu"
-    compute_type: str = "float16"  # 4080 supports fp16 nicely
-    vad_filter: bool = True
+    model_name: str = "base.en"  # 5.4x faster than large-v2, better accuracy than small.en
+    device: str = "cpu"  # "cuda" | "cpu"
+    compute_type: str = "int8"  # 4080 supports fp16 nicely
+    vad_filter: bool = False  # CRITICAL FIX: VAD was removing all audio after 2 recordings
     beam_size: int = 1  # 1 = greedy, faster
     temperature: float = 0.0
 

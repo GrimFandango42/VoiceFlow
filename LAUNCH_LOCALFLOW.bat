@@ -27,7 +27,7 @@ echo  Note: first run will download the model (small.en by default).
 echo ======================
 echo.
 
-python -m localflow.cli
+python -m localflow.cli_enhanced
 goto :eof
 
 :error
