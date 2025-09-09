@@ -93,7 +93,7 @@ class EnhancedAudioRecorder:
         self._ring_buffer = BoundedRingBuffer(max_duration, cfg.sample_rate)
         
         # PRE-RECORDING BUFFER: Continuously captures audio to prevent word loss
-        self._pre_buffer_duration = 0.5  # 500ms pre-buffer
+        self._pre_buffer_duration = 1.0  # 1000ms pre-buffer (increased for better capture)
         self._pre_buffer = BoundedRingBuffer(self._pre_buffer_duration, cfg.sample_rate)
         self._continuous_stream: Optional[sd.InputStream] = None
         self._continuous_recording = False
@@ -170,9 +170,11 @@ class EnhancedAudioRecorder:
         # Get pre-buffer data and add to main buffer
         pre_buffer_data = self._pre_buffer.get_data()
         if len(pre_buffer_data) > 0:
-            print(f"[AudioRecorder] Adding {len(pre_buffer_data)} samples from pre-buffer")
+            duration_ms = (len(pre_buffer_data) / self.cfg.sample_rate) * 1000
+            print(f"[AudioRecorder] Adding {len(pre_buffer_data)} samples ({duration_ms:.1f}ms) from pre-buffer")
             self._ring_buffer.append(pre_buffer_data)
         else:
+            print("[AudioRecorder] WARNING: Pre-buffer is empty!")
             self._ring_buffer.clear()
         
         self._callback_count = 0
