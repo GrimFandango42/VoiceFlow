@@ -92,6 +92,12 @@ class EnhancedAudioRecorder:
         max_duration = 300.0  # 5 minutes maximum
         self._ring_buffer = BoundedRingBuffer(max_duration, cfg.sample_rate)
         
+        # PRE-RECORDING BUFFER: Continuously captures audio to prevent word loss
+        self._pre_buffer_duration = 0.5  # 500ms pre-buffer
+        self._pre_buffer = BoundedRingBuffer(self._pre_buffer_duration, cfg.sample_rate)
+        self._continuous_stream: Optional[sd.InputStream] = None
+        self._continuous_recording = False
+        
         self._lock = threading.Lock()
         self._recording = False
         self._start_time = 0.0
@@ -105,6 +111,7 @@ class EnhancedAudioRecorder:
         print(f"  - Channels: {cfg.channels}")
         print(f"  - Block size: {cfg.blocksize} frames")
         print(f"  - Max duration: {max_duration}s")
+        print(f"  - Pre-buffer: {self._pre_buffer_duration}s")
 
     def _callback(self, indata, frames, time, status):
         """Enhanced audio callback with bounded buffer"""
@@ -131,14 +138,43 @@ class EnhancedAudioRecorder:
         if self._callback_count % 100 == 0:
             duration = self._ring_buffer.get_duration_seconds()
             print(f"[AudioRecorder] Recording: {duration:.1f}s ({self._callback_count} callbacks)")
+    
+    def _continuous_callback(self, indata, frames, time, status):
+        """Continuous pre-recording callback for seamless capture"""
+        if status:
+            print(f"[AudioRecorder] Continuous audio warning: {status}")
+        
+        if not self._continuous_recording:
+            return
+        
+        # Convert to mono if needed
+        data = indata.copy()
+        if data.ndim == 2 and data.shape[1] > 1:
+            data = np.mean(data, axis=1, keepdims=True)
+        
+        # Add to pre-buffer (always running)
+        audio_data = data.reshape(-1).astype(np.float32)
+        self._pre_buffer.append(audio_data)
 
     def start(self):
-        """Start recording with enhanced monitoring"""
+        """Start recording with pre-buffer integration"""
         if self._recording:
             return
         
-        print("[AudioRecorder] Starting enhanced recording...")
-        self._ring_buffer.clear()
+        print("[AudioRecorder] Starting enhanced recording with pre-buffer...")
+        
+        # Start continuous recording if not already running
+        if not self._continuous_recording:
+            self.start_continuous()
+        
+        # Get pre-buffer data and add to main buffer
+        pre_buffer_data = self._pre_buffer.get_data()
+        if len(pre_buffer_data) > 0:
+            print(f"[AudioRecorder] Adding {len(pre_buffer_data)} samples from pre-buffer")
+            self._ring_buffer.append(pre_buffer_data)
+        else:
+            self._ring_buffer.clear()
+        
         self._callback_count = 0
         self._total_frames = 0
         self._start_time = time.time()
@@ -152,7 +188,7 @@ class EnhancedAudioRecorder:
         )
         self._stream.start()
         self._recording = True
-        print(f"[AudioRecorder] Recording started successfully")
+        print(f"[AudioRecorder] Recording started successfully with pre-buffer integration")
 
     def is_recording(self) -> bool:
         """Check if currently recording"""
@@ -200,6 +236,37 @@ class EnhancedAudioRecorder:
     def get_memory_usage_mb(self) -> float:
         """Get current memory usage in MB"""
         return self._ring_buffer.max_samples * 4 / 1024 / 1024  # 4 bytes per float32
+    
+    def start_continuous(self):
+        """Start continuous pre-recording to prevent word loss"""
+        if self._continuous_recording:
+            return
+        
+        print("[AudioRecorder] Starting continuous pre-buffer recording...")
+        self._pre_buffer.clear()
+        
+        self._continuous_stream = sd.InputStream(
+            channels=self.cfg.channels,
+            samplerate=self.cfg.sample_rate,
+            dtype="float32",
+            blocksize=self.cfg.blocksize,
+            callback=self._continuous_callback,
+        )
+        self._continuous_stream.start()
+        self._continuous_recording = True
+        print(f"[AudioRecorder] Continuous pre-buffer active ({self._pre_buffer_duration}s)")
+    
+    def stop_continuous(self):
+        """Stop continuous pre-recording"""
+        if not self._continuous_recording:
+            return
+            
+        self._continuous_recording = False
+        if self._continuous_stream is not None:
+            self._continuous_stream.stop()
+            self._continuous_stream.close()
+            self._continuous_stream = None
+        print("[AudioRecorder] Continuous pre-buffer stopped")
 
 
 # Compatibility alias for drop-in replacement
