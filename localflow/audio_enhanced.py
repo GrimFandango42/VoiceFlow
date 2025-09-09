@@ -174,6 +174,10 @@ class EnhancedAudioRecorder:
             audio_data = self._ring_buffer.get_data()
             duration = len(audio_data) / self.cfg.sample_rate
             
+            # CRITICAL FIX: Clear buffer after getting data to prevent accumulation
+            self._ring_buffer.clear()
+            print(f"[AudioRecorder] Buffer cleared after extraction to prevent accumulation")
+            
             # Performance summary
             actual_duration = time.time() - self._start_time
             print(f"[AudioRecorder] Recording stopped:")

@@ -13,7 +13,7 @@ import numpy as np
 
 from .config import Config
 from .audio_enhanced import EnhancedAudioRecorder
-from .asr_enhanced import EnhancedWhisperASR as WhisperASR
+from .asr_buffer_safe import BufferSafeWhisperASR as WhisperASR
 from .inject import ClipboardInjector
 from .hotkeys_enhanced import EnhancedPTTHotkeyListener
 from .utils import is_admin, nvidia_smi_info
@@ -228,7 +228,7 @@ class EnhancedApp:
         
         # Session summary with ASR statistics
         session_duration = time.time() - self._session_start_time
-        asr_stats = self.asr.get_statistics()
+        asr_stats = self.asr.get_clean_statistics()
         
         print(f"[SESSION] Duration: {session_duration:.1f}s, "
               f"Words: {self._session_word_count}, "
