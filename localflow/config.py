@@ -11,13 +11,18 @@ class Config:
     hotkey_alt: bool = False
     hotkey_key: str = "space"  # primary key pressed along with modifiers
 
-    # Audio
+    # Audio - Optimized for speed
     sample_rate: int = 16000
     channels: int = 1
     blocksize: int = 1024  # frames per callback, ~64 ms at 16k
+    
+    # Performance optimizations
+    enable_batching: bool = True  # Enable VAD-based batching for 12.5x speedup
+    max_batch_size: int = 16  # Process multiple segments together
+    enable_streaming: bool = True  # Enable real-time streaming feedback
 
     # ASR
-    model_name: str = "small.en"  # fast first run; switch to medium.en for accuracy
+    model_name: str = "large-v3-turbo"  # 5.4x faster than large-v2, better accuracy than small.en
     device: str = "cuda"  # "cuda" | "cpu"
     compute_type: str = "float16"  # 4080 supports fp16 nicely
     vad_filter: bool = True

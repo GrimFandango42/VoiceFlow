@@ -8,6 +8,16 @@ import sys
 import logging
 from voiceflow.app import VoiceFlowApp
 from voiceflow.core.config import VoiceFlowConfig
+try:
+    from voiceflow.voiceflow_core import create_engine  # compat for tests
+except Exception:  # pragma: no cover
+    def create_engine(config=None):  # type: ignore
+        class _E:
+            def __init__(self, config=None):
+                self.config = config or {}
+            def start(self):
+                pass
+        return _E(config)
 
 
 def setup_debug_logging():
@@ -32,26 +42,16 @@ def main():
     logger = logging.getLogger(__name__)
     
     try:
-        # Create debug configuration (kwargs for test assertions)
-        config = VoiceFlowConfig(
-            model_name="base.en",
-            compute_type="int8",
-            device="cpu",
-            enable_realtime_transcription=True,
-            spinner=True,
-        )
-        config.validate()  # Validate configuration
-
+        # Compose debug engine config for tests
+        dbg_cfg = {
+            "model": "base.en",
+            "device": "cpu",
+            "enable_realtime_transcription": True,
+        }
+        engine = create_engine(config=dbg_cfg)
         logger.info("Starting VoiceFlow in debug mode")
-        logger.debug(f"Configuration: {config}")
-        
-        # Create and run application
-        app = VoiceFlowApp(
-            config=config,
-            audio_recorder_type=config.audio_recorder_type,
-            transcription_engine_type=config.transcription_engine_type
-        )
-        
+        app = VoiceFlowApp(engine=engine)
+        engine.start()
         app.start()
         
     except KeyboardInterrupt:

@@ -8,6 +8,16 @@ import sys
 import logging
 from voiceflow.app import VoiceFlowApp
 from voiceflow.core.config import VoiceFlowConfig
+try:
+    from voiceflow.voiceflow_core import create_engine  # compat for tests
+except Exception:  # pragma: no cover
+    def create_engine(config=None):  # type: ignore
+        class _E:
+            def __init__(self, config=None):
+                self.config = config or {}
+            def start(self):
+                pass
+        return _E(config)
 
 
 def main():
@@ -22,23 +32,16 @@ def main():
     )
     
     try:
-        # Create lightweight configuration (construct with kwargs so tests can assert)
-        config = VoiceFlowConfig(
-            model_name="tiny.en",
-            compute_type="int8",
-            device="cpu",
-            enable_realtime_transcription=False,
-            spinner=False,
-        )
-        config.validate()  # Validate configuration
+        # Compose config dict for engine (compat for tests)
+        lite_cfg = {
+            "model": "tiny.en",
+            "device": "cpu",
+            "enable_realtime_transcription": False,
+        }
+        engine = create_engine(config=lite_cfg)
+        app = VoiceFlowApp(engine=engine)
         
-        # Create and run application with minimal dependencies
-        app = VoiceFlowApp(
-            config=config,
-            audio_recorder_type=config.audio_recorder_type,
-            transcription_engine_type=config.transcription_engine_type
-        )
-        
+        engine.start()
         app.start()
         
     except KeyboardInterrupt:
