@@ -9,8 +9,8 @@ import logging
 import numpy as np
 
 from .config import Config
-from .audio import AudioRecorder
-from .asr import WhisperASR
+from .audio_enhanced import EnhancedAudioRecorder as AudioRecorder
+from .asr_buffer_safe import BufferSafeWhisperASR as WhisperASR
 from .inject import ClipboardInjector
 from .hotkeys import PTTHotkeyListener
 from .utils import is_admin, nvidia_smi_info
