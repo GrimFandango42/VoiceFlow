@@ -13,6 +13,7 @@ echo.
 echo Press Ctrl+C to exit or close from tray menu
 echo.
 
-python -m src.voiceflow.ui.cli_enhanced
+set PYTHONPATH=src
+python -m voiceflow.ui.cli_enhanced
 
 pause

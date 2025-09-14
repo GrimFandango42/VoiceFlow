@@ -11,6 +11,7 @@ echo.
 echo Press Ctrl+C to exit
 echo.
 
-python -m src.voiceflow.ui.cli_enhanced --no-tray
+set PYTHONPATH=src
+python -m voiceflow.ui.cli_enhanced --no-tray
 
 pause
