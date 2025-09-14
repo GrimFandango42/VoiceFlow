@@ -237,10 +237,12 @@ class VoiceFlowControlCenter:
 
         # First run a quick health check
         def after_health_check():
-            # Then launch VoiceFlow
-            command = [sys.executable, "-m", "voiceflow.ui.cli_enhanced"]
-            env = os.environ.copy()
-            env["PYTHONPATH"] = "src"
+            # Then launch VoiceFlow using direct file execution method that works
+            command = [
+                sys.executable,
+                "-c",
+                "import sys; sys.path.insert(0, 'src'); exec(open('src/voiceflow/ui/cli_enhanced.py').read())"
+            ]
             self.run_command_async(command, "VoiceFlow Application")
 
         # Run quick health check first
