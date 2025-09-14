@@ -55,6 +55,15 @@ class BufferSafeWhisperASR:
         
         # Critical: NO persistent state between recordings
         # Each transcription starts with a clean slate
+
+        # ULTRA PERFORMANCE: Preload model to eliminate first-sentence delay
+        if getattr(cfg, 'preload_model_on_startup', False):
+            logger.info("ULTRA MODE: Preloading model on startup to eliminate first-sentence delay")
+            try:
+                self.load()
+                logger.info("Model preloaded successfully - first transcription will be instant")
+            except Exception as e:
+                logger.warning(f"Model preload failed: {e} - first transcription may be slow")
     
     def load(self):
         """Load the Whisper model with thread safety"""
@@ -364,20 +373,20 @@ class BufferSafeWhisperASR:
         """Perform transcription with complete isolation"""
         
         with self._model_lock:  # Thread-safe model access
-            # CRITICAL: Use completely isolated parameters with explicit state clearing
+            # ULTRA-OPTIMIZED: Use most aggressive parameters for maximum speed
             segments, info = self._model.transcribe(
                 recording_state['audio'],
                 language=recording_state['language'],
                 vad_filter=recording_state['use_vad'],  # Always False for safety
                 beam_size=recording_state['beam_size'],
                 temperature=recording_state['temperature'],
-                word_timestamps=False,      # Disable to prevent timestamp buffer issues
+                word_timestamps=getattr(self.cfg, 'word_timestamps', False),  # Configurable (default False)
                 initial_prompt=None,        # CRITICAL: No context from previous calls
                 prefix=None,                # No prefix context
-                condition_on_previous_text=False,  # CRITICAL: Don't use previous text as context
-                compression_ratio_threshold=2.4,   # Standard threshold
-                log_prob_threshold=-1.0,     # Standard threshold  
-                no_speech_threshold=0.6,    # Standard threshold
+                condition_on_previous_text=getattr(self.cfg, 'condition_on_previous_text', False),  # Configurable
+                compression_ratio_threshold=getattr(self.cfg, 'compression_ratio_threshold', 2.4),
+                log_prob_threshold=getattr(self.cfg, 'log_prob_threshold', -1.0),
+                no_speech_threshold=getattr(self.cfg, 'no_speech_threshold', 0.6),
             )
             
             # Process segments with isolation
@@ -417,29 +426,36 @@ class BufferSafeWhisperASR:
         return final_text
     
     def _clean_segment_text_isolated(self, text: str) -> str:
-        """Clean segment text without persistent state"""
+        """ULTRA-FAST segment text cleaning"""
         if not text:
             return ""
-        
+
+        # ULTRA MODE: Minimal processing for maximum speed
+        if getattr(self.cfg, 'ultra_fast_mode', False):
+            return text.strip()  # Just basic strip, skip all other processing
+
         text = text.strip()
-        
-        # Detect fallback phrases (no persistent state)
-        fallback_phrases = [
-            "read this", "thank you", "thanks for watching", 
-            "subscribe", "like and subscribe"
-        ]
-        
-        is_fallback = any(text.lower() == fallback.lower() for fallback in fallback_phrases)
-        
-        if is_fallback:
-            logger.warning(f"Fallback phrase detected: '{text}' - poor audio quality")
-            return f"[UNCERTAIN: {text}]"
-        
-        # Basic cleaning without state
-        import re
-        text = re.sub(r'\s+([,.!?])', r'\1', text)
-        text = re.sub(r'([,.!?])\s*([A-Z])', r'\1 \2', text)
-        
+
+        # Skip fallback detection in ultra mode
+        if not getattr(self.cfg, 'disable_fallback_detection', False):
+            # Detect fallback phrases (no persistent state)
+            fallback_phrases = [
+                "read this", "thank you", "thanks for watching",
+                "subscribe", "like and subscribe"
+            ]
+
+            is_fallback = any(text.lower() == fallback.lower() for fallback in fallback_phrases)
+
+            if is_fallback:
+                logger.warning(f"Fallback phrase detected: '{text}' - poor audio quality")
+                return f"[UNCERTAIN: {text}]"
+
+        # Minimal cleaning without state (skip in ultra mode)
+        if not getattr(self.cfg, 'minimal_segment_processing', False):
+            import re
+            text = re.sub(r'\s+([,.!?])', r'\1', text)
+            text = re.sub(r'([,.!?])\s*([A-Z])', r'\1 \2', text)
+
         return text.strip()
     
     def _update_session_stats(self, recording_state: dict, result: str):
