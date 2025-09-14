@@ -386,9 +386,9 @@ class VoiceFlowInstaller:
     def validate_core_imports(self) -> Tuple[bool, str]:
         """Validate core VoiceFlow imports work"""
         try:
-            from localflow.config import Config
-            from localflow.audio_enhanced import EnhancedAudioRecorder
-            from localflow.asr_buffer_safe import BufferSafeWhisperASR
+            from voiceflow.core.config import Config
+            from voiceflow.core.audio_enhanced import EnhancedAudioRecorder
+            from voiceflow.core.asr_buffer_safe import BufferSafeWhisperASR
             return True, "Core modules import successfully"
         except ImportError as e:
             return False, f"Import failed: {str(e)[:50]}"
@@ -398,7 +398,7 @@ class VoiceFlowInstaller:
     def validate_config_loading(self) -> Tuple[bool, str]:
         """Validate configuration system works"""
         try:
-            from localflow.config import Config
+            from voiceflow.core.config import Config
             cfg = Config()
             if cfg.sample_rate > 0 and cfg.channels > 0:
                 return True, f"Config loaded: {cfg.sample_rate}Hz, {cfg.channels}ch"
@@ -410,8 +410,8 @@ class VoiceFlowInstaller:
     def validate_audio_pipeline(self) -> Tuple[bool, str]:
         """Validate audio pipeline can be initialized"""
         try:
-            from localflow.config import Config
-            from localflow.audio_enhanced import EnhancedAudioRecorder
+            from voiceflow.core.config import Config
+            from voiceflow.core.audio_enhanced import EnhancedAudioRecorder
 
             cfg = Config()
             # Quick initialization test (no actual recording)

@@ -31,10 +31,10 @@ def quick_import_test():
     """Test 1: Quick import validation"""
     print("1. Import Test:", end=" ")
     try:
-        from voiceflow.config import Config
-        from voiceflow.cli_enhanced import EnhancedApp
-        from voiceflow.visual_indicators import show_listening, show_complete, hide_status
-        from voiceflow.enhanced_tray import EnhancedTrayController
+        from voiceflow.core.config import Config
+        from voiceflow.ui.cli_enhanced import EnhancedApp
+        from voiceflow.ui.visual_indicators import show_listening, show_complete, hide_status
+        from voiceflow.ui.enhanced_tray import EnhancedTrayController
         print("✅ PASS")
         return True
     except Exception as e:
@@ -45,7 +45,7 @@ def quick_config_test():
     """Test 2: Configuration loading"""
     print("2. Config Test:", end=" ")
     try:
-        from voiceflow.config import Config
+        from voiceflow.core.config import Config
         cfg = Config()
         assert hasattr(cfg, 'sample_rate')
         assert hasattr(cfg, 'hotkey_key')
@@ -59,8 +59,8 @@ def quick_app_lifecycle_test():
     """Test 3: App creation and shutdown"""
     print("3. App Lifecycle:", end=" ")
     try:
-        from voiceflow.config import Config
-        from voiceflow.cli_enhanced import EnhancedApp
+        from voiceflow.core.config import Config
+        from voiceflow.ui.cli_enhanced import EnhancedApp
 
         cfg = Config()
         app = EnhancedApp(cfg)
@@ -84,7 +84,7 @@ def quick_visual_test():
     """Test 4: Visual indicators (non-blocking)"""
     print("4. Visual Test:", end=" ")
     try:
-        from voiceflow.visual_indicators import show_listening, show_complete, hide_status
+        from voiceflow.ui.visual_indicators import show_listening, show_complete, hide_status
 
         def visual_test():
             show_listening()
@@ -109,8 +109,8 @@ def quick_memory_test():
     print("5. Memory Test:", end=" ")
     try:
         import numpy as np
-        from voiceflow.config import Config
-        from voiceflow.asr_buffer_safe import BufferSafeWhisperASR
+        from voiceflow.core.config import Config
+        from voiceflow.core.asr_buffer_safe import BufferSafeWhisperASR
 
         initial_memory = psutil.Process().memory_info().rss / 1024 / 1024
 
@@ -143,8 +143,8 @@ def quick_tray_test():
     """Test 6: Tray system validation"""
     print("6. Tray Test:", end=" ")
     try:
-        from voiceflow.enhanced_tray import EnhancedTrayController
-        from voiceflow.config import Config
+        from voiceflow.ui.enhanced_tray import EnhancedTrayController
+        from voiceflow.core.config import Config
 
         # Mock app
         class MockApp:

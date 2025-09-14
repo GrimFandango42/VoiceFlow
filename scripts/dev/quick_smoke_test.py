@@ -36,12 +36,12 @@ class SmokeTestSuite:
         test_start = time.perf_counter()
 
         critical_modules = [
-            ('localflow.config', 'Config'),
-            ('localflow.cli_enhanced', 'EnhancedApp'),
-            ('localflow.audio_enhanced', 'EnhancedAudioRecorder'),
-            ('localflow.asr_buffer_safe', 'BufferSafeWhisperASR'),
-            ('localflow.visual_indicators', 'BottomScreenIndicator'),
-            ('localflow.enhanced_tray', 'EnhancedTrayController')
+            ('voiceflow.core.config', 'Config'),
+            ('voiceflow.ui.cli_enhanced', 'EnhancedApp'),
+            ('voiceflow.core.audio_enhanced', 'EnhancedAudioRecorder'),
+            ('voiceflow.core.asr_buffer_safe', 'BufferSafeWhisperASR'),
+            ('voiceflow.ui.visual_indicators', 'BottomScreenIndicator'),
+            ('voiceflow.ui.enhanced_tray', 'EnhancedTrayController')
         ]
 
         failed_imports = []
@@ -66,7 +66,7 @@ class SmokeTestSuite:
         test_start = time.perf_counter()
 
         try:
-            from voiceflow.config import Config
+            from voiceflow.core.config import Config
             cfg = Config()
 
             # Validate critical config values
@@ -89,7 +89,7 @@ class SmokeTestSuite:
         test_start = time.perf_counter()
 
         try:
-            from voiceflow.audio_enhanced import audio_validation_guard
+            from voiceflow.core.audio_enhanced import audio_validation_guard
             import numpy as np
 
             # Test 1: Normal audio
@@ -125,8 +125,8 @@ class SmokeTestSuite:
         test_start = time.perf_counter()
 
         try:
-            from voiceflow.config import Config
-            from voiceflow.cli_enhanced import EnhancedApp
+            from voiceflow.core.config import Config
+            from voiceflow.ui.cli_enhanced import EnhancedApp
 
             cfg = Config()
 
@@ -159,8 +159,8 @@ class SmokeTestSuite:
 
         try:
             # Test visual indicators (basic import and class creation)
-            from voiceflow.visual_indicators import BottomScreenIndicator, TranscriptionStatus
-            from voiceflow.enhanced_tray import EnhancedTrayController
+            from voiceflow.ui.visual_indicators import BottomScreenIndicator, TranscriptionStatus
+            from voiceflow.ui.enhanced_tray import EnhancedTrayController
 
             # Quick class instantiation test (no actual GUI display)
             indicator_class = BottomScreenIndicator
