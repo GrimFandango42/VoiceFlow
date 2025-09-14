@@ -162,8 +162,9 @@ class VoiceFlowControlCenter:
         ]
 
         missing_files = []
+        root_dir = Path(__file__).parent.parent  # VoiceFlow root directory
         for file_path in critical_files:
-            if not Path(file_path).exists():
+            if not (root_dir / file_path).exists():
                 missing_files.append(file_path)
 
         if missing_files:
@@ -189,7 +190,8 @@ class VoiceFlowControlCenter:
                     stderr=subprocess.STDOUT,
                     text=True,
                     universal_newlines=True,
-                    cwd=Path(__file__).parent
+                    cwd=Path(__file__).parent.parent,  # Go up to VoiceFlow root directory
+                    env={**os.environ, 'PYTHONPATH': str(Path(__file__).parent.parent / 'src')}
                 )
 
                 # Read output line by line
