@@ -1,5 +1,5 @@
 @echo off
-cd /d %~dp0
+cd /d %~dp0\..\..
 echo ==========================================
 echo VoiceFlow - Tray Mode (With Visuals)
 echo ==========================================
@@ -13,6 +13,6 @@ echo.
 echo Press Ctrl+C to exit or close from tray menu
 echo.
 
-python -m localflow.cli_enhanced
+python -m src.voiceflow.ui.cli_enhanced
 
 pause

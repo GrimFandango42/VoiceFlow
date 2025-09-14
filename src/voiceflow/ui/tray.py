@@ -44,7 +44,7 @@ class TrayController:
         def toggle_code_mode(icon, item):  # noqa: ARG001
             self.app.code_mode = not self.app.code_mode
             try:
-                from .settings import save_config
+                from voiceflow.utils.settings import save_config
                 save_config(self.app.cfg)
             except Exception:
                 pass
@@ -52,7 +52,7 @@ class TrayController:
         def toggle_paste(icon, item):  # noqa: ARG001
             self.app.cfg.paste_injection = not self.app.cfg.paste_injection
             try:
-                from .settings import save_config
+                from voiceflow.utils.settings import save_config
                 save_config(self.app.cfg)
             except Exception:
                 pass
@@ -60,7 +60,7 @@ class TrayController:
         def toggle_enter(icon, item):  # noqa: ARG001
             self.app.cfg.press_enter_after_paste = not self.app.cfg.press_enter_after_paste
             try:
-                from .settings import save_config
+                from voiceflow.utils.settings import save_config
                 save_config(self.app.cfg)
             except Exception:
                 pass
@@ -81,7 +81,7 @@ class TrayController:
             self.app.cfg.hotkey_alt = alt
             self.app.cfg.hotkey_key = key
             try:
-                from .settings import save_config
+                from voiceflow.utils.settings import save_config
                 save_config(self.app.cfg)
             except Exception:
                 pass

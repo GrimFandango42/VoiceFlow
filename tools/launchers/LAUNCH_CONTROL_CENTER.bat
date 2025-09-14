@@ -1,5 +1,5 @@
 @echo off
-cd /d %~dp0
+cd /d %~dp0\..\..
 
 echo ==========================================
 echo VoiceFlow Control Center
@@ -18,7 +18,7 @@ if errorlevel 1 (
 )
 
 REM Launch Control Center
-python VoiceFlow_Control_Center.py
+python tools\VoiceFlow_Control_Center.py
 
 REM If we get here, the program exited
 echo.

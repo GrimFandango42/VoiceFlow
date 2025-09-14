@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 VoiceFlow Health Check - Fast System Validation
 ===============================================
@@ -15,40 +16,51 @@ from pathlib import Path
 from datetime import datetime
 import psutil
 
+# Configure console for Unicode output on Windows
+if sys.platform == 'win32':
+    import locale
+    try:
+        # Try to set UTF-8 encoding
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8')
+        os.system('chcp 65001 > nul 2>&1')  # Set console to UTF-8
+    except:
+        pass
+
 def quick_import_test():
     """Test 1: Quick import validation"""
     print("1. Import Test:", end=" ")
     try:
-        from localflow.config import Config
-        from localflow.cli_enhanced import EnhancedApp
-        from localflow.visual_indicators import show_listening, show_complete, hide_status
-        from localflow.enhanced_tray import EnhancedTrayController
-        print("[PASS]")
+        from voiceflow.config import Config
+        from voiceflow.cli_enhanced import EnhancedApp
+        from voiceflow.visual_indicators import show_listening, show_complete, hide_status
+        from voiceflow.enhanced_tray import EnhancedTrayController
+        print("✅ PASS")
         return True
     except Exception as e:
-        print(f"[FAIL] - {e}")
+        print(f"❌ FAIL - {e}")
         return False
 
 def quick_config_test():
     """Test 2: Configuration loading"""
     print("2. Config Test:", end=" ")
     try:
-        from localflow.config import Config
+        from voiceflow.config import Config
         cfg = Config()
         assert hasattr(cfg, 'sample_rate')
         assert hasattr(cfg, 'hotkey_key')
-        print("[PASS]")
+        print("✅ PASS")
         return True
     except Exception as e:
-        print(f"[FAIL] - {e}")
+        print(f"❌ FAIL - {e}")
         return False
 
 def quick_app_lifecycle_test():
     """Test 3: App creation and shutdown"""
     print("3. App Lifecycle:", end=" ")
     try:
-        from localflow.config import Config
-        from localflow.cli_enhanced import EnhancedApp
+        from voiceflow.config import Config
+        from voiceflow.cli_enhanced import EnhancedApp
 
         cfg = Config()
         app = EnhancedApp(cfg)
@@ -62,17 +74,17 @@ def quick_app_lifecycle_test():
         app.shutdown()
         del app
 
-        print("[PASS]")
+        print("✅ PASS")
         return True
     except Exception as e:
-        print(f"[FAIL] - {e}")
+        print(f"❌ FAIL - {e}")
         return False
 
 def quick_visual_test():
     """Test 4: Visual indicators (non-blocking)"""
     print("4. Visual Test:", end=" ")
     try:
-        from localflow.visual_indicators import show_listening, show_complete, hide_status
+        from voiceflow.visual_indicators import show_listening, show_complete, hide_status
 
         def visual_test():
             show_listening()
@@ -86,10 +98,10 @@ def quick_visual_test():
         thread.start()
         thread.join(timeout=3.0)
 
-        print("[PASS]")
+        print("✅ PASS")
         return True
     except Exception as e:
-        print(f"[FAIL] - {e}")
+        print(f"❌ FAIL - {e}")
         return False
 
 def quick_memory_test():
@@ -97,8 +109,8 @@ def quick_memory_test():
     print("5. Memory Test:", end=" ")
     try:
         import numpy as np
-        from localflow.config import Config
-        from localflow.asr_buffer_safe import BufferSafeWhisperASR
+        from voiceflow.config import Config
+        from voiceflow.asr_buffer_safe import BufferSafeWhisperASR
 
         initial_memory = psutil.Process().memory_info().rss / 1024 / 1024
 
@@ -117,22 +129,22 @@ def quick_memory_test():
         gc.collect()
 
         if memory_growth > 200:  # More than 200MB is concerning
-            print(f"[WARN] - High memory usage: {memory_growth:.1f}MB")
+            print(f"⚠️  WARN - High memory usage: {memory_growth:.1f}MB")
             return True  # Warning but not failure
         else:
-            print(f"[PASS] ({memory_growth:+.1f}MB)")
+            print(f"✅ PASS ({memory_growth:+.1f}MB)")
             return True
 
     except Exception as e:
-        print(f"[FAIL] - {e}")
+        print(f"❌ FAIL - {e}")
         return False
 
 def quick_tray_test():
     """Test 6: Tray system validation"""
     print("6. Tray Test:", end=" ")
     try:
-        from localflow.enhanced_tray import EnhancedTrayController
-        from localflow.config import Config
+        from voiceflow.enhanced_tray import EnhancedTrayController
+        from voiceflow.config import Config
 
         # Mock app
         class MockApp:
@@ -151,10 +163,10 @@ def quick_tray_test():
         time.sleep(0.1)
         tray.update_status("idle", False)
 
-        print("[PASS]")
+        print("✅ PASS")
         return True
     except Exception as e:
-        print(f"[FAIL] - {e}")
+        print(f"❌ FAIL - {e}")
         return False
 
 def system_info():
@@ -183,9 +195,9 @@ def system_info():
         print(f"\nVoiceFlow Components:")
         for file_path in voiceflow_files:
             if Path(file_path).exists():
-                print(f"  [OK] {file_path}")
+                print(f"  ✅ {file_path}")
             else:
-                print(f"  [MISSING] {file_path}")
+                print(f"  ❌ {file_path} (missing)")
 
     except Exception as e:
         print(f"Error getting system info: {e}")
@@ -231,23 +243,23 @@ def main():
     print(f"Results: {passed}/{total} tests passed")
 
     if passed == total:
-        print("STATUS: HEALTHY - All systems operational")
-        print("VoiceFlow is ready for use")
+        print("🎉 STATUS: HEALTHY - All systems operational")
+        print("✅ VoiceFlow is ready for use")
         status_code = 0
     elif passed >= total * 0.8:  # 80% pass rate
-        print("STATUS: DEGRADED - Some issues detected")
-        print("Consider running full comprehensive tests")
+        print("⚠️  STATUS: DEGRADED - Some issues detected")
+        print("🔧 Consider running full comprehensive tests")
         status_code = 1
     else:
-        print("STATUS: CRITICAL - Major issues detected")
-        print("Run comprehensive tests and address failures")
+        print("❌ STATUS: CRITICAL - Major issues detected")
+        print("🚨 Run comprehensive tests and address failures")
         status_code = 2
 
     # System info
     system_info()
 
-    print(f"\nFor detailed testing, run: python run_comprehensive_tests.py")
-    print(f"For visual verification, run: python verify_visual_system.py")
+    print(f"\n💡 For detailed testing, run: python run_comprehensive_tests.py")
+    print(f"📋 For visual verification, run: python verify_visual_system.py")
 
     return status_code
 
@@ -256,10 +268,10 @@ if __name__ == "__main__":
         exit_code = main()
         sys.exit(exit_code)
     except KeyboardInterrupt:
-        print("\n\nHealth check interrupted by user")
+        print("\n\n⚠️  Health check interrupted by user")
         sys.exit(130)
     except Exception as e:
-        print(f"\nHealth check crashed: {e}")
+        print(f"\n💥 Health check crashed: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(3)

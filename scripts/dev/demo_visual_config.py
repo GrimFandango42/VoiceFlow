@@ -13,10 +13,10 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
 
 try:
-    from localflow.visual_config import (
+    from voiceflow.visual_config import (
         VisualConfigManager, OverlayPosition, OverlaySize, ColorTheme
     )
-    from localflow.visual_indicators import BottomScreenIndicator, TranscriptionStatus
+    from voiceflow.visual_indicators import BottomScreenIndicator, TranscriptionStatus
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure you're running from the VoiceFlow root directory")

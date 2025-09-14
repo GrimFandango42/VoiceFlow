@@ -14,9 +14,9 @@ import time
 sys.path.append(os.path.dirname(__file__))
 
 try:
-    from localflow.config import Config
-    from localflow.audio_enhanced import audio_validation_guard, validate_audio_format, safe_audio_operation
-    from localflow.asr_buffer_safe import BufferSafeWhisperASR
+    from voiceflow.config import Config
+    from voiceflow.audio_enhanced import audio_validation_guard, validate_audio_format, safe_audio_operation
+    from voiceflow.asr_buffer_safe import BufferSafeWhisperASR
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -131,7 +131,7 @@ def test_buffer_operations():
     print("TESTING BUFFER OPERATIONS")
     print("=" * 60)
 
-    from localflow.audio_enhanced import BoundedRingBuffer
+    from voiceflow.audio_enhanced import BoundedRingBuffer
 
     buffer = BoundedRingBuffer(5.0, 16000)  # 5 second buffer
 

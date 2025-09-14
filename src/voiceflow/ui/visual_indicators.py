@@ -11,7 +11,7 @@ import threading
 import time
 from typing import Optional, Callable, Dict, Any
 from enum import Enum
-from .visual_config import get_visual_config, VisualConfigManager
+from voiceflow.utils.visual_config import get_visual_config, VisualConfigManager
 
 class TranscriptionStatus(Enum):
     """Status states for visual indication"""

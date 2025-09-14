@@ -66,7 +66,7 @@ class SmokeTestSuite:
         test_start = time.perf_counter()
 
         try:
-            from localflow.config import Config
+            from voiceflow.config import Config
             cfg = Config()
 
             # Validate critical config values
@@ -89,7 +89,7 @@ class SmokeTestSuite:
         test_start = time.perf_counter()
 
         try:
-            from localflow.audio_enhanced import audio_validation_guard
+            from voiceflow.audio_enhanced import audio_validation_guard
             import numpy as np
 
             # Test 1: Normal audio
@@ -125,8 +125,8 @@ class SmokeTestSuite:
         test_start = time.perf_counter()
 
         try:
-            from localflow.config import Config
-            from localflow.cli_enhanced import EnhancedApp
+            from voiceflow.config import Config
+            from voiceflow.cli_enhanced import EnhancedApp
 
             cfg = Config()
 
@@ -159,8 +159,8 @@ class SmokeTestSuite:
 
         try:
             # Test visual indicators (basic import and class creation)
-            from localflow.visual_indicators import BottomScreenIndicator, TranscriptionStatus
-            from localflow.enhanced_tray import EnhancedTrayController
+            from voiceflow.visual_indicators import BottomScreenIndicator, TranscriptionStatus
+            from voiceflow.enhanced_tray import EnhancedTrayController
 
             # Quick class instantiation test (no actual GUI display)
             indicator_class = BottomScreenIndicator

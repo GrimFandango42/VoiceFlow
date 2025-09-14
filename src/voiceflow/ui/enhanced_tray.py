@@ -22,7 +22,7 @@ except Exception:
     TRAY_AVAILABLE = False
 
 try:
-    from .visual_indicators import (
+    from voiceflow.utils.visual_indicators import (
         show_listening, show_processing, show_transcribing, 
         show_complete, show_error, hide_status,
         TranscriptionStatus, show_transcription_status
@@ -147,7 +147,7 @@ class EnhancedTrayController:
         def toggle_code_mode(icon, item):
             self.app.code_mode = not self.app.code_mode
             try:
-                from .settings import save_config
+                from voiceflow.utils.settings import save_config
                 save_config(self.app.cfg)
                 self._notify("VoiceFlow", f"Code Mode: {'ON' if self.app.code_mode else 'OFF'}")
             except Exception:
@@ -156,7 +156,7 @@ class EnhancedTrayController:
         def toggle_paste(icon, item):
             self.app.cfg.paste_injection = not self.app.cfg.paste_injection
             try:
-                from .settings import save_config
+                from voiceflow.utils.settings import save_config
                 save_config(self.app.cfg)
                 mode = "Paste" if self.app.cfg.paste_injection else "Type"
                 self._notify("VoiceFlow", f"Text Injection: {mode}")
@@ -166,7 +166,7 @@ class EnhancedTrayController:
         def toggle_enter(icon, item):
             self.app.cfg.press_enter_after_paste = not self.app.cfg.press_enter_after_paste
             try:
-                from .settings import save_config
+                from voiceflow.utils.settings import save_config
                 save_config(self.app.cfg)
                 self._notify("VoiceFlow", f"Auto-Enter: {'ON' if self.app.cfg.press_enter_after_paste else 'OFF'}")
             except Exception:
@@ -180,7 +180,7 @@ class EnhancedTrayController:
                 self.app.cfg.visual_indicators_enabled = False
             
             try:
-                from .settings import save_config
+                from voiceflow.utils.settings import save_config
                 save_config(self.app.cfg)
                 status = "ON" if getattr(self.app.cfg, 'visual_indicators_enabled', True) else "OFF"
                 self._notify("VoiceFlow", f"Visual Indicators: {status}")
@@ -205,7 +205,7 @@ class EnhancedTrayController:
         def quit_app(icon, item):
             try:
                 if VISUAL_INDICATORS_AVAILABLE:
-                    from .visual_indicators import cleanup_indicators
+                    from voiceflow.utils.visual_indicators import cleanup_indicators
                     cleanup_indicators()
                 
                 if self._icon:
@@ -221,7 +221,7 @@ class EnhancedTrayController:
             self.app.cfg.hotkey_alt = alt
             self.app.cfg.hotkey_key = key
             try:
-                from .settings import save_config
+                from voiceflow.utils.settings import save_config
                 save_config(self.app.cfg)
             except Exception:
                 pass
@@ -337,7 +337,7 @@ class EnhancedTrayController:
         if self._icon is not None:
             try:
                 if VISUAL_INDICATORS_AVAILABLE:
-                    from .visual_indicators import cleanup_indicators
+                    from voiceflow.utils.visual_indicators import cleanup_indicators
                     cleanup_indicators()
                     
                 self._icon.stop()
