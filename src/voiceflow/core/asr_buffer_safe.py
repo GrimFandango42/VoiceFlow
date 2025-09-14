@@ -42,9 +42,9 @@ class BufferSafeWhisperASR:
         self.total_audio_duration = 0.0
         self.total_processing_time = 0.0
         
-        # Progressive degradation prevention - REDUCED frequency for stability
+        # Progressive degradation prevention - Performance optimized
         self._transcriptions_since_reload = 0
-        self._max_transcriptions_before_reload = 20  # Reload model every 20 transcriptions (was 5)
+        self._max_transcriptions_before_reload = cfg.max_transcriptions_before_reload  # Use config setting
         
         # Smart conversation management - less aggressive timeouts
         self._last_transcription_time = time.time()
@@ -77,16 +77,17 @@ class BufferSafeWhisperASR:
                     compute_type=self.cfg.compute_type,
                 )
                 
-                # Clean warmup - no state pollution
-                silence = np.zeros(8000, dtype=np.float32)  # Shorter warmup
+                # Optimized warmup - minimal overhead for speed
+                silence = np.zeros(4000, dtype=np.float32)  # Even shorter warmup (0.25s)
                 segs, _info = self._model.transcribe(
-                    silence, 
+                    silence,
                     language=self.cfg.language,
                     vad_filter=False,  # Never use VAD in warmup
-                    beam_size=1,
+                    beam_size=1,  # Fastest beam setting
                     temperature=0.0
                 )
-                _ = list(segs)
+                # Skip processing segments for warmup - just initialize model
+                list(segs)  # Consume iterator to complete warmup
                 
                 logger.info(f"BufferSafeASR loaded: model={self.cfg.model_name}, device={self.cfg.device}")
                 
@@ -158,9 +159,10 @@ class BufferSafeWhisperASR:
             # CRITICAL: Create completely isolated transcription state with validation
             recording_state = self._create_clean_recording_state(audio)
 
-            # Buffer integrity check
-            if not self._check_buffer_integrity(recording_state):
-                raise ValueError("Buffer integrity check failed")
+            # Optimized buffer integrity check
+            if not getattr(self.cfg, 'skip_buffer_integrity_checks', False):
+                if not self._check_buffer_integrity(recording_state):
+                    raise ValueError("Buffer integrity check failed")
 
             result = self._perform_isolated_transcription(recording_state)
 
@@ -170,9 +172,10 @@ class BufferSafeWhisperASR:
             # Mark processing complete to allow timeout checks again
             self._is_processing = False
 
-            # Log successful transcription
-            total_time = time.perf_counter() - transcription_start_time
-            logger.debug(f"Transcription completed in {total_time:.3f}s: '{result[:50]}{'...' if len(result) > 50 else ''}'")
+            # Optimized logging - only log if detailed logging is enabled
+            if not getattr(self.cfg, 'disable_detailed_logging', False):
+                total_time = time.perf_counter() - transcription_start_time
+                logger.debug(f"Transcription completed in {total_time:.3f}s: '{result[:50]}{'...' if len(result) > 50 else ''}'")
 
             return result
 

@@ -21,13 +21,19 @@ class Config:
     max_batch_size: int = 4  # Process multiple segments together
     enable_streaming: bool = True  # Enable real-time streaming feedback
 
-    # ASR
-    model_name: str = "base.en"  # 5.4x faster than large-v2, better accuracy than small.en
+    # ASR - Performance Optimized
+    model_name: str = "tiny.en"  # 4x faster than base.en for speed-first optimization
     device: str = "cpu"  # "cuda" | "cpu"
-    compute_type: str = "int8"  # 4080 supports fp16 nicely
+    compute_type: str = "int8"  # Optimized for CPU inference
     vad_filter: bool = False  # CRITICAL FIX: VAD was removing all audio after 2 recordings
-    beam_size: int = 1  # 1 = greedy, faster
+    beam_size: int = 1  # 1 = greedy, fastest possible
     temperature: float = 0.0
+
+    # Performance-first optimizations
+    max_transcriptions_before_reload: int = 100  # Reduce model reloads from 20 to 100
+    disable_detailed_logging: bool = True  # Skip expensive logging in hot paths
+    skip_buffer_integrity_checks: bool = False  # Keep safety checks but optimize them
+    enable_model_caching: bool = True  # Cache model in memory between sessions
 
     # Output behavior
     paste_injection: bool = True  # Use clipboard paste injection by default
