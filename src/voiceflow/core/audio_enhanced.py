@@ -9,7 +9,7 @@ import logging
 import numpy as np
 import sounddevice as sd
 
-from voiceflow.utils.config import Config
+from voiceflow.core.config import Config
 
 # Set up logging for audio validation
 logger = logging.getLogger(__name__)

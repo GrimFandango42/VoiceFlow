@@ -6,7 +6,7 @@ import time
 
 import numpy as np
 
-from voiceflow.utils.config import Config
+from voiceflow.core.config import Config
 
 logger = logging.getLogger(__name__)
 

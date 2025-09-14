@@ -32,7 +32,7 @@ except Exception:  # pragma: no cover
         def unblock_key(key: str):
             return None
 
-from voiceflow.utils.config import Config
+from voiceflow.core.config import Config
 
 
 class PTTHotkeyListener:

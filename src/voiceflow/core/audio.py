@@ -6,7 +6,7 @@ from typing import Optional, List
 import numpy as np
 import sounddevice as sd
 
-from voiceflow.utils.config import Config
+from voiceflow.core.config import Config
 
 
 class AudioRecorder:

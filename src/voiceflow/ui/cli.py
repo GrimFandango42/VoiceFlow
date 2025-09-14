@@ -8,7 +8,7 @@ import logging
 
 import numpy as np
 
-from voiceflow.utils.config import Config
+from voiceflow.core.config import Config
 from voiceflow.utils.audio_enhanced import EnhancedAudioRecorder as AudioRecorder
 from voiceflow.utils.asr_buffer_safe import BufferSafeWhisperASR as WhisperASR
 from voiceflow.utils.inject import ClipboardInjector

@@ -11,22 +11,22 @@ from concurrent.futures import ThreadPoolExecutor, Future
 
 import numpy as np
 
-from voiceflow.utils.config import Config
-from voiceflow.utils.audio_enhanced import EnhancedAudioRecorder
-from voiceflow.utils.asr_buffer_safe import BufferSafeWhisperASR as WhisperASR
-from voiceflow.utils.inject import ClipboardInjector
-from voiceflow.utils.hotkeys_enhanced import EnhancedPTTHotkeyListener
+from voiceflow.core.config import Config
+from voiceflow.core.audio_enhanced import EnhancedAudioRecorder
+from voiceflow.core.asr_buffer_safe import BufferSafeWhisperASR as WhisperASR
+from voiceflow.integrations.inject import ClipboardInjector
+from voiceflow.integrations.hotkeys_enhanced import EnhancedPTTHotkeyListener
 from voiceflow.utils.utils import is_admin, nvidia_smi_info
-from voiceflow.utils.textproc import apply_code_mode
+from voiceflow.core.textproc import apply_code_mode
 import keyboard
-from voiceflow.utils.tray import TrayController
-from voiceflow.utils.enhanced_tray import EnhancedTrayController, update_tray_status
+from voiceflow.ui.tray import TrayController
+from voiceflow.ui.enhanced_tray import EnhancedTrayController, update_tray_status
 from voiceflow.utils.logging_setup import AsyncLogger, default_log_dir
 from voiceflow.utils.settings import load_config, save_config
 
 # Visual indicators integration
 try:
-    from voiceflow.utils.visual_indicators import (
+    from voiceflow.ui.visual_indicators import (
         show_listening, show_processing, show_transcribing, 
         show_complete, show_error, hide_status
     )

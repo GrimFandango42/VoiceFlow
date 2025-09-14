@@ -4,7 +4,7 @@ from typing import Iterable, Optional
 
 import numpy as np
 
-from voiceflow.utils.config import Config
+from voiceflow.core.config import Config
 
 
 class WhisperASR:
