@@ -426,15 +426,19 @@ class BufferSafeWhisperASR:
         return final_text
     
     def _clean_segment_text_isolated(self, text: str) -> str:
-        """ULTRA-FAST segment text cleaning"""
+        """ENHANCED segment text cleaning with smart processing"""
         if not text:
             return ""
 
+        text = text.strip()
+
+        # ENHANCED MODE: Smart processing for better quality without speed loss
+        if getattr(self.cfg, 'use_enhanced_post_processing', False):
+            return self._enhanced_text_cleaning(text)
+
         # ULTRA MODE: Minimal processing for maximum speed
         if getattr(self.cfg, 'ultra_fast_mode', False):
-            return text.strip()  # Just basic strip, skip all other processing
-
-        text = text.strip()
+            return text  # Just basic strip, skip all other processing
 
         # Skip fallback detection in ultra mode
         if not getattr(self.cfg, 'disable_fallback_detection', False):
@@ -457,7 +461,45 @@ class BufferSafeWhisperASR:
             text = re.sub(r'([,.!?])\s*([A-Z])', r'\1 \2', text)
 
         return text.strip()
-    
+
+    def _enhanced_text_cleaning(self, text: str) -> str:
+        """Enhanced text cleaning for better quality without speed impact"""
+        if not text:
+            return ""
+
+        # Quick smart corrections (vectorized for speed)
+        # Fix common Whisper transcription patterns
+        corrections = {
+            # Common Whisper mistakes
+            ' i ': ' I ',
+            ' im ': ' I\'m ',
+            ' ive ': ' I\'ve ',
+            ' ill ': ' I\'ll ',
+            ' id ': ' I\'d ',
+            ' wont ': ' won\'t ',
+            ' cant ': ' can\'t ',
+            ' dont ': ' don\'t ',
+            ' didnt ': ' didn\'t ',
+            ' wouldnt ': ' wouldn\'t ',
+            ' shouldnt ': ' shouldn\'t ',
+            ' couldnt ': ' couldn\'t ',
+        }
+
+        # Apply corrections efficiently
+        for wrong, right in corrections.items():
+            text = text.replace(wrong, right)
+
+        # Basic punctuation fixes (minimal regex for speed)
+        import re
+        text = re.sub(r'\s+([,.!?])', r'\1', text)  # Remove space before punctuation
+        text = re.sub(r'([,.!?])\s*([A-Z])', r'\1 \2', text)  # Space after punctuation
+
+        # Capitalize first letter if needed
+        if text and text[0].islower():
+            text = text[0].upper() + text[1:]
+
+        return text.strip()
+
     def _update_session_stats(self, recording_state: dict, result: str):
         """Update only session-level statistics (no recording state persisted)"""
         

@@ -21,20 +21,24 @@ class Config:
     max_batch_size: int = 4  # Process multiple segments together
     enable_streaming: bool = True  # Enable real-time streaming feedback
 
-    # ASR - BALANCED Performance Mode (speed + accuracy for long sentences)
-    model_name: str = "base.en"  # Better accuracy while still fast (avoids 3s delays)
+    # ASR - EXTREME Performance Mode (target: sub-2s for long sentences)
+    model_name: str = "small.en"  # Best speed/accuracy balance for quality + performance
     device: str = "cpu"  # "cuda" | "cpu"
     compute_type: str = "int8"  # Optimized for CPU inference
     vad_filter: bool = False  # CRITICAL FIX: VAD was removing all audio after 2 recordings
     beam_size: int = 1  # 1 = greedy, fastest possible
     temperature: float = 0.0
 
-    # Whisper-specific ultra optimizations
+    # Whisper-specific EXTREME optimizations for quality + speed
     word_timestamps: bool = False  # Disable expensive timestamp computation
-    condition_on_previous_text: bool = False  # Disable context (already done but explicit)
-    compression_ratio_threshold: float = 4.0  # More aggressive threshold (default 2.4)
-    log_prob_threshold: float = -0.5  # More aggressive threshold (default -1.0)
-    no_speech_threshold: float = 0.8  # Higher threshold for faster rejection (default 0.6)
+    condition_on_previous_text: bool = False  # Disable context for consistency
+    compression_ratio_threshold: float = 3.5  # Balanced threshold for quality (vs 4.0)
+    log_prob_threshold: float = -0.7  # Balanced threshold for quality (vs -0.5)
+    no_speech_threshold: float = 0.7  # Balanced threshold (vs 0.8)
+
+    # Quality improvements without speed impact
+    enable_smart_prompting: bool = True  # Adaptive prompting for better accuracy
+    use_enhanced_post_processing: bool = True  # Smart text cleaning
 
     # ULTRA-AGGRESSIVE performance settings
     ultra_fast_mode: bool = True  # Enable most aggressive optimizations
