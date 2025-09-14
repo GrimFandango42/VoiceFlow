@@ -85,8 +85,11 @@ class BottomScreenIndicator:
             # Start hidden
             self.window.withdraw()
             
-        except Exception as e:
+        except (tk.TclError, AttributeError, ValueError) as e:
             print(f"[VisualIndicator] Failed to setup window: {e}")
+            self.window = None
+        except Exception as e:
+            print(f"[VisualIndicator] Unexpected error during window setup: {type(e).__name__}: {e}")
             self.window = None
     
     def _create_ui(self):
@@ -165,8 +168,10 @@ class BottomScreenIndicator:
                     self.auto_hide_timer = threading.Timer(duration, self.hide)
                     self.auto_hide_timer.start()
                     
-            except Exception as e:
+            except (tk.TclError, AttributeError) as e:
                 print(f"[VisualIndicator] UI update failed: {e}")
+            except Exception as e:
+                print(f"[VisualIndicator] Unexpected UI update error: {type(e).__name__}: {e}")
     
     def _update_ui(self, status: TranscriptionStatus, message: str):
         """Update UI elements (must run on main thread)"""

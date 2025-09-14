@@ -10,6 +10,7 @@ import numpy as np
 import sounddevice as sd
 
 from voiceflow.core.config import Config
+from voiceflow.utils.validation import validate_audio_data, validate_sample_rate, ValidationError
 
 # Set up logging for audio validation
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ def audio_validation_guard(audio_data: np.ndarray,
     - Validating audio format and dimensions
     - Clamping extreme values to safe ranges
     - Providing detailed error logging with metadata
+    - Using centralized validation module for security consistency
 
     Args:
         audio_data: Audio data array to validate
@@ -45,7 +47,18 @@ def audio_validation_guard(audio_data: np.ndarray,
             return np.array([], dtype=np.float32)
         raise ValueError(error_msg)
 
-    # Convert to numpy array if needed
+    # First apply centralized validation for security consistency
+    try:
+        validated_audio = validate_audio_data(audio_data, f"{operation_name}_audio")
+    except ValidationError as e:
+        error_msg = f"[AudioGuard] {operation_name}: Security validation failed: {e}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
+    # Use the validated audio from security validation
+    audio_data = validated_audio
+
+    # Convert to numpy array if needed (should already be done by validation)
     if not isinstance(audio_data, np.ndarray):
         try:
             audio_data = np.array(audio_data, dtype=np.float32)
@@ -128,7 +141,7 @@ def audio_validation_guard(audio_data: np.ndarray,
 
 def validate_audio_format(sample_rate: int, channels: int, operation_name: str = "audio_format") -> tuple[int, int]:
     """
-    Validate and sanitize audio format parameters.
+    Validate and sanitize audio format parameters using centralized validation.
 
     Args:
         sample_rate: Audio sample rate to validate
@@ -138,14 +151,16 @@ def validate_audio_format(sample_rate: int, channels: int, operation_name: str =
     Returns:
         Tuple of (validated_sample_rate, validated_channels)
     """
-    # Validate sample rate
-    valid_sample_rates = [8000, 11025, 16000, 22050, 44100, 48000, 96000]
+    # Use centralized sample rate validation for security consistency
+    try:
+        validated_sample_rate = validate_sample_rate(sample_rate)
+    except ValidationError as e:
+        logger.error(f"[AudioGuard] {operation_name}: Sample rate validation failed: {e}")
+        # Fallback to safe default
+        validated_sample_rate = 16000
+        logger.warning(f"[AudioGuard] {operation_name}: Using fallback sample rate: {validated_sample_rate}Hz")
 
-    if sample_rate not in valid_sample_rates:
-        closest_rate = min(valid_sample_rates, key=lambda x: abs(x - sample_rate))
-        logger.warning(f"[AudioGuard] {operation_name}: Invalid sample rate {sample_rate}Hz, "
-                      f"using closest valid rate {closest_rate}Hz")
-        sample_rate = closest_rate
+    sample_rate = validated_sample_rate
 
     # Validate channels
     if channels < 1 or channels > 2:

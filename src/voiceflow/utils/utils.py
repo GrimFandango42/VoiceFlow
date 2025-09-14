@@ -9,7 +9,7 @@ from typing import Optional
 def is_admin() -> bool:
     try:
         return ctypes.windll.shell32.IsUserAnAdmin() != 0  # type: ignore
-    except Exception:
+    except (OSError, AttributeError):
         return False
 
 

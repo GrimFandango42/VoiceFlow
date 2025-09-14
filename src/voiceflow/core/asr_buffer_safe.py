@@ -194,7 +194,7 @@ class BufferSafeWhisperASR:
                     }
 
                     log_error("BufferSafeWhisperASR", f"Transcription failed: {str(e)}", error_metrics)
-                except:
+                except (OSError, RuntimeError, AttributeError):
                     pass  # Don't let logging errors compound the problem
 
             # Mark processing complete even on error

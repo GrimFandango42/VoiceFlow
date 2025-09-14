@@ -36,6 +36,7 @@ except Exception:  # pragma: no cover - fallback for minimal environments
     keyboard = _KeyboardFallback()  # type: ignore
 
 from voiceflow.core.config import Config
+from voiceflow.utils.validation import validate_text_input, ValidationError
 
 
 @contextmanager
@@ -63,13 +64,22 @@ class ClipboardInjector:
         self._log = logging.getLogger("localflow")
 
     def _sanitize(self, text: str) -> str:
+        """Enhanced sanitization with security validation"""
+        try:
+            # First apply comprehensive validation
+            validated_text = validate_text_input(text, "injection_text")
+        except ValidationError as e:
+            self._log.warning(f"Input validation failed: {e}")
+            return ""  # Reject invalid input
+
         # Normalize CRLF/CR -> LF
-        s = text.replace("\r\n", "\n").replace("\r", "\n")
+        s = validated_text.replace("\r\n", "\n").replace("\r", "\n")
         # Remove control chars except tab/newline
         s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", s)
-        # Trim excessive length
+        # Trim excessive length (validation already checks, but double-check)
         if len(s) > self.cfg.max_inject_chars:
             s = s[: self.cfg.max_inject_chars]
+            self._log.info(f"Text truncated to {self.cfg.max_inject_chars} chars")
         return s
 
     def _throttle(self):

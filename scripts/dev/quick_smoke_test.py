@@ -106,10 +106,14 @@ class SmokeTestSuite:
             except (ValueError, RuntimeError):
                 pass  # Expected behavior
 
-            # Test 3: NaN handling
-            nan_audio = np.array([1.0, np.nan, 0.5], dtype=np.float32)
-            validated = audio_validation_guard(nan_audio, "SmokeTest_NaN")
-            assert not np.any(np.isnan(validated)), "NaN values not properly cleaned"
+            # Test 3: NaN handling (should reject NaN arrays for security)
+            try:
+                nan_audio = np.array([1.0, np.nan, 0.5], dtype=np.float32)
+                audio_validation_guard(nan_audio, "SmokeTest_NaN")
+                # Should raise an exception for NaN audio for security
+                assert False, "NaN audio should have been rejected for security"
+            except (ValueError, RuntimeError):
+                pass  # Expected security behavior - reject NaN arrays
 
             duration = time.perf_counter() - test_start
             self.log_test("Audio Validation", True, "All guardrails working", duration)
