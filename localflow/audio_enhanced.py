@@ -4,11 +4,186 @@ import threading
 from typing import Optional, List
 from collections import deque
 import time
+import logging
 
 import numpy as np
 import sounddevice as sd
 
 from .config import Config
+
+# Set up logging for audio validation
+logger = logging.getLogger(__name__)
+
+
+def audio_validation_guard(audio_data: np.ndarray,
+                          operation_name: str = "audio_operation",
+                          allow_empty: bool = False) -> np.ndarray:
+    """
+    Comprehensive audio input validation and sanitization guard.
+
+    This function prevents crashes from malformed audio data by:
+    - Detecting and handling NaN/Inf values
+    - Validating audio format and dimensions
+    - Clamping extreme values to safe ranges
+    - Providing detailed error logging with metadata
+
+    Args:
+        audio_data: Audio data array to validate
+        operation_name: Name of operation for logging context
+        allow_empty: Whether to allow empty arrays (default: False)
+
+    Returns:
+        Sanitized audio data array
+
+    Raises:
+        ValueError: If audio data is invalid and cannot be recovered
+    """
+    if audio_data is None:
+        error_msg = f"[AudioGuard] {operation_name}: Audio data is None"
+        logger.error(error_msg)
+        if allow_empty:
+            return np.array([], dtype=np.float32)
+        raise ValueError(error_msg)
+
+    # Convert to numpy array if needed
+    if not isinstance(audio_data, np.ndarray):
+        try:
+            audio_data = np.array(audio_data, dtype=np.float32)
+            logger.warning(f"[AudioGuard] {operation_name}: Converted input to numpy array")
+        except Exception as e:
+            error_msg = f"[AudioGuard] {operation_name}: Cannot convert input to numpy array: {e}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+    # Check for empty arrays
+    if audio_data.size == 0:
+        if allow_empty:
+            logger.info(f"[AudioGuard] {operation_name}: Empty audio array (allowed)")
+            return np.array([], dtype=np.float32)
+        else:
+            error_msg = f"[AudioGuard] {operation_name}: Empty audio array not allowed"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+    # Validate array dimensions
+    if audio_data.ndim > 2:
+        error_msg = f"[AudioGuard] {operation_name}: Audio data has too many dimensions: {audio_data.ndim}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
+    # Convert to 1D if needed
+    original_shape = audio_data.shape
+    if audio_data.ndim == 2:
+        if audio_data.shape[1] > 1:
+            # Convert stereo to mono
+            audio_data = np.mean(audio_data, axis=1)
+            logger.info(f"[AudioGuard] {operation_name}: Converted stereo to mono")
+        else:
+            audio_data = audio_data.flatten()
+
+    # Ensure float32 dtype for consistency
+    if audio_data.dtype != np.float32:
+        try:
+            audio_data = audio_data.astype(np.float32)
+            logger.info(f"[AudioGuard] {operation_name}: Converted dtype to float32")
+        except Exception as e:
+            error_msg = f"[AudioGuard] {operation_name}: Cannot convert to float32: {e}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+    # Critical: Check for NaN values
+    nan_count = np.count_nonzero(np.isnan(audio_data))
+    if nan_count > 0:
+        logger.warning(f"[AudioGuard] {operation_name}: Found {nan_count} NaN values, replacing with zeros")
+        audio_data = np.nan_to_num(audio_data, nan=0.0, copy=False)
+
+    # Critical: Check for infinite values
+    inf_count = np.count_nonzero(np.isinf(audio_data))
+    if inf_count > 0:
+        logger.warning(f"[AudioGuard] {operation_name}: Found {inf_count} infinite values, clamping")
+        audio_data = np.nan_to_num(audio_data, posinf=32.0, neginf=-32.0, copy=False)
+
+    # Check for extreme values and clamp to safe range
+    max_amplitude = np.max(np.abs(audio_data))
+    safe_max = 100.0  # Safe maximum for float32 audio processing
+
+    if max_amplitude > safe_max:
+        logger.warning(f"[AudioGuard] {operation_name}: Extreme amplitude {max_amplitude:.2f}, clamping to ±{safe_max}")
+        audio_data = np.clip(audio_data, -safe_max, safe_max)
+        max_amplitude = safe_max
+
+    # Warn about high amplitudes that might indicate issues
+    if max_amplitude > 10.0:
+        logger.warning(f"[AudioGuard] {operation_name}: High audio amplitude: {max_amplitude:.2f}")
+    elif max_amplitude == 0.0:
+        logger.info(f"[AudioGuard] {operation_name}: Silent audio (all zeros)")
+
+    # Log validation summary
+    logger.debug(f"[AudioGuard] {operation_name}: Validation complete - "
+                f"Shape: {audio_data.shape}, Max: {max_amplitude:.3f}, "
+                f"NaN fixed: {nan_count}, Inf fixed: {inf_count}")
+
+    return audio_data
+
+
+def validate_audio_format(sample_rate: int, channels: int, operation_name: str = "audio_format") -> tuple[int, int]:
+    """
+    Validate and sanitize audio format parameters.
+
+    Args:
+        sample_rate: Audio sample rate to validate
+        channels: Number of audio channels to validate
+        operation_name: Operation name for logging
+
+    Returns:
+        Tuple of (validated_sample_rate, validated_channels)
+    """
+    # Validate sample rate
+    valid_sample_rates = [8000, 11025, 16000, 22050, 44100, 48000, 96000]
+
+    if sample_rate not in valid_sample_rates:
+        closest_rate = min(valid_sample_rates, key=lambda x: abs(x - sample_rate))
+        logger.warning(f"[AudioGuard] {operation_name}: Invalid sample rate {sample_rate}Hz, "
+                      f"using closest valid rate {closest_rate}Hz")
+        sample_rate = closest_rate
+
+    # Validate channels
+    if channels < 1 or channels > 2:
+        logger.warning(f"[AudioGuard] {operation_name}: Invalid channel count {channels}, defaulting to 1")
+        channels = 1
+
+    return sample_rate, channels
+
+
+def safe_audio_operation(func, *args, operation_name: str = "audio_op",
+                        fallback_value=None, max_retries: int = 3):
+    """
+    Execute audio operation with error recovery and retry mechanism.
+
+    Args:
+        func: Function to execute
+        *args: Arguments to pass to function
+        operation_name: Operation name for logging
+        fallback_value: Value to return if all retries fail
+        max_retries: Maximum number of retry attempts
+
+    Returns:
+        Result of function or fallback value
+    """
+    for attempt in range(max_retries):
+        try:
+            return func(*args)
+        except Exception as e:
+            logger.warning(f"[AudioGuard] {operation_name}: Attempt {attempt + 1} failed: {e}")
+
+            if attempt == max_retries - 1:
+                logger.error(f"[AudioGuard] {operation_name}: All retries exhausted, using fallback")
+                return fallback_value
+
+            # Exponential backoff
+            time.sleep(0.1 * (2 ** attempt))
+
+    return fallback_value
 
 
 class BoundedRingBuffer:
@@ -26,32 +201,45 @@ class BoundedRingBuffer:
     def append(self, data: np.ndarray):
         """Add data to ring buffer, overwriting old data if full"""
         with self.lock:
-            data_len = len(data)
-            
-            if data_len >= self.max_samples:
-                # Data larger than buffer - take only the most recent part
-                data = data[-self.max_samples:]
+            try:
+                # CRITICAL: Validate and sanitize input data
+                data = audio_validation_guard(data, "RingBuffer.append", allow_empty=True)
+
+                # Skip if empty after validation
+                if data.size == 0:
+                    return
+
                 data_len = len(data)
-                self.buffer[:data_len] = data
-                self.write_pos = data_len % self.max_samples
-                self.samples_written = data_len
+
+                if data_len >= self.max_samples:
+                    # Data larger than buffer - take only the most recent part
+                    data = data[-self.max_samples:]
+                    data_len = len(data)
+                    self.buffer[:data_len] = data
+                    self.write_pos = data_len % self.max_samples
+                    self.samples_written = data_len
+                    return
+
+                # Normal case: append to buffer
+                end_pos = self.write_pos + data_len
+
+                if end_pos <= self.max_samples:
+                    # No wraparound needed
+                    self.buffer[self.write_pos:end_pos] = data
+                else:
+                    # Wraparound needed
+                    first_part_len = self.max_samples - self.write_pos
+                    self.buffer[self.write_pos:] = data[:first_part_len]
+                    remaining = data[first_part_len:]
+                    self.buffer[:len(remaining)] = remaining
+
+                self.write_pos = end_pos % self.max_samples
+                self.samples_written += data_len
+
+            except Exception as e:
+                logger.error(f"[RingBuffer] Critical error in append: {e}")
+                # Don't crash - just skip this data
                 return
-            
-            # Normal case: append to buffer
-            end_pos = self.write_pos + data_len
-            
-            if end_pos <= self.max_samples:
-                # No wraparound needed
-                self.buffer[self.write_pos:end_pos] = data
-            else:
-                # Wraparound needed
-                first_part_len = self.max_samples - self.write_pos
-                self.buffer[self.write_pos:] = data[:first_part_len]
-                remaining = data[first_part_len:]
-                self.buffer[:len(remaining)] = remaining
-            
-            self.write_pos = end_pos % self.max_samples
-            self.samples_written += data_len
     
     def get_data(self) -> np.ndarray:
         """Get all data from buffer in correct order"""
@@ -114,47 +302,60 @@ class EnhancedAudioRecorder:
         print(f"  - Pre-buffer: {self._pre_buffer_duration}s")
 
     def _callback(self, indata, frames, time, status):
-        """Enhanced audio callback with bounded buffer"""
+        """Enhanced audio callback with bounded buffer and validation"""
         if status:
             # Log non-fatal warnings from PortAudio
-            print(f"[AudioRecorder] PortAudio warning: {status}")
-        
+            logger.warning(f"[AudioRecorder] PortAudio status: {status}")
+
         if not self._recording:
             return
-        
-        self._callback_count += 1
-        self._total_frames += frames
-        
-        # Convert to mono if needed
-        data = indata.copy()
-        if data.ndim == 2 and data.shape[1] > 1:
-            data = np.mean(data, axis=1, keepdims=True)
-        
-        # Add to bounded buffer (thread-safe)
-        audio_data = data.reshape(-1).astype(np.float32)
-        self._ring_buffer.append(audio_data)
-        
-        # Reduced logging: only log every 200 callbacks (~12.8 seconds)
-        if self._callback_count % 200 == 0:
-            duration = self._ring_buffer.get_duration_seconds()
-            print(f"[AudioRecorder] Recording: {duration:.1f}s")
+
+        try:
+            self._callback_count += 1
+            self._total_frames += frames
+
+            # CRITICAL: Validate input data first
+            data = audio_validation_guard(indata.copy(), "AudioCallback", allow_empty=True)
+
+            # Skip if empty after validation
+            if data.size == 0:
+                return
+
+            # Convert to mono if needed (already handled by validation guard)
+            # Add to bounded buffer (thread-safe)
+            self._ring_buffer.append(data)
+
+            # Reduced logging: only log every 200 callbacks (~12.8 seconds)
+            if self._callback_count % 200 == 0:
+                duration = self._ring_buffer.get_duration_seconds()
+                print(f"[AudioRecorder] Recording: {duration:.1f}s")
+
+        except Exception as e:
+            logger.error(f"[AudioRecorder] Critical error in audio callback: {e}")
+            # Don't crash the audio stream - just skip this frame
     
     def _continuous_callback(self, indata, frames, time, status):
         """Continuous pre-recording callback for seamless capture"""
         if status:
-            print(f"[AudioRecorder] Continuous audio warning: {status}")
-        
+            logger.warning(f"[AudioRecorder] Continuous audio status: {status}")
+
         if not self._continuous_recording:
             return
-        
-        # Convert to mono if needed
-        data = indata.copy()
-        if data.ndim == 2 and data.shape[1] > 1:
-            data = np.mean(data, axis=1, keepdims=True)
-        
-        # Add to pre-buffer (always running)
-        audio_data = data.reshape(-1).astype(np.float32)
-        self._pre_buffer.append(audio_data)
+
+        try:
+            # CRITICAL: Validate input data first
+            data = audio_validation_guard(indata.copy(), "ContinuousCallback", allow_empty=True)
+
+            # Skip if empty after validation
+            if data.size == 0:
+                return
+
+            # Add to pre-buffer (always running)
+            self._pre_buffer.append(data)
+
+        except Exception as e:
+            logger.error(f"[AudioRecorder] Critical error in continuous callback: {e}")
+            # Don't crash the audio stream - just skip this frame
 
     def start(self):
         """Start recording with pre-buffer integration"""

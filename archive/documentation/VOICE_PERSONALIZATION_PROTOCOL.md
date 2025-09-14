@@ -53,7 +53,7 @@ Your transcription: `"try this out now.some initial drilling things without spin
 3. **Extended processing timeout** for longer speech
 4. **Temperature adjustment** to reduce hallucination
 
-## 🎙️ TESTING INSTRUCTIONS
+## [MIC] TESTING INSTRUCTIONS
 
 ### **For Each Test:**
 1. **Say the sentence clearly** at normal speaking pace

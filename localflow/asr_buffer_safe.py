@@ -111,58 +111,74 @@ class BufferSafeWhisperASR:
     
     def transcribe(self, audio: np.ndarray) -> str:
         """
-        Transcribe audio with complete buffer isolation.
+        Transcribe audio with complete buffer isolation and enhanced validation.
         Each call starts with a completely clean state.
         """
-        if self._model is None:
-            self.load()
-        
-        # CRITICAL: Smart timeout checking - don't reload during active processing
-        current_time = time.time()
-        time_since_last = current_time - self._last_transcription_time
-        
-        # Only check timeouts if not actively processing (prevents mid-transcription reloads)
-        if not self._is_processing:
-            # Force model reload if conversation has been too long or inactive too long
-            conversation_too_long = self._total_conversation_duration > self._max_conversation_duration
-            inactive_too_long = time_since_last > self._conversation_timeout
-            
-            if conversation_too_long or inactive_too_long:
-                reason = "long conversation" if conversation_too_long else "inactivity timeout"
-                logger.info(f"Model reload triggered: {reason} (total duration: {self._total_conversation_duration:.1f}s, idle: {time_since_last:.1f}s)")
+        transcription_start_time = time.perf_counter()
+
+        try:
+            # CRITICAL: Pre-validation to catch issues early
+            if audio is None:
+                logger.error("Transcription called with None audio")
+                return ""
+
+            if self._model is None:
+                logger.info("Loading ASR model for transcription")
+                self.load()
+
+            # CRITICAL: Smart timeout checking - don't reload during active processing
+            current_time = time.time()
+            time_since_last = current_time - self._last_transcription_time
+
+            # Only check timeouts if not actively processing (prevents mid-transcription reloads)
+            if not self._is_processing:
+                # Force model reload if conversation has been too long or inactive too long
+                conversation_too_long = self._total_conversation_duration > self._max_conversation_duration
+                inactive_too_long = time_since_last > self._conversation_timeout
+
+                if conversation_too_long or inactive_too_long:
+                    reason = "long conversation" if conversation_too_long else "inactivity timeout"
+                    logger.info(f"Model reload triggered: {reason} (total duration: {self._total_conversation_duration:.1f}s, idle: {time_since_last:.1f}s)")
+                    self._reload_model_fresh()
+                    self._transcriptions_since_reload = 0
+                    # Reset conversation tracking
+                    self._total_conversation_duration = 0.0
+                    self._last_transcription_time = current_time
+
+            # Mark as processing to prevent timeouts during transcription
+            self._is_processing = True
+
+            # CRITICAL: Prevent progressive degradation with model reinitialization
+            self._transcriptions_since_reload += 1
+            if self._transcriptions_since_reload >= self._max_transcriptions_before_reload:
+                logger.info(f"Reloading Whisper model after {self._transcriptions_since_reload} transcriptions to prevent degradation")
                 self._reload_model_fresh()
                 self._transcriptions_since_reload = 0
-                # Reset conversation tracking
-                self._total_conversation_duration = 0.0
-                self._last_transcription_time = current_time
-        
-        # Mark as processing to prevent timeouts during transcription
-        self._is_processing = True
-        
-        # CRITICAL: Prevent progressive degradation with model reinitialization
-        self._transcriptions_since_reload += 1
-        if self._transcriptions_since_reload >= self._max_transcriptions_before_reload:
-            logger.info(f"Reloading Whisper model after {self._transcriptions_since_reload} transcriptions to prevent degradation")
-            self._reload_model_fresh()
-            self._transcriptions_since_reload = 0
-        
-        # CRITICAL: Create completely isolated transcription state
-        recording_state = self._create_clean_recording_state(audio)
-        
-        try:
+
+            # CRITICAL: Create completely isolated transcription state with validation
+            recording_state = self._create_clean_recording_state(audio)
+
+            # Buffer integrity check
+            if not self._check_buffer_integrity(recording_state):
+                raise ValueError("Buffer integrity check failed")
+
             result = self._perform_isolated_transcription(recording_state)
-            
+
             # Update only persistent session stats (no per-recording state kept)
             self._update_session_stats(recording_state, result)
-            
+
             # Mark processing complete to allow timeout checks again
             self._is_processing = False
-            
+
+            # Log successful transcription
+            total_time = time.perf_counter() - transcription_start_time
+            logger.debug(f"Transcription completed in {total_time:.3f}s: '{result[:50]}{'...' if len(result) > 50 else ''}'")
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Transcription error: {e}")
-            
+
             # Emit error metrics for dashboard monitoring
             if PRODUCTION_LOGGING_AVAILABLE:
                 try:
@@ -170,63 +186,176 @@ class BufferSafeWhisperASR:
                     error_metrics = {
                         'transcription_error': True,
                         'error_message': str(e),
-                        'audio_duration': recording_state.get('audio_duration', 0.0),
+                        'audio_duration': recording_state.get('audio_duration', 0.0) if 'recording_state' in locals() else 0.0,
                         'model_name': self.cfg.model_name,
-                        'transcription_id': recording_state.get('recording_id', 'unknown'),
-                        'session_count': self.session_transcription_count
+                        'transcription_id': recording_state.get('recording_id', 'unknown') if 'recording_state' in locals() else 'unknown',
+                        'session_count': self.session_transcription_count,
+                        'total_time': time.perf_counter() - transcription_start_time
                     }
-                    
+
                     log_error("BufferSafeWhisperASR", f"Transcription failed: {str(e)}", error_metrics)
                 except:
                     pass  # Don't let logging errors compound the problem
-            
+
             # Mark processing complete even on error
             self._is_processing = False
             # Don't persist error state - each recording is isolated
             return ""
+
         finally:
             # CRITICAL: Explicitly clean up recording state
-            del recording_state
+            if 'recording_state' in locals():
+                del recording_state
     
     def _create_clean_recording_state(self, audio: np.ndarray) -> dict:
-        """Create completely isolated state for this recording"""
-        
-        # Validate audio with no persistent state
-        if not self._validate_audio_isolated(audio):
-            raise ValueError("Invalid audio data")
-        
-        audio_duration = len(audio) / 16000.0
-        
-        # Completely isolated recording state
-        recording_state = {
-            'audio': audio.copy(),  # Isolated copy
-            'audio_duration': audio_duration,
-            'recording_id': f"{time.time()}_{self.session_transcription_count}",  # Unique ID
-            'start_time': time.perf_counter(),
-            'use_vad': False,  # NEVER use VAD to prevent state pollution
-            'beam_size': self.cfg.beam_size,
-            'temperature': self.cfg.temperature,
-            'language': self.cfg.language,
-        }
-        
-        logger.debug(f"Created clean recording state: {recording_state['recording_id']}")
-        return recording_state
+        """Create completely isolated state for this recording with enhanced validation"""
+
+        try:
+            # Import validation guard function
+            from .audio_enhanced import audio_validation_guard
+
+            # CRITICAL: Sanitize and validate audio data first
+            sanitized_audio = audio_validation_guard(audio, "ASR_StateCreation", allow_empty=False)
+
+            # Additional validation with ASR-specific checks
+            if not self._validate_audio_isolated(sanitized_audio):
+                raise ValueError("Audio failed ASR-specific validation")
+
+            audio_duration = len(sanitized_audio) / 16000.0
+
+            # Completely isolated recording state
+            recording_state = {
+                'audio': sanitized_audio,  # Use sanitized audio
+                'audio_duration': audio_duration,
+                'recording_id': f"{time.time()}_{self.session_transcription_count}",  # Unique ID
+                'start_time': time.perf_counter(),
+                'use_vad': False,  # NEVER use VAD to prevent state pollution
+                'beam_size': self.cfg.beam_size,
+                'temperature': self.cfg.temperature,
+                'language': self.cfg.language,
+                'audio_metadata': {
+                    'original_length': len(audio),
+                    'sanitized_length': len(sanitized_audio),
+                    'max_amplitude': float(np.max(np.abs(sanitized_audio))),
+                    'rms_energy': float(np.sqrt(np.mean(sanitized_audio ** 2))),
+                }
+            }
+
+            logger.debug(f"Created clean recording state: {recording_state['recording_id']} "
+                        f"({recording_state['audio_duration']:.2f}s)")
+            return recording_state
+
+        except Exception as e:
+            logger.error(f"Failed to create recording state: {e}")
+            raise ValueError(f"Cannot create valid recording state: {e}")
     
     def _validate_audio_isolated(self, audio: np.ndarray) -> bool:
-        """Validate audio with no persistent state changes"""
-        if audio is None or len(audio) == 0:
+        """
+        Enhanced audio validation with comprehensive checks.
+        Validates audio with no persistent state changes.
+        """
+        try:
+            # Import validation guard function
+            from .audio_enhanced import audio_validation_guard
+
+            # Use the comprehensive validation guard
+            validated_audio = audio_validation_guard(audio, "ASR_Validation", allow_empty=False)
+
+            # If we get here, audio passed validation
+            # Check for potential quality issues
+            max_amplitude = np.max(np.abs(validated_audio))
+
+            # Additional ASR-specific validations
+            if len(validated_audio) < 1600:  # Less than 0.1 seconds at 16kHz
+                logger.warning(f"Audio too short for reliable transcription: {len(validated_audio)} samples")
+                return False
+
+            # Check for mostly silent audio
+            energy = np.mean(validated_audio ** 2)
+            if energy < 1e-6:  # Very low energy threshold
+                logger.info("Audio appears to be silent or very quiet")
+                # Still return True - might be intentional silence
+
+            # Check for clipping (digital distortion)
+            clipped_samples = np.count_nonzero(np.abs(validated_audio) >= 0.99)
+            if clipped_samples > len(validated_audio) * 0.01:  # More than 1% clipped
+                logger.warning(f"Audio may be clipped: {clipped_samples} samples at maximum")
+
+            return True
+
+        except ValueError as e:
+            logger.error(f"Audio validation failed: {e}")
             return False
-        
-        if np.any(np.isnan(audio)) or np.any(np.isinf(audio)):
+        except Exception as e:
+            logger.error(f"Unexpected error in audio validation: {e}")
             return False
-        
-        # Amplitude check without modifying the original audio
-        max_amplitude = np.max(np.abs(audio))
-        if max_amplitude > 10.0:
-            logger.warning(f"High audio amplitude: {max_amplitude}")
-            # Don't modify the audio in place - let the caller handle it
-        
-        return True
+
+    def _check_buffer_integrity(self, recording_state: dict) -> bool:
+        """
+        Check buffer integrity and state consistency before transcription.
+
+        Args:
+            recording_state: The recording state dictionary to validate
+
+        Returns:
+            bool: True if buffer integrity is intact, False otherwise
+        """
+        try:
+            # Check required keys exist
+            required_keys = ['audio', 'recording_id', 'audio_duration', 'audio_metadata']
+            for key in required_keys:
+                if key not in recording_state:
+                    logger.error(f"Buffer integrity check failed: missing key '{key}'")
+                    return False
+
+            audio = recording_state['audio']
+            metadata = recording_state['audio_metadata']
+
+            # Verify audio data consistency
+            if not isinstance(audio, np.ndarray):
+                logger.error("Buffer integrity check failed: audio is not numpy array")
+                return False
+
+            # Check audio buffer bounds
+            if audio.size == 0:
+                logger.warning("Buffer integrity check: audio buffer is empty")
+                return False
+
+            # Verify metadata consistency
+            actual_length = len(audio)
+            if actual_length != metadata['sanitized_length']:
+                logger.error(f"Buffer integrity check failed: length mismatch - "
+                           f"actual: {actual_length}, metadata: {metadata['sanitized_length']}")
+                return False
+
+            # Check for buffer corruption (memory safety)
+            try:
+                # Basic memory bounds check
+                _ = audio[0]  # First element
+                _ = audio[-1]  # Last element
+
+                # Check if data is still valid (not corrupted)
+                current_max = np.max(np.abs(audio))
+                if abs(current_max - metadata['max_amplitude']) > 1e-6:
+                    logger.warning(f"Buffer integrity check: amplitude changed - "
+                                 f"original: {metadata['max_amplitude']:.6f}, "
+                                 f"current: {current_max:.6f}")
+
+            except (IndexError, ValueError, FloatingPointError) as e:
+                logger.error(f"Buffer integrity check failed: memory corruption detected - {e}")
+                return False
+
+            # Check processing state consistency
+            if self._is_processing and hasattr(self, '_current_recording_id'):
+                if getattr(self, '_current_recording_id') != recording_state['recording_id']:
+                    logger.warning("Buffer integrity check: concurrent processing detected")
+
+            logger.debug(f"Buffer integrity check passed for recording: {recording_state['recording_id']}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Buffer integrity check failed with exception: {e}")
+            return False
     
     def _perform_isolated_transcription(self, recording_state: dict) -> str:
         """Perform transcription with complete isolation"""

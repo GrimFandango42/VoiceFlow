@@ -20,8 +20,19 @@ from .utils import is_admin, nvidia_smi_info
 from .textproc import apply_code_mode
 import keyboard
 from .tray import TrayController
+from .enhanced_tray import EnhancedTrayController, update_tray_status
 from .logging_setup import AsyncLogger, default_log_dir
 from .settings import load_config, save_config
+
+# Visual indicators integration
+try:
+    from .visual_indicators import (
+        show_listening, show_processing, show_transcribing, 
+        show_complete, show_error, hide_status
+    )
+    VISUAL_INDICATORS_AVAILABLE = True
+except ImportError:
+    VISUAL_INDICATORS_AVAILABLE = False
 
 
 class EnhancedTranscriptionManager:
@@ -118,12 +129,16 @@ class EnhancedApp:
         self.code_mode = cfg.code_mode_default
         self._log = logging.getLogger("localflow")
         
+        # Visual indicators integration
+        self.tray_controller: Optional[EnhancedTrayController] = None
+        self.visual_indicators_enabled = getattr(cfg, 'visual_indicators_enabled', True)
+        
         # Long conversation tracking
         self._session_start_time = time.time()
         self._total_transcription_time = 0.0
         self._session_word_count = 0
         
-        print("[EnhancedApp] Initialized with enhanced thread management")
+        print(f"[EnhancedApp] Initialized with enhanced thread management and visual indicators {'enabled' if self.visual_indicators_enabled else 'disabled'}")
 
     def start_recording(self):
         """Enhanced recording start with better error handling"""
@@ -131,6 +146,13 @@ class EnhancedApp:
             if not self.rec.is_recording():
                 print("[MIC] Listening...")
                 self._log.info("recording_started")
+                
+                # Update visual indicators - listening status
+                if self.visual_indicators_enabled:
+                    update_tray_status(self.tray_controller, "listening", True)
+                    if VISUAL_INDICATORS_AVAILABLE:
+                        show_listening()
+                
                 self.rec.start()
                 
                 # Monitor for very long recordings
@@ -142,6 +164,12 @@ class EnhancedApp:
             print(f"[MIC] Audio start error: {e}")
             traceback.print_exc()
             self._log.exception("audio_start_error: %s", e)
+            
+            # Update visual indicators - error status
+            if self.visual_indicators_enabled:
+                update_tray_status(self.tray_controller, "error", False, f"Audio error: {e}")
+                if VISUAL_INDICATORS_AVAILABLE:
+                    show_error(f"Audio error: {e}")
 
     def stop_recording(self):
         """Enhanced recording stop with improved transcription handling"""
@@ -149,11 +177,22 @@ class EnhancedApp:
             audio = self.rec.stop()
             audio_duration = len(audio) / self.cfg.sample_rate if len(audio) > 0 else 0
             
+            # Update visual indicators - processing status
+            if self.visual_indicators_enabled:
+                update_tray_status(self.tray_controller, "processing", False)
+                if VISUAL_INDICATORS_AVAILABLE:
+                    show_processing()
+            
             self._log.info("recording_stopped duration=%.2f samples=%d", 
                           audio_duration, len(audio))
             
             if audio.size == 0:
                 print("[MIC] No audio captured")
+                # Update visual indicators - back to idle
+                if self.visual_indicators_enabled:
+                    update_tray_status(self.tray_controller, "idle", False)
+                    if VISUAL_INDICATORS_AVAILABLE:
+                        hide_status()
                 return
             
             print(f"[MIC] Captured {audio_duration:.2f}s of audio ({len(audio)} samples)")
@@ -171,11 +210,23 @@ class EnhancedApp:
             print(f"[MIC] Audio stop error: {e}")
             traceback.print_exc()
             self._log.exception("audio_stop_error: %s", e)
+            
+            # Update visual indicators - error status
+            if self.visual_indicators_enabled:
+                update_tray_status(self.tray_controller, "error", False, f"Stop error: {e}")
+                if VISUAL_INDICATORS_AVAILABLE:
+                    show_error(f"Stop error: {e}")
 
     def _perform_transcription(self, audio_data: np.ndarray) -> str:
         """Perform actual transcription with enhanced error handling"""
         try:
             start_time = time.perf_counter()
+            
+            # Update visual indicators - transcribing status
+            if self.visual_indicators_enabled:
+                update_tray_status(self.tray_controller, "transcribing", False)
+                if VISUAL_INDICATORS_AVAILABLE:
+                    show_transcribing()
             
             # Transcribe
             text = self.asr.transcribe(audio_data)
@@ -203,6 +254,19 @@ class EnhancedApp:
                 self.injector.inject(text)
                 self._log.info("transcribed chars=%d words=%d seconds=%.3f", 
                              len(text), len(text.split()), transcription_time)
+                
+                # Update visual indicators - completion with transcription result
+                if self.visual_indicators_enabled:
+                    truncated_text = text[:50] + "..." if len(text) > 50 else text
+                    update_tray_status(self.tray_controller, "complete", False, f"Transcribed: {truncated_text}")
+                    if VISUAL_INDICATORS_AVAILABLE:
+                        show_complete(f"Transcribed: {truncated_text}")
+            else:
+                # Update visual indicators - back to idle for empty transcription
+                if self.visual_indicators_enabled:
+                    update_tray_status(self.tray_controller, "idle", False)
+                    if VISUAL_INDICATORS_AVAILABLE:
+                        hide_status()
             
             return text
             
@@ -210,6 +274,13 @@ class EnhancedApp:
             print(f"[TRANSCRIPTION] Error: {e}")
             traceback.print_exc()
             self._log.exception("transcription_error: %s", e)
+            
+            # Update visual indicators - transcription error
+            if self.visual_indicators_enabled:
+                update_tray_status(self.tray_controller, "error", False, f"Transcription error: {e}")
+                if VISUAL_INDICATORS_AVAILABLE:
+                    show_error(f"Transcription error: {e}")
+            
             return ""
     
     def shutdown(self):
@@ -255,15 +326,23 @@ def main(argv=None):
 
     app = EnhancedApp(cfg)
 
-    # Enhanced tray support
+    # Enhanced tray support with visual indicators
     tray = None
     if cfg.use_tray:
         try:
-            tray = TrayController(app)
+            tray = EnhancedTrayController(app)
+            app.tray_controller = tray  # Connect to app for status updates
             tray.start()
-            print("Enhanced tray started.")
+            print("Enhanced tray with visual indicators started.")
         except Exception as e:
-            print(f"Tray failed to start: {e}")
+            print(f"Enhanced tray failed to start: {e}")
+            # Fallback to basic tray
+            try:
+                tray = TrayController(app)
+                tray.start()
+                print("Basic tray started.")
+            except Exception as e2:
+                print(f"Basic tray also failed: {e2}")
 
     # Enhanced hotkey toggles with better feedback
     def toggle_code_mode():
@@ -298,18 +377,20 @@ def main(argv=None):
     
     try:
         listener.start()
-        print("\n" + "="*60)
-        print("VoiceFlow Enhanced - Long Conversation Support")
-        print("="*60)
+        print("\n" + "="*70)
+        print("VoiceFlow Enhanced - Visual Indicators & Long Conversation Support")
+        print("="*70)
         print(f"Hotkey: {'Ctrl+' if cfg.hotkey_ctrl else ''}"
               f"{'Shift+' if cfg.hotkey_shift else ''}"
               f"{'Alt+' if cfg.hotkey_alt else ''}"
               f"{cfg.hotkey_key.upper() if cfg.hotkey_key else '[Modifiers Only]'}")
+        print("Visual Feedback: Bottom-screen overlay + Dynamic tray icon")
         print("Tail buffer: 1.0s (continues after key release)")
         print("Max recording: 5 minutes")
         print("Thread management: Enhanced")
         print("Memory: Bounded ring buffer")
-        print("="*60)
+        print(f"Visual indicators: {'Enabled' if app.visual_indicators_enabled else 'Disabled'}")
+        print("="*70)
         
         listener.run_forever()
         
