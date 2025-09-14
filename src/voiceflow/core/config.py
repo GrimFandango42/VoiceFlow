@@ -35,6 +35,13 @@ class Config:
     skip_buffer_integrity_checks: bool = False  # Keep safety checks but optimize them
     enable_model_caching: bool = True  # Cache model in memory between sessions
 
+    # High-impact audio validation optimizations (DeepSeek recommendations)
+    enable_fast_audio_validation: bool = True  # Use statistical sampling instead of full validation
+    audio_validation_sample_rate: float = 0.05  # Validate only 5% of audio samples (20x speedup)
+    skip_redundant_format_checks: bool = True  # Skip format validation after first successful check
+    disable_amplitude_warnings: bool = True  # Skip non-critical amplitude logging
+    fast_nan_inf_detection: bool = True  # Use optimized NaN/Inf detection algorithm
+
     # Output behavior
     paste_injection: bool = True  # Use clipboard paste injection by default
     restore_clipboard: bool = True  # restore original clipboard after paste

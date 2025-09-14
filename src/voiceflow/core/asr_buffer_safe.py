@@ -217,8 +217,8 @@ class BufferSafeWhisperASR:
             # Import validation guard function
             from voiceflow.core.audio_enhanced import audio_validation_guard
 
-            # CRITICAL: Sanitize and validate audio data first
-            sanitized_audio = audio_validation_guard(audio, "ASR_StateCreation", allow_empty=False)
+            # CRITICAL: Sanitize and validate audio data first (with performance config)
+            sanitized_audio = audio_validation_guard(audio, "ASR_StateCreation", allow_empty=False, cfg=self.cfg)
 
             # Additional validation with ASR-specific checks
             if not self._validate_audio_isolated(sanitized_audio):
@@ -261,8 +261,8 @@ class BufferSafeWhisperASR:
             # Import validation guard function
             from voiceflow.core.audio_enhanced import audio_validation_guard
 
-            # Use the comprehensive validation guard
-            validated_audio = audio_validation_guard(audio, "ASR_Validation", allow_empty=False)
+            # Use the comprehensive validation guard (with performance config)
+            validated_audio = audio_validation_guard(audio, "ASR_Validation", allow_empty=False, cfg=self.cfg)
 
             # If we get here, audio passed validation
             # Check for potential quality issues
