@@ -54,10 +54,10 @@ def demo_basic_positioning():
             if overlay.window:
                 overlay.window.destroy()
 
-            print(f"  ✓ {description} position works")
+            print(f"  [OK] {description} position works")
 
         except Exception as e:
-            print(f"  ✗ {description} position failed: {e}")
+            print(f"  [FAIL] {description} position failed: {e}")
 
         time.sleep(0.5)
 
@@ -92,10 +92,10 @@ def demo_size_options():
             if overlay.window:
                 overlay.window.destroy()
 
-            print(f"  ✓ {description} size works")
+            print(f"  [OK] {description} size works")
 
         except Exception as e:
-            print(f"  ✗ {description} size failed: {e}")
+            print(f"  [FAIL] {description} size failed: {e}")
 
         time.sleep(0.5)
 
@@ -132,10 +132,10 @@ def demo_color_themes():
             if overlay.window:
                 overlay.window.destroy()
 
-            print(f"  ✓ {description} theme works")
+            print(f"  [OK] {description} theme works")
 
         except Exception as e:
-            print(f"  ✗ {description} theme failed: {e}")
+            print(f"  [FAIL] {description} theme failed: {e}")
 
         time.sleep(0.5)
 
@@ -191,7 +191,7 @@ def demo_configuration_persistence():
     config1.config.opacity = 0.8
     config1.save_config()
 
-    print("✓ Saved custom configuration")
+    print("[OK] Saved custom configuration")
 
     # Create second configuration manager (should load saved settings)
     config2 = VisualConfigManager()
@@ -202,7 +202,7 @@ def demo_configuration_persistence():
     assert config2.config.theme == ColorTheme.DARK_MODE
     assert config2.config.opacity == 0.8
 
-    print("✓ Configuration loaded correctly")
+    print("[OK] Configuration loaded correctly")
 
     # Test the loaded configuration
     try:
@@ -215,7 +215,7 @@ def demo_configuration_persistence():
         if overlay.window:
             overlay.window.destroy()
 
-        print("✓ Loaded configuration works correctly")
+        print("[OK] Loaded configuration works correctly")
 
     except Exception as e:
         print(f"✗ Loaded configuration failed: {e}")
@@ -227,7 +227,7 @@ def reset_to_defaults():
     config_manager = VisualConfigManager()
     config_manager.reset_to_defaults()
 
-    print("✓ Configuration reset to defaults")
+    print("[OK] Configuration reset to defaults")
 
 def main():
     """Run all visual configuration demos"""
@@ -244,13 +244,13 @@ def main():
         reset_to_defaults()
 
         print("\n" + "=" * 50)
-        print("🎉 All visual configuration demos completed successfully!")
+        print("[SUCCESS] All visual configuration demos completed successfully!")
         print("\nKey Features Demonstrated:")
-        print("  ✓ Configurable overlay positioning (5 positions)")
-        print("  ✓ Multiple size options (4 sizes)")
-        print("  ✓ Color theme support (5 themes)")
-        print("  ✓ Accessibility features (font, contrast, opacity)")
-        print("  ✓ Configuration persistence (save/load)")
+        print("  [OK] Configurable overlay positioning (5 positions)")
+        print("  [OK] Multiple size options (4 sizes)")
+        print("  [OK] Color theme support (5 themes)")
+        print("  [OK] Accessibility features (font, contrast, opacity)")
+        print("  [OK] Configuration persistence (save/load)")
         print()
         print("Ready for production use!")
 
