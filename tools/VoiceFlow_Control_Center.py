@@ -155,10 +155,10 @@ class VoiceFlowControlCenter:
 
         # Check if main files exist
         critical_files = [
-            "localflow/cli_enhanced.py",
-            "requirements_windows.txt",
-            "quick_smoke_test.py",
-            "setup_voiceflow.py"
+            "src/voiceflow/ui/cli_enhanced.py",
+            "pyproject.toml",
+            "scripts/dev/quick_smoke_test.py",
+            "scripts/setup/setup_voiceflow.py"
         ]
 
         missing_files = []
@@ -236,36 +236,38 @@ class VoiceFlowControlCenter:
         # First run a quick health check
         def after_health_check():
             # Then launch VoiceFlow
-            command = [sys.executable, "-m", "localflow.cli_enhanced"]
+            command = [sys.executable, "-m", "voiceflow.ui.cli_enhanced"]
+            env = os.environ.copy()
+            env["PYTHONPATH"] = "src"
             self.run_command_async(command, "VoiceFlow Application")
 
         # Run quick health check first
-        command = [sys.executable, "quick_smoke_test.py"]
+        command = [sys.executable, "scripts/dev/quick_smoke_test.py"]
         self.run_command_async(command, "Pre-launch Health Check", after_health_check)
 
     def run_health_check(self):
         """Run quick health check"""
-        command = [sys.executable, "quick_smoke_test.py"]
+        command = [sys.executable, "scripts/dev/quick_smoke_test.py"]
         self.run_command_async(command, "Health Check")
 
     def run_setup(self):
         """Run setup and installation"""
-        command = [sys.executable, "setup_voiceflow.py"]
+        command = [sys.executable, "scripts/setup/setup_voiceflow.py"]
         self.run_command_async(command, "Setup & Installation")
 
     def run_critical_tests(self):
         """Run critical tests only"""
-        command = [sys.executable, "parallel_test_runner.py", "--priority", "critical"]
+        command = [sys.executable, "scripts/dev/parallel_test_runner.py", "--priority", "critical"]
         self.run_command_async(command, "Critical Tests")
 
     def run_full_tests(self):
         """Run full test suite"""
-        command = [sys.executable, "parallel_test_runner.py"]
+        command = [sys.executable, "scripts/dev/parallel_test_runner.py"]
         self.run_command_async(command, "Full Test Suite")
 
     def run_visual_demo(self):
         """Run visual configuration demo"""
-        command = [sys.executable, "demo_visual_config.py"]
+        command = [sys.executable, "scripts/dev/demo_visual_config.py"]
         self.run_command_async(command, "Visual Configuration Demo")
 
     def stop_current_process(self):
