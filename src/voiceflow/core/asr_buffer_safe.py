@@ -212,7 +212,7 @@ class BufferSafeWhisperASR:
 
         try:
             # Import validation guard function
-            from voiceflow.utils.audio_enhanced import audio_validation_guard
+            from voiceflow.core.audio_enhanced import audio_validation_guard
 
             # CRITICAL: Sanitize and validate audio data first
             sanitized_audio = audio_validation_guard(audio, "ASR_StateCreation", allow_empty=False)
@@ -256,7 +256,7 @@ class BufferSafeWhisperASR:
         """
         try:
             # Import validation guard function
-            from voiceflow.utils.audio_enhanced import audio_validation_guard
+            from voiceflow.core.audio_enhanced import audio_validation_guard
 
             # Use the comprehensive validation guard
             validated_audio = audio_validation_guard(audio, "ASR_Validation", allow_empty=False)

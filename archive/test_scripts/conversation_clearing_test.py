@@ -5,8 +5,8 @@ Tests the fixes for model reinitialization and long conversation handling
 
 import time
 import numpy as np
-from localflow.config import Config
-from localflow.asr_buffer_safe import BufferSafeWhisperASR
+from voiceflow.core.config import Config
+from voiceflow.core.asr_buffer_safe import BufferSafeWhisperASR
 
 class ConversationClearingTester:
     """Test conversation clearing and model stability fixes"""

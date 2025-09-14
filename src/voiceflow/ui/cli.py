@@ -9,15 +9,15 @@ import logging
 import numpy as np
 
 from voiceflow.core.config import Config
-from voiceflow.utils.audio_enhanced import EnhancedAudioRecorder as AudioRecorder
-from voiceflow.utils.asr_buffer_safe import BufferSafeWhisperASR as WhisperASR
-from voiceflow.utils.inject import ClipboardInjector
-from voiceflow.utils.hotkeys import PTTHotkeyListener
+from voiceflow.core.audio_enhanced import EnhancedAudioRecorder as AudioRecorder
+from voiceflow.core.asr_buffer_safe import BufferSafeWhisperASR as WhisperASR
+from voiceflow.integrations.inject import ClipboardInjector
+from voiceflow.ui.hotkeys import PTTHotkeyListener
 from voiceflow.utils.utils import is_admin, nvidia_smi_info
-from voiceflow.utils.textproc import apply_code_mode
+from voiceflow.core.textproc import apply_code_mode
 import keyboard
-from voiceflow.utils.tray import TrayController
-from voiceflow.utils.logging_setup import AsyncLogger, default_log_dir
+from voiceflow.ui.tray import TrayController
+from voiceflow.core.logging_setup import AsyncLogger, default_log_dir
 from voiceflow.utils.settings import load_config, save_config
 
 

@@ -7,9 +7,9 @@ import time
 import numpy as np
 import threading
 from typing import Dict, List, Any
-from localflow.config import Config
-from localflow.audio_enhanced import EnhancedAudioRecorder
-from localflow.asr_buffer_safe import BufferSafeWhisperASR
+from voiceflow.core.config import Config
+from voiceflow.core.audio_enhanced import EnhancedAudioRecorder
+from voiceflow.core.asr_buffer_safe import BufferSafeWhisperASR
 
 class ComprehensiveBufferTester:
     """Comprehensive testing of VoiceFlow buffer system"""
