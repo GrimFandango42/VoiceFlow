@@ -21,8 +21,8 @@ class Config:
     max_batch_size: int = 4  # Process multiple segments together
     enable_streaming: bool = True  # Enable real-time streaming feedback
 
-    # ASR - ULTRA Performance Mode (maximum speed with accuracy tweaks)
-    model_name: str = "tiny.en"  # Fastest model - accuracy improved through other optimizations
+    # ASR - BALANCED Performance Mode (speed + accuracy for long sentences)
+    model_name: str = "base.en"  # Better accuracy while still fast (avoids 3s delays)
     device: str = "cpu"  # "cuda" | "cpu"
     compute_type: str = "int8"  # Optimized for CPU inference
     vad_filter: bool = False  # CRITICAL FIX: VAD was removing all audio after 2 recordings
@@ -39,6 +39,11 @@ class Config:
     # ULTRA-AGGRESSIVE performance settings
     ultra_fast_mode: bool = True  # Enable most aggressive optimizations
     preload_model_on_startup: bool = True  # Load model immediately to eliminate first-sentence delay
+
+    # Long sentence optimizations (for 3+ second recordings)
+    chunk_size_seconds: float = 5.0  # Process in 5-second chunks for long audio
+    parallel_processing: bool = False  # Can't parallelize Whisper on same model
+    aggressive_segment_merge: bool = True  # Merge segments aggressively to reduce overhead
 
     # Performance-first optimizations
     max_transcriptions_before_reload: int = 100  # Reduce model reloads from 20 to 100

@@ -343,10 +343,12 @@ class BoundedRingBuffer:
                 ])
     
     def clear(self):
-        """Clear the buffer"""
+        """Clear the buffer AND zero out data to prevent corruption"""
         with self.lock:
             self.write_pos = 0
             self.samples_written = 0
+            # CRITICAL: Zero out the buffer to prevent old data bleeding through
+            self.buffer.fill(0.0)
     
     def get_duration_seconds(self) -> float:
         """Get current data duration in seconds"""
@@ -446,10 +448,10 @@ class EnhancedAudioRecorder:
         """Start recording with pre-buffer integration"""
         if self._recording:
             return
-        
+
         print("[AudioRecorder] Starting enhanced recording with pre-buffer...")
-        
-        # CRITICAL FIX: Always clear main buffer at start to prevent accumulation
+
+        # CRITICAL FIX: Clear main buffer before starting to prevent old data corruption
         self._ring_buffer.clear()
         
         # Start continuous recording if not already running
