@@ -1,124 +1,225 @@
-# VoiceFlow / LocalFlow (Windows)
+# VoiceFlow
 
-Local, push‑to‑talk speech‑to‑text for Windows. This repo includes a minimal “LocalFlow” experience (hold a hotkey, speak, release to paste) and a fuller “VoiceFlow” application with a modular core and optional tray UI.
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](https://pytest.org/)
 
-This project is intended for personal use and experimentation. It is not productized; expect rough edges. If you want to fork and adapt it, the code is structured to make that practical.
+**VoiceFlow** is a modern AI-powered voice transcription system that provides real-time speech-to-text conversion with visual feedback and seamless system integration.
 
-License: MIT (see `LICENSE`).
+## ✨ Features
 
-## Status
+- **🎤 Real-time Transcription**: High-accuracy speech-to-text using OpenAI Whisper
+- **🔍 Visual Feedback**: Bottom-screen overlay with transcription status (Wispr Flow style)
+- **🎯 System Tray Integration**: Minimize to system tray with dynamic status indicators
+- **⌨️ Smart Text Injection**: Automatic text insertion with configurable hotkeys
+- **🎨 Customizable UI**: Configurable themes, positions, and visual indicators
+- **🔧 Advanced Configuration**: Comprehensive settings for audio, processing, and UI
+- **🚀 Performance Optimized**: Efficient audio processing with minimal resource usage
+- **🛡️ Robust Error Handling**: Comprehensive error recovery and validation
 
-- Scope: Windows‑first, personal/experimental use.
-- Models: Uses faster‑whisper (CTRANSLATE2) locally; first run downloads the selected model.
-- Hardware: Works on CPU; performs best with NVIDIA CUDA (fp16).
-- Stability: The core LocalFlow path is stable for day‑to‑day personal usage; broader Windows integration (tray + advanced flows) is still evolving.
+## 🚀 Quick Start
 
-## Core Features
+### Installation
 
-- Push‑to‑talk dictation: hold a hotkey to capture, release to transcribe and paste/type into the focused app.
-- Code mode: optional spoken‑symbol mapping (e.g., “open bracket” → `[`), with simple spacing cleanup.
-- Injection modes: paste (clipboard + shortcut) or direct typing; clipboard can be restored after paste.
-- Tray toggles: optional system tray UI for changing PTT presets and toggles (if `pystray` + `Pillow` are installed).
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/voiceflow.git
+cd voiceflow
 
-## What’s Tested (High Level)
+# Install with pip (recommended)
+pip install -e .
 
-- Unit tests (default):
-  - Text processing (spoken symbols → characters)
-  - Injection sanitization and rate‑limiting
-  - Entry points (lite/debug/main) import and call patterns
-  - Streaming transcriber worker behavior (dummy model)
-- Integration/Windows tests (opt‑in):
-  - App orchestration, hotkey registration, clipboard behavior
-  - System tray menu wiring and Windows helpers
-  - Windows APIs and process management (require Windows context/admin)
-
-By default `pytest -q` runs the fast unit set. Integration and Windows tests are grouped separately and are not run by default.
-
-## Quick Start (LocalFlow)
-
-LocalFlow is the minimal experience focused on personal dictation.
-
-1) Install (Windows)
-
-- Double‑click `LAUNCH_LOCALFLOW.bat` (creates `venv`, installs deps, runs app), or:
-
-```powershell
-py -3 -m venv venv
-venv\Scripts\python -m pip install --upgrade pip
-venv\Scripts\python -m pip install -r requirements-localflow.txt -r requirements-dev.txt
-venv\Scripts\python -m localflow.cli
+# Or install from PyPI (when available)
+pip install voiceflow
 ```
 
-2) Use
+### Basic Usage
 
-- Hold `Ctrl+Shift+Space` to speak; release to transcribe and paste.
-- Tray (optional): if `pystray`/`Pillow` are installed, a tray icon exposes presets (e.g., switch to `Ctrl+Alt` chord) and toggles.
+```bash
+# Launch with system tray (recommended)
+voiceflow-tray
 
-3) Configure
+# Or launch in terminal mode
+voiceflow
 
-- Edit `localflow/config.py` or use the tray presets.
-- Config is also saved under `%LOCALAPPDATA%\LocalFlow\config.json` when you change toggles.
-- Notable options:
-  - `model_name`: `small.en` by default; consider `medium.en` for quality.
-  - `device` / `compute_type`: `cuda` + `float16` for NVIDIA; fallback to `cpu` works with `int8/float32`.
-  - `paste_injection`, `paste_shortcut`, `press_enter_after_paste`
-  - `code_mode_default`, `code_mode_lowercase`
-  - `type_if_len_le`: prefer typing for short outputs to reduce clipboard exposure
-
-## Quick Start (VoiceFlow app)
-
-- Production: `python voiceflow_main.py` (or run via system tray with `voiceflow_tray.py`)
-- Lite: `python voiceflow_lite.py` (CPU‑friendly defaults)
-- Debug: `python voiceflow_debug.py` (verbose logging; streaming enabled)
-
-## Build (Optional)
-
-You can package a standalone Windows executable using PyInstaller.
-
-Prerequisites:
-- Windows 10/11, Python 3.9+ (3.10–3.12 recommended)
-- Visual C++ Build Tools (for some wheels, if needed)
-
-Commands (from repo root):
-
-```powershell
-py -3 -m venv venv
-venv\Scripts\python -m pip install --upgrade pip
-venv\Scripts\python -m pip install -r requirements-localflow.txt
-venv\Scripts\python -m pip install pyinstaller
-
-# Example: build VoiceFlow tray app
-venv\Scripts\pyinstaller -F -n VoiceFlow-Tray voiceflow_tray.py
+# Setup and configuration wizard
+voiceflow-setup
 ```
 
-Or use the provided scripts under `scripts/` (e.g., `scripts/BUILD-Windows-Executable.bat`).
+### Windows Quick Launch
 
-## Privacy / Security
+For Windows users, use the convenient batch launchers:
 
-- Transcription runs locally after first model download.
-- Clipboard injection is convenient but exposes clipboard briefly; set `type_if_len_le` > 0 to prefer typing for short texts.
-- Injection sanitizes control characters and truncates excessively long payloads by default.
+```batch
+# Double-click to launch
+tools/launchers/LAUNCH_TRAY.bat        # System tray mode
+tools/launchers/LAUNCH_TERMINAL.bat    # Terminal mode
+tools/launchers/LAUNCH_CONTROL_CENTER.bat  # Control center GUI
+```
 
-## Development Notes
+## 📊 Visual Status System
 
-- Structure:
-  - `localflow/`: minimal Windows PTT dictation app
-  - `voiceflow/`: modular application (core, ui, app)
-  - Entry points: `voiceflow_main.py`, `voiceflow_lite.py`, `voiceflow_debug.py`, `voiceflow_tray.py`
-  - `tests/`: unit (default) and integration suites
-  - `docs/`: technical overview and notes (see `docs/README.md`)
+VoiceFlow provides intuitive visual feedback through color-coded indicators:
 
-- Tests
-  - Default (unit): `pytest -q` (runs `tests/unit`)
-  - Integration/Windows: `pytest tests/integration -q` (heavier; may require admin and Windows context)
+| Color | Status | Description |
+|-------|--------|-------------|
+| 🔵 Blue | Ready | System ready for voice input |
+| 🟠 Orange | Listening | Recording audio (hold `Ctrl+Shift`) |
+| 🟢 Green | Processing | Transcribing and processing audio |
+| 🔴 Red | Error | Error state or system issue |
 
-- Forking tips
-  - Start with LocalFlow for a simple PTT pipeline (`localflow/cli.py`, `localflow/asr.py`, `localflow/inject.py`).
-  - For deeper changes, see `voiceflow/core/` and `voiceflow/app.py`.
-  - Add markers and keep your unit tests fast; keep Windows/UI tests separate.
+## 🎯 Default Controls
 
-## Known Limitations
+- **Voice Activation**: `Ctrl + Shift` (press and hold)
+- **System Tray**: Right-click for settings and options
+- **Visual Overlay**: Bottom-center screen display
+- **Auto Text Injection**: Automatic paste after transcription
 
-- First run downloads the selected model; `medium.en` can be ~1–2 GB.
-- Some Windows integration tests require admin privileges and real devices.
-- The tray/UI is optional; focus is on a reliable PTT path.
+## 🔧 Configuration
+
+VoiceFlow is highly configurable through multiple interfaces:
+
+### System Tray Menu
+- Toggle code mode for programming
+- Switch between typing and paste injection
+- Configure hotkey combinations
+- Adjust visual indicator settings
+
+### Configuration Files
+- **Main Config**: Automatic creation and management
+- **Visual Settings**: Themes, positions, and display options
+- **Audio Settings**: Sample rates, devices, and processing options
+
+### Environment Variables
+```bash
+export VOICEFLOW_MODEL="base.en"     # Whisper model
+export VOICEFLOW_DEVICE="cuda"       # Processing device
+export VOICEFLOW_LOG_LEVEL="INFO"    # Logging level
+```
+
+## 🏗️ Architecture
+
+VoiceFlow follows modern Python project standards with a clean, modular architecture:
+
+```
+src/voiceflow/
+├── core/           # Audio processing and transcription
+├── ui/             # User interface components
+├── integrations/   # System integrations and hotkeys
+└── utils/          # Utilities and helpers
+```
+
+### Core Components
+
+- **Audio Processing**: Real-time audio capture and preprocessing
+- **ASR Engine**: OpenAI Whisper integration with optimization
+- **Text Processing**: Smart text formatting and injection
+- **Visual System**: Modern overlay with customizable themes
+- **System Integration**: Hotkeys, clipboard, and tray management
+
+## 🧪 Testing
+
+VoiceFlow includes comprehensive testing:
+
+```bash
+# Run all tests
+pytest
+
+# Run specific test categories
+pytest tests/unit          # Unit tests
+pytest tests/integration   # Integration tests
+pytest tests/e2e          # End-to-end tests
+
+# Run with coverage
+pytest --cov=src/voiceflow --cov-report=html
+
+# Quick smoke test
+python scripts/dev/quick_smoke_test.py
+```
+
+## 📚 Documentation
+
+- **[Installation Guide](docs/installation.md)**: Detailed setup instructions
+- **[User Guide](docs/user-guide.md)**: Complete usage documentation
+- **[Developer Guide](docs/developer-guide.md)**: Development and contribution info
+- **[API Reference](docs/api/)**: Comprehensive API documentation
+
+## 🤝 Contributing
+
+We welcome contributions! Please see our [Contributing Guide](docs/CONTRIBUTING.md) for details.
+
+### Development Setup
+
+```bash
+# Clone and setup development environment
+git clone https://github.com/yourusername/voiceflow.git
+cd voiceflow
+
+# Install with development dependencies
+pip install -e ".[dev,test,docs]"
+
+# Install pre-commit hooks
+pre-commit install
+
+# Run development checks
+ruff check src tests      # Linting
+mypy src                  # Type checking
+pytest tests/            # Testing
+```
+
+## 📋 Requirements
+
+- **Python**: 3.9 or higher
+- **Operating System**: Windows (primary), Linux/macOS (community support)
+- **Hardware**:
+  - Microphone for voice input
+  - 4GB+ RAM recommended
+  - GPU optional (CUDA support for faster processing)
+
+### Dependencies
+
+Core dependencies are automatically managed through `pyproject.toml`:
+
+- **Audio**: `sounddevice`, `pyaudio`, `pydub`
+- **AI/ML**: `faster-whisper`, `torch`, `ctranslate2`
+- **UI**: `pystray`, `tkinter`, `Pillow`
+- **System**: `keyboard`, `pyperclip`
+
+## 🚨 Troubleshooting
+
+### Common Issues
+
+**Audio not detected**:
+```bash
+python scripts/dev/list_audio_devices.py  # List available devices
+```
+
+**Performance issues**:
+```bash
+python scripts/dev/health_check.py        # System health check
+```
+
+**Permission errors**:
+- Run as administrator (Windows)
+- Check microphone permissions
+
+### Getting Help
+
+- 📖 Check our [Documentation](docs/)
+- 🐛 [Report Issues](https://github.com/yourusername/voiceflow/issues)
+- 💬 [Discussions](https://github.com/yourusername/voiceflow/discussions)
+
+## 📜 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- [OpenAI Whisper](https://github.com/openai/whisper) for the speech recognition engine
+- [faster-whisper](https://github.com/guillaumekln/faster-whisper) for optimized inference
+- [Wispr Flow](https://www.wisprapp.com) for visual design inspiration
+
+---
+
+**VoiceFlow** - *Transforming voice to text with modern AI*

@@ -1,0 +1,116 @@
+{
+  "timestamp": "2025-09-13 21:06:40",
+  "system": {
+    "platform": "Windows-11-10.0.26100-SP0",
+    "python_version": "3.13.5",
+    "working_directory": "C:\\AI_Projects\\VoiceFlow"
+  },
+  "system_checks": [
+    {
+      "name": "Python Version",
+      "passed": true,
+      "message": "Python 3.13.5 (OK)"
+    },
+    {
+      "name": "Pip Available",
+      "passed": true,
+      "message": "pip available: pip 25.1.1 from C:\\Users\\Nithin\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\pip (python 3.13)"
+    },
+    {
+      "name": "Virtual Environment",
+      "passed": false,
+      "message": "Not in virtual environment (recommended for isolation)"
+    },
+    {
+      "name": "Windows Specific",
+      "passed": true,
+      "message": "Windows environment OK"
+    },
+    {
+      "name": "GPU Availability",
+      "passed": true,
+      "message": "NVIDIA GPU available: NVIDIA-SMI 560.94                 Driver Version: 560.94         CUDA Version: 12.6"
+    },
+    {
+      "name": "Audio System",
+      "passed": true,
+      "message": "Audio OK: Microphone (3- fifine Microphon (2 ch, 44100.0Hz)"
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "RealtimeSTT",
+      "installed": true,
+      "version": "unknown",
+      "error": ""
+    },
+    {
+      "name": "pyautogui",
+      "installed": true,
+      "version": "0.9.54",
+      "error": ""
+    },
+    {
+      "name": "keyboard",
+      "installed": true,
+      "version": "unknown",
+      "error": ""
+    },
+    {
+      "name": "pystray",
+      "installed": true,
+      "version": "unknown",
+      "error": ""
+    },
+    {
+      "name": "Pillow",
+      "installed": false,
+      "version": "",
+      "error": "No module named 'Pillow'"
+    },
+    {
+      "name": "requests",
+      "installed": true,
+      "version": "2.32.3",
+      "error": ""
+    },
+    {
+      "name": "selenium",
+      "installed": true,
+      "version": "4.33.0",
+      "error": ""
+    },
+    {
+      "name": "webdriver-manager",
+      "installed": false,
+      "version": "",
+      "error": "No module named 'webdriver-manager'"
+    },
+    {
+      "name": "beautifulsoup4",
+      "installed": false,
+      "version": "",
+      "error": "No module named 'beautifulsoup4'"
+    },
+    {
+      "name": "lxml",
+      "installed": true,
+      "version": "5.4.0",
+      "error": ""
+    },
+    {
+      "name": "pywin32",
+      "installed": true,
+      "version": "installed",
+      "error": ""
+    }
+  ],
+  "issues_found": [],
+  "fixes_applied": [],
+  "summary": {
+    "total_dependencies": 11,
+    "installed_dependencies": 8,
+    "issues_count": 0,
+    "fixes_count": 0
+  }
+}
