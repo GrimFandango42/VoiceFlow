@@ -43,7 +43,7 @@ class BottomScreenIndicator:
         self._setup_window()
 
     def _update_visual_settings(self):
-        \"\"\"Update visual settings from configuration\"\"\"
+        """Update visual settings from configuration"""
         self.width, self.height = self.config_manager.get_overlay_dimensions()
         colors = self.config_manager.get_color_scheme()
 
