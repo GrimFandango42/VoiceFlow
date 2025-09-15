@@ -1,0 +1,1 @@
+- For this project, always remember that I want to launch the GUI control center. I want you to launch it so that I can just start testing with that.

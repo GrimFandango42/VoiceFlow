@@ -1,0 +1,34 @@
+{
+  "test_timestamp": "2025-09-14 19:47:42",
+  "sequential_performance": {
+    "locked_time": 1.0246258999977726,
+    "lockfree_time": 1.0300448999914806,
+    "improvement_percent": -0.5288759530400086
+  },
+  "concurrent_contention": {
+    "1_threads": {
+      "locked_time": 0.2613217000034638,
+      "lockfree_time": 0.25802109998767264,
+      "improvement_percent": 1.2630409245567376
+    },
+    "2_threads": {
+      "locked_time": 0.5135919000022113,
+      "lockfree_time": 0.25846549999550916,
+      "improvement_percent": 49.67492672793393
+    },
+    "4_threads": {
+      "locked_time": 1.0346091000246815,
+      "lockfree_time": 0.2592148999974597,
+      "improvement_percent": 74.94561955899326
+    },
+    "8_threads": {
+      "locked_time": 2.0645592999935616,
+      "lockfree_time": 0.259466399991652,
+      "improvement_percent": 87.43235905151955
+    }
+  },
+  "lock_overhead": {
+    "overhead_per_operation_us": 0.12884000316262245,
+    "total_overhead_ms": 1.2884000316262245
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "task": "VoiceFlow Performance Analysis",
+  "context": {
+    "current_performance": "4.9x speed improvement achieved (1.9x to 9.3x realtime)",
+    "optimizations_done": [
+      "Switched to tiny.en model",
+      "Reduced model reloads from 20 to 100 transcriptions",
+      "Disabled detailed logging in hot paths",
+      "Optimized warmup with shorter silence buffer",
+      "Set beam_size=1 for greedy decoding",
+      "Temperature=0.0 for fastest inference"
+    ],
+    "target": "Additional 20-50% speed improvement"
+  },
+  "analysis_focus": [
+    "Audio preprocessing pipeline bottlenecks",
+    "Memory management and garbage collection inefficiencies",
+    "Threading and concurrency optimization opportunities",
+    "ASR pipeline latency reduction",
+    "Audio I/O optimization",
+    "Buffer management performance",
+    "NumPy array operations optimization",
+    "Model inference optimization beyond current settings"
+  ],
+  "files_to_analyze": [
+    "src/voiceflow/core/audio_enhanced.py",
+    "src/voiceflow/core/asr_enhanced.py",
+    "src/voiceflow/core/asr_buffer_safe.py",
+    "src/voiceflow/core/config.py"
+  ],
+  "constraints": [
+    "Must maintain current stability and safety features",
+    "Should not compromise audio quality significantly",
+    "Focus on CPU-based optimizations (device=cpu)",
+    "Preserve buffer isolation and validation features"
+  ]
+}

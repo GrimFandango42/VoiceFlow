@@ -260,7 +260,7 @@ class EnhancedApp:
                     truncated_text = text[:50] + "..." if len(text) > 50 else text
                     update_tray_status(self.tray_controller, "complete", False, f"Transcribed: {truncated_text}")
                     if VISUAL_INDICATORS_AVAILABLE:
-                        show_complete(f"Transcribed: {truncated_text}")
+                        show_complete("Complete")
             else:
                 # Update visual indicators - back to idle for empty transcription
                 if self.visual_indicators_enabled:

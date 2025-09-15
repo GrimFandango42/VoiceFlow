@@ -27,16 +27,26 @@ class VoiceFlowControlCenter:
 
         # State tracking
         self.current_process: Optional[subprocess.Popen] = None
+        self.visual_demo_process: Optional[subprocess.Popen] = None
+        self.visual_demo_running = False
         self.status_text = tk.StringVar(value="Ready")
         self.progress_var = tk.DoubleVar()
+
 
         # UI Components
         self.log_text: Optional[scrolledtext.ScrolledText] = None
         self.status_label: Optional[tk.Label] = None
         self.progress_bar: Optional[ttk.Progressbar] = None
+        self.visual_demo_button: Optional[ttk.Button] = None
 
+        self._setup_styling()
         self._setup_ui()
         self._check_initial_status()
+
+    def _setup_styling(self):
+        """Keep it simple and clean"""
+        # Just set a nice title font
+        pass
 
     def _setup_ui(self):
         """Set up the user interface"""
@@ -50,10 +60,16 @@ class VoiceFlowControlCenter:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(4, weight=1)
 
-        # Title
-        title_label = ttk.Label(main_frame, text="VoiceFlow Control Center",
-                              font=("Segoe UI", 16, "bold"))
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
+        # Simple Title Section
+        title_frame = ttk.Frame(main_frame)
+        title_frame.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 20))
+
+        title_label = ttk.Label(title_frame, text="VoiceFlow Control Center",
+                               font=("Segoe UI", 16, "bold"))
+        title_label.pack()
+
+        subtitle_label = ttk.Label(title_frame, text="🚀 Unified Interface for VoiceFlow Operations")
+        subtitle_label.pack()
 
         # Quick Actions Section
         actions_frame = ttk.LabelFrame(main_frame, text="Quick Actions", padding="10")
@@ -80,8 +96,9 @@ class VoiceFlowControlCenter:
         ttk.Button(testing_frame, text="🔄 Full Test Suite",
                   command=self.run_full_tests, width=20).grid(row=0, column=1, padx=5)
 
-        ttk.Button(testing_frame, text="🎨 Visual Demo",
-                  command=self.run_visual_demo, width=20).grid(row=0, column=2, padx=(10, 0))
+        self.visual_demo_button = ttk.Button(testing_frame, text="🎨 Start Visual Demo",
+                                             command=self.toggle_visual_demo, width=20)
+        self.visual_demo_button.grid(row=0, column=2, padx=(10, 0))
 
         # Status Section
         status_frame = ttk.LabelFrame(main_frame, text="System Status", padding="10")
@@ -89,8 +106,7 @@ class VoiceFlowControlCenter:
         status_frame.columnconfigure(1, weight=1)
 
         ttk.Label(status_frame, text="Status:").grid(row=0, column=0, sticky=tk.W)
-        self.status_label = ttk.Label(status_frame, textvariable=self.status_text,
-                                    font=("Segoe UI", 9, "bold"))
+        self.status_label = ttk.Label(status_frame, textvariable=self.status_text)
         self.status_label.grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
 
         # Progress bar
@@ -162,8 +178,9 @@ class VoiceFlowControlCenter:
         ]
 
         missing_files = []
+        root_dir = Path(__file__).parent.parent  # VoiceFlow root directory
         for file_path in critical_files:
-            if not Path(file_path).exists():
+            if not (root_dir / file_path).exists():
                 missing_files.append(file_path)
 
         if missing_files:
@@ -189,7 +206,8 @@ class VoiceFlowControlCenter:
                     stderr=subprocess.STDOUT,
                     text=True,
                     universal_newlines=True,
-                    cwd=Path(__file__).parent
+                    cwd=Path(__file__).parent.parent,  # Go up to VoiceFlow root directory
+                    env={**os.environ, 'PYTHONPATH': str(Path(__file__).parent.parent / 'src')}
                 )
 
                 # Read output line by line
@@ -235,10 +253,12 @@ class VoiceFlowControlCenter:
 
         # First run a quick health check
         def after_health_check():
-            # Then launch VoiceFlow
-            command = [sys.executable, "-m", "voiceflow.ui.cli_enhanced"]
-            env = os.environ.copy()
-            env["PYTHONPATH"] = "src"
+            # Then launch VoiceFlow using direct file execution method that works
+            command = [
+                sys.executable,
+                "-c",
+                "import sys; sys.path.insert(0, 'src'); exec(open('src/voiceflow/ui/cli_enhanced.py').read())"
+            ]
             self.run_command_async(command, "VoiceFlow Application")
 
         # Run quick health check first
@@ -265,10 +285,41 @@ class VoiceFlowControlCenter:
         command = [sys.executable, "scripts/dev/parallel_test_runner.py"]
         self.run_command_async(command, "Full Test Suite")
 
-    def run_visual_demo(self):
-        """Run visual configuration demo"""
-        command = [sys.executable, "scripts/dev/demo_visual_config.py"]
-        self.run_command_async(command, "Visual Configuration Demo")
+    def toggle_visual_demo(self):
+        """Toggle visual demo on/off"""
+        if self.visual_demo_running:
+            self.stop_visual_demo()
+        else:
+            self.start_visual_demo()
+
+    def start_visual_demo(self):
+        """Start visual configuration demo"""
+        try:
+            command = [sys.executable, "scripts/dev/demo_visual_config.py"]
+            self.visual_demo_process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=os.getcwd(),
+                text=True
+            )
+            self.visual_demo_running = True
+            self.visual_demo_button.configure(text="🛑 Stop Visual Demo")
+            self.log("🎨 Visual demo started", "INFO")
+        except Exception as e:
+            self.log(f"❌ Failed to start visual demo: {e}", "ERROR")
+
+    def stop_visual_demo(self):
+        """Stop visual configuration demo"""
+        try:
+            if self.visual_demo_process:
+                self.visual_demo_process.terminate()
+                self.visual_demo_process = None
+            self.visual_demo_running = False
+            self.visual_demo_button.configure(text="🎨 Start Visual Demo")
+            self.log("🛑 Visual demo stopped", "WARN")
+        except Exception as e:
+            self.log(f"❌ Failed to stop visual demo: {e}", "ERROR")
 
     def stop_current_process(self):
         """Stop currently running process"""

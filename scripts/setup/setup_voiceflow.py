@@ -192,18 +192,30 @@ class VoiceFlowInstaller:
         package_name = requirement.split('>=')[0].split('==')[0].split('<=')[0].split('>')[0].split('<')[0]
 
         try:
-            # Try to import the package
+            # Try to import the package - handle name mismatches
             if package_name == 'RealtimeSTT':
                 # Special case for RealtimeSTT
                 import RealtimeSTT
                 version = getattr(RealtimeSTT, '__version__', 'unknown')
-            elif package_name == 'PIL':
+            elif package_name == 'PIL' or package_name == 'Pillow':
                 # Pillow is imported as PIL
                 from PIL import Image
                 version = getattr(Image, 'VERSION', 'unknown')
             elif package_name == 'pywin32':
                 import win32api
                 version = "installed"
+            elif package_name == 'faster-whisper':
+                # faster-whisper package imports as faster_whisper
+                import faster_whisper
+                version = getattr(faster_whisper, '__version__', 'unknown')
+            elif package_name == 'python-dotenv':
+                # python-dotenv package imports as dotenv
+                import dotenv
+                version = getattr(dotenv, '__version__', 'unknown')
+            elif package_name == 'pytest-asyncio':
+                # pytest-asyncio package imports as pytest_asyncio
+                import pytest_asyncio
+                version = getattr(pytest_asyncio, '__version__', 'unknown')
             else:
                 # Generic import
                 module = importlib.import_module(package_name)

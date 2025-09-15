@@ -50,7 +50,7 @@ class VisualConfig:
     offset_y: int = 0  # Additional offset from base position
 
     # Size settings
-    size: OverlaySize = OverlaySize.MEDIUM
+    size: OverlaySize = OverlaySize.SMALL
     custom_width: int = 300
     custom_height: int = 60
 

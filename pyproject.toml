@@ -84,6 +84,9 @@ voiceflow-setup = "voiceflow.utils.setup:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/voiceflow"]
 
+[tool.hatch.build]
+directory = "src"
+
 [tool.hatch.build.targets.sdist]
 include = [
     "/src",

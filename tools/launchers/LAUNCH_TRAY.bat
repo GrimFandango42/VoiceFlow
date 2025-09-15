@@ -13,7 +13,7 @@ echo.
 echo Press Ctrl+C to exit or close from tray menu
 echo.
 
-set PYTHONPATH=src
-python -m voiceflow.ui.cli_enhanced
+set PYTHONPATH=%cd%\src
+python -c "import sys; sys.path.insert(0, 'src'); exec(open('src/voiceflow/ui/cli_enhanced.py').read())"
 
 pause
