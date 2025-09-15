@@ -32,15 +32,6 @@ class VoiceFlowControlCenter:
         self.status_text = tk.StringVar(value="Ready")
         self.progress_var = tk.DoubleVar()
 
-        # Enhanced styling
-        self.colors = {
-            'primary': '#007ACC',      # Blue
-            'success': '#4CAF50',      # Green
-            'warning': '#FF9800',      # Orange
-            'danger': '#F44336',       # Red
-            'info': '#2196F3',         # Light Blue
-            'secondary': '#6C757D'     # Gray
-        }
 
         # UI Components
         self.log_text: Optional[scrolledtext.ScrolledText] = None
@@ -53,35 +44,9 @@ class VoiceFlowControlCenter:
         self._check_initial_status()
 
     def _setup_styling(self):
-        """Setup enhanced styling and themes"""
-        style = ttk.Style()
-
-        # Configure button styles with colors
-        style.configure('Primary.TButton',
-                       background=self.colors['primary'],
-                       foreground='white',
-                       font=('Segoe UI', 9, 'bold'))
-
-        style.configure('Success.TButton',
-                       background=self.colors['success'],
-                       foreground='white',
-                       font=('Segoe UI', 9, 'bold'))
-
-        style.configure('Warning.TButton',
-                       background=self.colors['warning'],
-                       foreground='white',
-                       font=('Segoe UI', 9, 'bold'))
-
-        style.configure('Info.TButton',
-                       background=self.colors['info'],
-                       foreground='white',
-                       font=('Segoe UI', 9, 'bold'))
-
-        # Configure frame styles
-        style.configure('Header.TLabelFrame.Label', font=('Segoe UI', 10, 'bold'))
-
-        # Root window styling
-        self.root.configure(bg='#f5f5f5')
+        """Keep it simple and clean"""
+        # Just set a nice title font
+        pass
 
     def _setup_ui(self):
         """Set up the user interface"""
@@ -95,25 +60,31 @@ class VoiceFlowControlCenter:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(4, weight=1)
 
-        # Title
-        title_label = ttk.Label(main_frame, text="VoiceFlow Control Center",
-                              font=("Segoe UI", 16, "bold"))
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
+        # Simple Title Section
+        title_frame = ttk.Frame(main_frame)
+        title_frame.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 20))
+
+        title_label = ttk.Label(title_frame, text="VoiceFlow Control Center",
+                               font=("Segoe UI", 16, "bold"))
+        title_label.pack()
+
+        subtitle_label = ttk.Label(title_frame, text="🚀 Unified Interface for VoiceFlow Operations")
+        subtitle_label.pack()
 
         # Quick Actions Section
         actions_frame = ttk.LabelFrame(main_frame, text="Quick Actions", padding="10")
         actions_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
         actions_frame.columnconfigure(1, weight=1)
 
-        # Action buttons with enhanced styling
+        # Action buttons
         ttk.Button(actions_frame, text="🚀 Launch VoiceFlow",
-                  command=self.launch_voiceflow, width=20, style='Primary.TButton').grid(row=0, column=0, padx=(0, 10))
+                  command=self.launch_voiceflow, width=20).grid(row=0, column=0, padx=(0, 10))
 
         ttk.Button(actions_frame, text="⚡ Quick Health Check",
-                  command=self.run_health_check, width=20, style='Success.TButton').grid(row=0, column=1, padx=5)
+                  command=self.run_health_check, width=20).grid(row=0, column=1, padx=5)
 
         ttk.Button(actions_frame, text="🔧 Setup & Install",
-                  command=self.run_setup, width=20, style='Warning.TButton').grid(row=0, column=2, padx=(10, 0))
+                  command=self.run_setup, width=20).grid(row=0, column=2, padx=(10, 0))
 
         # Testing Section
         testing_frame = ttk.LabelFrame(main_frame, text="Testing & Validation", padding="10")
@@ -126,7 +97,7 @@ class VoiceFlowControlCenter:
                   command=self.run_full_tests, width=20).grid(row=0, column=1, padx=5)
 
         self.visual_demo_button = ttk.Button(testing_frame, text="🎨 Start Visual Demo",
-                                             command=self.toggle_visual_demo, width=20, style='Info.TButton')
+                                             command=self.toggle_visual_demo, width=20)
         self.visual_demo_button.grid(row=0, column=2, padx=(10, 0))
 
         # Status Section
@@ -135,8 +106,7 @@ class VoiceFlowControlCenter:
         status_frame.columnconfigure(1, weight=1)
 
         ttk.Label(status_frame, text="Status:").grid(row=0, column=0, sticky=tk.W)
-        self.status_label = ttk.Label(status_frame, textvariable=self.status_text,
-                                    font=("Segoe UI", 9, "bold"))
+        self.status_label = ttk.Label(status_frame, textvariable=self.status_text)
         self.status_label.grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
 
         # Progress bar
