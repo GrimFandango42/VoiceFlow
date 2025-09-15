@@ -1,9 +1,0 @@
-{
-  "model": "qwen2.5-coder:7b",
-  "prompt": "Analyze VoiceFlow audio transcription system for performance bottlenecks:\n\nCURRENT: 9.3x realtime speed (4.9x improvement achieved)\nGOAL: Find additional 20-50% speed improvements\n\nKEY BOTTLENECKS:\n1. Audio validation overhead (NaN/Inf checking every callback)\n2. Ring buffer locking and array operations\n3. Model reload frequency (currently every 100 transcriptions)\n4. Memory allocation patterns\n5. Threading lock contention\n\nCONFIG:\n- tiny.en model, beam_size=1, temp=0.0\n- 512 blocksize, 16kHz mono\n- VAD disabled, int8 compute\n- Pre-buffer 1.5s duration\n\nProvide 3-5 specific optimizations with code examples that could yield 20-50% speed improvement while maintaining stability.",
-  "stream": false,
-  "options": {
-    "temperature": 0.1,
-    "num_predict": 1500
-  }
-}
