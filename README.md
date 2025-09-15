@@ -6,19 +6,19 @@
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](https://pytest.org/)
 [![Performance](https://img.shields.io/badge/performance-15x%20realtime-brightgreen.svg)](#performance)
 
-**VoiceFlow** is a high-performance AI-powered voice transcription system that delivers **12-15x realtime processing** with enterprise-grade quality and privacy protection.
+VoiceFlow is a local voice transcription system built on OpenAI Whisper that processes audio at 12-15x realtime speed. The system operates entirely offline with no external dependencies.
 
-## 🎮 Enhanced Control Center
+## Control Center
 
 ![VoiceFlow Control Center](assets/control-center-gui-clean.png)
 
-The **enhanced VoiceFlow Control Center** features a clean, intuitive interface with:
-- **🎨 Clean & Professional Design**: Simple, effective layout with colorful emoji icons
-- **🔄 Toggle Visual Demo**: Interactive start/stop functionality for visual testing
-- **⚡ Real-time Status**: Live system monitoring with progress indicators
-- **🧪 Comprehensive Testing**: One-click health checks and full test suites
+The Control Center provides a unified interface for system management:
+- System launch and configuration
+- Visual demo controls for testing
+- Real-time status monitoring with progress indicators
+- Test suite execution and health checks
 
-Launch it with one click to access all enhanced features:
+Launch commands:
 
 ```bash
 # Windows
@@ -28,18 +28,18 @@ tools\launchers\LAUNCH_CONTROL_CENTER.bat
 python tools/VoiceFlow_Control_Center.py
 ```
 
-## ✨ Features
+## Features
 
-- **🎤 Real-time Transcription**: High-accuracy speech-to-text using OpenAI Whisper
-- **🔍 Enhanced Visual Feedback**: Compact bottom-screen overlay (200x40) with clean status display
-- **🎯 System Tray Integration**: Minimize to system tray with dynamic status indicators
-- **⌨️ Smart Text Injection**: Automatic text insertion with configurable hotkeys
-- **🎨 Customizable UI**: Configurable themes, positions, and visual indicators
-- **🔧 Advanced Configuration**: Comprehensive settings for audio, processing, and UI
-- **🚀 Performance Optimized**: Efficient audio processing with minimal resource usage
-- **🛡️ Robust Error Handling**: Comprehensive error recovery and validation
+- Real-time speech-to-text transcription using OpenAI Whisper
+- Visual overlay (200x40) for status indication
+- System tray integration with status indicators
+- Automatic text injection with configurable hotkeys (default: Ctrl+Shift)
+- Configurable UI themes and positioning
+- Audio device selection and processing configuration
+- Memory-optimized processing with minimal resource usage
+- Error recovery and input validation
 
-## 🚀 Quick Start
+## Installation & Usage
 
 ### Installation
 
@@ -79,9 +79,9 @@ tools/launchers/LAUNCH_TERMINAL.bat    # Terminal mode
 tools/launchers/LAUNCH_CONTROL_CENTER.bat  # Control center GUI
 ```
 
-## 📊 Visual Status System
+## Visual Status System
 
-VoiceFlow provides intuitive visual feedback through color-coded indicators:
+The system uses color-coded indicators to show current state:
 
 | Color | Status | Description |
 |-------|--------|-------------|
@@ -90,16 +90,16 @@ VoiceFlow provides intuitive visual feedback through color-coded indicators:
 | 🟢 Green | Processing | Transcribing and processing audio |
 | 🔴 Red | Error | Error state or system issue |
 
-## 🎯 Default Controls
+## Default Controls
 
-- **Voice Activation**: `Ctrl + Shift` (press and hold)
-- **System Tray**: Right-click for settings and options
-- **Visual Overlay**: Bottom-center screen display
-- **Auto Text Injection**: Automatic paste after transcription
+- Voice Activation: `Ctrl + Shift` (press and hold)
+- System Tray: Right-click for settings and options
+- Visual Overlay: Bottom-center screen display
+- Auto Text Injection: Automatic paste after transcription
 
-## 🔧 Configuration
+## Configuration
 
-VoiceFlow is highly configurable through multiple interfaces:
+Configuration options are available through multiple interfaces:
 
 ### System Tray Menu
 - Toggle code mode for programming
@@ -119,11 +119,11 @@ export VOICEFLOW_DEVICE="cuda"       # Processing device
 export VOICEFLOW_LOG_LEVEL="INFO"    # Logging level
 ```
 
-## 🏗️ Architecture
+## Architecture
 
-VoiceFlow follows modern Python project standards with a clean, modular architecture designed for high performance and maintainability:
+The system uses a modular 4-layer architecture optimized for low-latency audio processing:
 
-### 📊 System Architecture Overview
+### System Architecture Overview
 
 ![VoiceFlow Architecture](assets/voiceflow-architecture-diagram.png)
 
@@ -133,11 +133,11 @@ The system is organized into four distinct layers:
 - **Core Processing Layer**: Audio capture, ASR engine, performance optimizations
 - **Hardware/OS Layer**: Audio devices, drivers, system resources
 
-### 🔄 Component Interactions
+### Component Interactions
 
 ![Component Interactions](assets/component-interactions.png)
 
-### 🛠️ Technology Stack
+### Technology Stack
 
 ![Technology Stack](assets/technology-stack.png)
 
