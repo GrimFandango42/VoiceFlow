@@ -5,6 +5,8 @@ import logging
 import time
 import threading
 import copy
+import re
+import operator
 
 import numpy as np
 
@@ -55,6 +57,15 @@ class BufferSafeWhisperASR:
         
         # Critical: NO persistent state between recordings
         # Each transcription starts with a clean slate
+
+        # Compiled regex patterns for text processing optimization (OPTIMIZATION 2)
+        self._punctuation_spacing_regex = re.compile(r'\s+([,.!?])')
+        self._punctuation_sentence_regex = re.compile(r'([,.!?])\s*([A-Z])')
+
+        # Optimized sorting key function for segments (OPTIMIZATION 3)
+        def _get_segment_start(segment):
+            return getattr(segment, 'start', 0)
+        self._segment_sort_key = _get_segment_start
 
         # DeepSeek Optimization: Memory pooling for 5-10% speed gain
         self._buffer_pool = []
@@ -510,7 +521,8 @@ class BufferSafeWhisperASR:
             return ""
         
         # Sort segments chronologically (fixes buffer ordering issue)
-        segments_list.sort(key=lambda s: getattr(s, 'start', 0))
+        # Use precompiled key function for better performance (OPTIMIZATION 3)
+        segments_list.sort(key=self._segment_sort_key)
         
         # Process each segment independently
         processed_segments = []
@@ -561,9 +573,9 @@ class BufferSafeWhisperASR:
 
         # Minimal cleaning without state (skip in ultra mode)
         if not getattr(self.cfg, 'minimal_segment_processing', False):
-            import re
-            text = re.sub(r'\s+([,.!?])', r'\1', text)
-            text = re.sub(r'([,.!?])\s*([A-Z])', r'\1 \2', text)
+            # Use precompiled regex patterns for better performance (OPTIMIZATION 2)
+            text = self._punctuation_spacing_regex.sub(r'\1', text)
+            text = self._punctuation_sentence_regex.sub(r'\1 \2', text)
 
         return text.strip()
 
