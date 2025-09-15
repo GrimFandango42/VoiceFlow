@@ -8,11 +8,17 @@
 
 **VoiceFlow** is a high-performance AI-powered voice transcription system that delivers **12-15x realtime processing** with enterprise-grade quality and privacy protection.
 
-## 🎮 Control Center
+## 🎮 Enhanced Control Center
 
 ![VoiceFlow Control Center](assets/control-center-screenshot.png)
 
-The VoiceFlow Control Center provides an intuitive interface for system management, health checks, and performance monitoring. Launch it with one click to access all features.
+The **enhanced VoiceFlow Control Center** features a modern, colorful interface with:
+- **🎨 Colorful Button Styling**: Blue launch buttons, green health checks, orange setup tools
+- **🔄 Toggle Visual Demo**: Interactive start/stop functionality for visual testing
+- **⚡ Real-time Status**: Live system monitoring with progress indicators
+- **🧪 Comprehensive Testing**: One-click health checks and full test suites
+
+Launch it with one click to access all enhanced features:
 
 ```bash
 # Windows
@@ -25,7 +31,7 @@ python tools/VoiceFlow_Control_Center.py
 ## ✨ Features
 
 - **🎤 Real-time Transcription**: High-accuracy speech-to-text using OpenAI Whisper
-- **🔍 Visual Feedback**: Bottom-screen overlay with transcription status (Wispr Flow style)
+- **🔍 Enhanced Visual Feedback**: Compact bottom-screen overlay (200x40) with clean status display
 - **🎯 System Tray Integration**: Minimize to system tray with dynamic status indicators
 - **⌨️ Smart Text Injection**: Automatic text insertion with configurable hotkeys
 - **🎨 Customizable UI**: Configurable themes, positions, and visual indicators
