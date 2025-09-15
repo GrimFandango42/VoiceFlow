@@ -10,7 +10,7 @@
 
 ## 🎮 Enhanced Control Center
 
-![VoiceFlow Control Center](assets/control-center-screenshot.png)
+![VoiceFlow Control Center](assets/control-center-gui-clean.png)
 
 The **enhanced VoiceFlow Control Center** features a clean, intuitive interface with:
 - **🎨 Clean & Professional Design**: Simple, effective layout with colorful emoji icons
@@ -121,7 +121,27 @@ export VOICEFLOW_LOG_LEVEL="INFO"    # Logging level
 
 ## 🏗️ Architecture
 
-VoiceFlow follows modern Python project standards with a clean, modular architecture:
+VoiceFlow follows modern Python project standards with a clean, modular architecture designed for high performance and maintainability:
+
+### 📊 System Architecture Overview
+
+![VoiceFlow Architecture](assets/voiceflow-architecture-diagram.png)
+
+The system is organized into four distinct layers:
+- **User Interface Layer**: Control Center, System Tray, Visual Overlays
+- **Integration Layer**: Global hotkeys, text injection, system events
+- **Core Processing Layer**: Audio capture, ASR engine, performance optimizations
+- **Hardware/OS Layer**: Audio devices, drivers, system resources
+
+### 🔄 Component Interactions
+
+![Component Interactions](assets/component-interactions.png)
+
+### 🛠️ Technology Stack
+
+![Technology Stack](assets/technology-stack.png)
+
+### Core Components
 
 ```
 src/voiceflow/
@@ -131,13 +151,11 @@ src/voiceflow/
 └── utils/          # Utilities and helpers
 ```
 
-### Core Components
-
-- **Audio Processing**: Real-time audio capture and preprocessing
-- **ASR Engine**: OpenAI Whisper integration with optimization
-- **Text Processing**: Smart text formatting and injection
-- **Visual System**: Modern overlay with customizable themes
-- **System Integration**: Hotkeys, clipboard, and tray management
+- **Audio Processing**: Real-time audio capture with optimized buffer management
+- **ASR Engine**: OpenAI Whisper integration with faster-whisper optimizations
+- **Text Processing**: Smart formatting with code-mode support
+- **Visual System**: Thread-safe overlays with color-coded status indicators
+- **Performance Engine**: Lock-free data structures and memory pooling
 
 ## 🧪 Testing
 
