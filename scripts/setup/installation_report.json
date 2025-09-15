@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-09-14 00:00:24",
+  "timestamp": "2025-09-14 22:20:14",
   "system": {
     "platform": "Windows-11-10.0.26100-SP0",
     "python_version": "3.13.5",
@@ -37,12 +37,85 @@
       "message": "Audio OK: Microphone (3- fifine Microphon (2 ch, 44100.0Hz)"
     }
   ],
-  "dependencies": [],
+  "dependencies": [
+    {
+      "name": "sounddevice",
+      "installed": true,
+      "version": "0.5.2",
+      "error": ""
+    },
+    {
+      "name": "numpy",
+      "installed": true,
+      "version": "1.26.4",
+      "error": ""
+    },
+    {
+      "name": "faster-whisper",
+      "installed": true,
+      "version": "1.2.0",
+      "error": ""
+    },
+    {
+      "name": "torch",
+      "installed": true,
+      "version": "2.7.0+cpu",
+      "error": ""
+    },
+    {
+      "name": "keyboard",
+      "installed": true,
+      "version": "unknown",
+      "error": ""
+    },
+    {
+      "name": "pyautogui",
+      "installed": true,
+      "version": "0.9.54",
+      "error": ""
+    },
+    {
+      "name": "Pillow",
+      "installed": true,
+      "version": "unknown",
+      "error": ""
+    },
+    {
+      "name": "pystray",
+      "installed": true,
+      "version": "unknown",
+      "error": ""
+    },
+    {
+      "name": "python-dotenv",
+      "installed": true,
+      "version": "unknown",
+      "error": ""
+    },
+    {
+      "name": "psutil",
+      "installed": true,
+      "version": "7.0.0",
+      "error": ""
+    },
+    {
+      "name": "pytest",
+      "installed": true,
+      "version": "8.3.5",
+      "error": ""
+    },
+    {
+      "name": "pytest-asyncio",
+      "installed": true,
+      "version": "1.2.0",
+      "error": ""
+    }
+  ],
   "issues_found": [],
   "fixes_applied": [],
   "summary": {
-    "total_dependencies": 0,
-    "installed_dependencies": 0,
+    "total_dependencies": 12,
+    "installed_dependencies": 12,
     "issues_count": 0,
     "fixes_count": 0
   }

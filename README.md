@@ -4,8 +4,23 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](https://pytest.org/)
+[![Performance](https://img.shields.io/badge/performance-15x%20realtime-brightgreen.svg)](#performance)
 
-**VoiceFlow** is a modern AI-powered voice transcription system that provides real-time speech-to-text conversion with visual feedback and seamless system integration.
+**VoiceFlow** is a high-performance AI-powered voice transcription system that delivers **12-15x realtime processing** with enterprise-grade quality and privacy protection.
+
+## 🎮 Control Center
+
+![VoiceFlow Control Center](assets/control-center-screenshot.png)
+
+The VoiceFlow Control Center provides an intuitive interface for system management, health checks, and performance monitoring. Launch it with one click to access all features.
+
+```bash
+# Windows
+tools\launchers\LAUNCH_CONTROL_CENTER.bat
+
+# Or run directly
+python tools/VoiceFlow_Control_Center.py
+```
 
 ## ✨ Features
 

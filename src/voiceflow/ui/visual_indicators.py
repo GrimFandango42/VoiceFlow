@@ -26,21 +26,32 @@ class BottomScreenIndicator:
     """
     Bottom-screen overlay indicator for transcription status
     Similar to Wispr Flow - small, unobtrusive, informative
+    Thread-safe for background hotkey calls
     """
-    
+
     def __init__(self):
         self.window: Optional[tk.Toplevel] = None
+        self.root: Optional[tk.Tk] = None
         self.status_var: Optional[tk.StringVar] = None
         self.progress_var: Optional[tk.DoubleVar] = None
         self.current_status = TranscriptionStatus.IDLE
         self.auto_hide_timer: Optional[threading.Timer] = None
         self.lock = threading.Lock()
+        self.gui_thread: Optional[threading.Thread] = None
+        self.gui_running = False
+        self.gui_ready = False
+        self.command_queue = None
+        self.ready_event = threading.Event()
 
         # Configuration manager
         self.config_manager = get_visual_config()
         self._update_visual_settings()
 
-        self._setup_window()
+        # Start GUI in separate thread for background compatibility
+        self._start_gui_thread()
+
+        # Wait for GUI to be ready
+        self._wait_for_gui_ready()
 
     def _update_visual_settings(self):
         """Update visual settings from configuration"""
@@ -52,12 +63,76 @@ class BottomScreenIndicator:
         self.accent_color = colors['accent_color']
         self.error_color = colors['error_color']
     
+    def _start_gui_thread(self):
+        """Start GUI thread for thread-safe visual indicators"""
+        import queue
+        self.command_queue = queue.Queue()
+        self.gui_thread = threading.Thread(target=self._gui_thread_worker, daemon=True)
+        self.gui_thread.start()
+
+    def _wait_for_gui_ready(self):
+        """Wait for GUI thread to be ready"""
+        try:
+            # Wait up to 5 seconds for GUI to be ready
+            if self.ready_event.wait(timeout=5.0):
+                print("[VisualIndicator] GUI ready for use")
+            else:
+                print("[VisualIndicator] Warning: GUI startup timeout")
+        except Exception as e:
+            print(f"[VisualIndicator] GUI ready wait error: {e}")
+
+    def _gui_thread_worker(self):
+        """GUI thread worker - runs Tkinter mainloop"""
+        try:
+            # Create root window in this thread
+            self.root = tk.Tk()
+            self.root.withdraw()  # Hide main window
+            self.gui_running = True
+
+            # Setup window
+            self._setup_window()
+
+            # Mark as ready
+            self.gui_ready = True
+            self.ready_event.set()
+
+            # Process commands from queue
+            self.root.after(50, self._process_command_queue)
+
+            # Run mainloop
+            self.root.mainloop()
+
+        except Exception as e:
+            print(f"[VisualIndicator] GUI thread error: {e}")
+            self.ready_event.set()  # Signal ready even on error
+        finally:
+            self.gui_running = False
+            self.gui_ready = False
+
+    def _process_command_queue(self):
+        """Process commands from other threads"""
+        try:
+            import queue
+            while not self.command_queue.empty():
+                try:
+                    command, args, kwargs = self.command_queue.get_nowait()
+                    command(*args, **kwargs)
+                except queue.Empty:
+                    break
+                except Exception as e:
+                    print(f"[VisualIndicator] Command error: {e}")
+        except Exception as e:
+            print(f"[VisualIndicator] Queue processing error: {e}")
+        finally:
+            # Schedule next check
+            if self.gui_running and self.root:
+                self.root.after(50, self._process_command_queue)
+
     def _setup_window(self):
         """Initialize the bottom overlay window"""
         try:
-            # Create invisible root if needed
-            self.root = tk.Tk()
-            self.root.withdraw()  # Hide main window
+            if not self.root:
+                return
 
             # Create overlay window
             self.window = tk.Toplevel(self.root)
@@ -78,13 +153,13 @@ class BottomScreenIndicator:
             self.window.wm_attributes("-alpha", config.opacity)
             self.window.overrideredirect(True)  # No title bar
             self.window.configure(bg=self.bg_color)
-            
+
             # Create UI elements
             self._create_ui()
-            
+
             # Start hidden
             self.window.withdraw()
-            
+
         except (tk.TclError, AttributeError, ValueError) as e:
             print(f"[VisualIndicator] Failed to setup window: {e}")
             self.window = None
@@ -136,42 +211,41 @@ class BottomScreenIndicator:
     
     def show_status(self, status: TranscriptionStatus, message: str = None, duration: float = None):
         """
-        Show status indicator with message
-        
+        Show status indicator with message - Thread-safe
+
         Args:
             status: TranscriptionStatus enum
             message: Custom message (optional)
             duration: Auto-hide after seconds (optional)
         """
-        if not self.window or not self.status_var:
+        if not self.gui_ready or not self.command_queue:
+            print(f"[VisualIndicator] GUI not ready, status: {status.value}")
             return
-            
+
         with self.lock:
             self.current_status = status
-            
+
             # Cancel existing auto-hide timer
             if self.auto_hide_timer:
                 self.auto_hide_timer.cancel()
-            
+
             # Update message
             if message:
                 display_message = message
             else:
                 display_message = self._get_default_message(status)
-            
-            # Thread-safe UI updates
+
+            # Queue command for GUI thread
             try:
-                self.window.after(0, self._update_ui, status, display_message)
-                
+                self.command_queue.put((self._update_ui, (status, display_message), {}))
+
                 # Auto-hide timer
                 if duration:
                     self.auto_hide_timer = threading.Timer(duration, self.hide)
                     self.auto_hide_timer.start()
-                    
-            except (tk.TclError, AttributeError) as e:
-                print(f"[VisualIndicator] UI update failed: {e}")
+
             except Exception as e:
-                print(f"[VisualIndicator] Unexpected UI update error: {type(e).__name__}: {e}")
+                print(f"[VisualIndicator] Failed to queue status update: {e}")
     
     def _update_ui(self, status: TranscriptionStatus, message: str):
         """Update UI elements (must run on main thread)"""
@@ -236,14 +310,24 @@ class BottomScreenIndicator:
         return messages.get(status, "VoiceFlow")
     
     def hide(self):
-        """Hide the status indicator"""
-        if self.window:
-            try:
-                self.window.after(0, self.window.withdraw)
-                if hasattr(self, 'progress_bar'):
-                    self.progress_bar.stop()
-            except Exception as e:
-                print(f"[VisualIndicator] Hide error: {e}")
+        """Hide the status indicator - Thread-safe"""
+        if not self.gui_ready or not self.command_queue:
+            return
+
+        try:
+            self.command_queue.put((self._hide_window, (), {}))
+        except Exception as e:
+            print(f"[VisualIndicator] Failed to queue hide command: {e}")
+
+    def _hide_window(self):
+        """Hide window on GUI thread"""
+        try:
+            if self.window:
+                self.window.withdraw()
+            if hasattr(self, 'progress_bar'):
+                self.progress_bar.stop()
+        except Exception as e:
+            print(f"[VisualIndicator] Hide error: {e}")
     
     def destroy(self):
         """Clean up the indicator"""

@@ -1,0 +1,928 @@
+{
+  "test_timestamp": "2025-09-14 19:54:05",
+  "system_info": {
+    "cpu_count": 16,
+    "cpu_freq_max": 3401.0,
+    "memory_total_gb": 31.927825927734375,
+    "platform": "win32",
+    "python_version": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]"
+  },
+  "performance_improvements": {
+    "smart_audio_validation_improvement": 4.800467431510102,
+    "adaptive_model_access_improvement": 8.014727063766273,
+    "memory_optimization_improvement": 46033.58614216508,
+    "combined_optimization_improvement": 71828.97984724084
+  },
+  "quality_validation": {
+    "baseline_avg_length": 234,
+    "optimized_avg_length": 234,
+    "quality_degradation_percent": 0.0,
+    "empty_transcriptions_baseline": 6,
+    "empty_transcriptions_optimized": 6,
+    "quality_validation_passed": true
+  },
+  "memory_analysis": {
+    "avg_memory_delta_mb": 263.70595703125,
+    "max_memory_delta_mb": 456.36328125,
+    "min_memory_delta_mb": 252.86328125,
+    "memory_usage_stable": false
+  },
+  "threading_analysis": {
+    "baseline_avg_time": 1.363436287498189,
+    "lockfree_avg_time": 1.328119575005985,
+    "threading_improvement_percent": 2.5902723006593527
+  },
+  "recommendations": {
+    "implement_smart_audio_validation": false,
+    "implement_adaptive_model_access": true,
+    "implement_memory_optimizations": true,
+    "implement_combined_optimizations": true,
+    "recommended_config": {
+      "enable_fast_audio_validation": true,
+      "audio_validation_sample_rate": 0.02,
+      "enable_lockfree_model_access": true,
+      "enable_memory_pooling": true,
+      "ultra_fast_mode": true
+    },
+    "implementation_priority": [
+      "combined_optimizations",
+      "adaptive_model_access",
+      "memory_optimizations"
+    ]
+  },
+  "risk_assessment": {
+    "smart_audio_validation_risk": "LOW",
+    "adaptive_model_access_risk": "MEDIUM",
+    "memory_optimization_risk": "LOW",
+    "combined_optimization_risk": "MEDIUM",
+    "overall_risk_assessment": "LOW"
+  },
+  "raw_results": {
+    "baseline": [
+      {
+        "test_name": "baseline_1.0s",
+        "audio_duration": 1.0,
+        "processing_time": 1.27880999998888,
+        "speed_factor": 0.7819769942436293,
+        "memory_before_mb": 51.203125,
+        "memory_after_mb": 507.56640625,
+        "memory_delta_mb": 456.36328125,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false,
+          "skip_buffer_integrity_checks": false
+        }
+      },
+      {
+        "test_name": "baseline_3.0s",
+        "audio_duration": 3.0,
+        "processing_time": 2.5845512000087183,
+        "speed_factor": 1.160743110830956,
+        "memory_before_mb": 247.73046875,
+        "memory_after_mb": 502.18359375,
+        "memory_delta_mb": 254.453125,
+        "transcription_text": "I'm going to do a little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false,
+          "skip_buffer_integrity_checks": false
+        }
+      },
+      {
+        "test_name": "baseline_5.0s",
+        "audio_duration": 5.0,
+        "processing_time": 1.2286725000012666,
+        "speed_factor": 4.069432660041505,
+        "memory_before_mb": 244.84375,
+        "memory_after_mb": 508.19921875,
+        "memory_delta_mb": 263.35546875,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false,
+          "skip_buffer_integrity_checks": false
+        }
+      },
+      {
+        "test_name": "baseline_10.0s",
+        "audio_duration": 10.0,
+        "processing_time": 1.391394100006437,
+        "speed_factor": 7.187036368742499,
+        "memory_before_mb": 248.75,
+        "memory_after_mb": 509.65625,
+        "memory_delta_mb": 260.90625,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false,
+          "skip_buffer_integrity_checks": false
+        }
+      },
+      {
+        "test_name": "baseline_15.0s",
+        "audio_duration": 15.0,
+        "processing_time": 1.456426399992779,
+        "speed_factor": 10.29918161334783,
+        "memory_before_mb": 248.65625,
+        "memory_after_mb": 510.7421875,
+        "memory_delta_mb": 262.0859375,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false,
+          "skip_buffer_integrity_checks": false
+        }
+      },
+      {
+        "test_name": "baseline_30.0s",
+        "audio_duration": 30.0,
+        "processing_time": 1.5892184999829624,
+        "speed_factor": 18.877202851792642,
+        "memory_before_mb": 250.02734375,
+        "memory_after_mb": 509.08984375,
+        "memory_delta_mb": 259.0625,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false,
+          "skip_buffer_integrity_checks": false
+        }
+      },
+      {
+        "test_name": "baseline_empty",
+        "audio_duration": 0.0,
+        "processing_time": 0.00024369999300688505,
+        "speed_factor": 0.0,
+        "memory_before_mb": 250.44140625,
+        "memory_after_mb": 507.7578125,
+        "memory_delta_mb": 257.31640625,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false,
+          "skip_buffer_integrity_checks": false
+        }
+      },
+      {
+        "test_name": "baseline_silence",
+        "audio_duration": 2.0,
+        "processing_time": 1.3781739000114612,
+        "speed_factor": 1.4511956727546267,
+        "memory_before_mb": 250.52734375,
+        "memory_after_mb": 507.890625,
+        "memory_delta_mb": 257.36328125,
+        "transcription_text": "You",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false,
+          "skip_buffer_integrity_checks": false
+        }
+      }
+    ],
+    "smart_audio_validation": [
+      {
+        "test_name": "smart_validation_1.0s",
+        "audio_duration": 1.0,
+        "processing_time": 1.7807259999972302,
+        "speed_factor": 0.5615687084939263,
+        "memory_before_mb": 250.234375,
+        "memory_after_mb": 510.75390625,
+        "memory_delta_mb": 260.51953125,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.05,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "smart_validation_3.0s",
+        "audio_duration": 3.0,
+        "processing_time": 3.8285142999957316,
+        "speed_factor": 0.783593782058838,
+        "memory_before_mb": 249.99609375,
+        "memory_after_mb": 504.27734375,
+        "memory_delta_mb": 254.28125,
+        "transcription_text": "I'm going to do a little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.05,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "smart_validation_5.0s",
+        "audio_duration": 5.0,
+        "processing_time": 1.5290253999992274,
+        "speed_factor": 3.270056861058375,
+        "memory_before_mb": 248.984375,
+        "memory_after_mb": 508.67578125,
+        "memory_delta_mb": 259.69140625,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.05,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "smart_validation_10.0s",
+        "audio_duration": 10.0,
+        "processing_time": 1.3151583999861032,
+        "speed_factor": 7.603646830758688,
+        "memory_before_mb": 250.4609375,
+        "memory_after_mb": 511.84765625,
+        "memory_delta_mb": 261.38671875,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.05,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "smart_validation_15.0s",
+        "audio_duration": 15.0,
+        "processing_time": 1.4171271999948658,
+        "speed_factor": 10.584794364298663,
+        "memory_before_mb": 250.44140625,
+        "memory_after_mb": 509.87109375,
+        "memory_delta_mb": 259.4296875,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.05,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "smart_validation_30.0s",
+        "audio_duration": 30.0,
+        "processing_time": 1.3921157000004314,
+        "speed_factor": 21.549932954560244,
+        "memory_before_mb": 250.7421875,
+        "memory_after_mb": 510.48046875,
+        "memory_delta_mb": 259.73828125,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.05,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "smart_validation_empty",
+        "audio_duration": 0.0,
+        "processing_time": 0.00033049998455680907,
+        "speed_factor": 0.0,
+        "memory_before_mb": 249.87890625,
+        "memory_after_mb": 507.99609375,
+        "memory_delta_mb": 258.1171875,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.05,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "smart_validation_silence",
+        "audio_duration": 2.0,
+        "processing_time": 1.2681780999992043,
+        "speed_factor": 1.5770655556985687,
+        "memory_before_mb": 251.11328125,
+        "memory_after_mb": 510.2109375,
+        "memory_delta_mb": 259.09765625,
+        "transcription_text": "You",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.05,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      }
+    ],
+    "adaptive_model_access": [
+      {
+        "test_name": "adaptive_access_1.0s",
+        "audio_duration": 1.0,
+        "processing_time": 1.3148442000092473,
+        "speed_factor": 0.7605463826002861,
+        "memory_before_mb": 250.53125,
+        "memory_after_mb": 510.37890625,
+        "memory_delta_mb": 259.84765625,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_lockfree_model_access": true,
+          "enable_fast_audio_validation": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "adaptive_access_3.0s",
+        "audio_duration": 3.0,
+        "processing_time": 2.6877965000167023,
+        "speed_factor": 1.1161559292086873,
+        "memory_before_mb": 250.734375,
+        "memory_after_mb": 505.4140625,
+        "memory_delta_mb": 254.6796875,
+        "transcription_text": "I'm going to do a little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_lockfree_model_access": true,
+          "enable_fast_audio_validation": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "adaptive_access_5.0s",
+        "audio_duration": 5.0,
+        "processing_time": 1.2770625000121072,
+        "speed_factor": 3.9152351587746077,
+        "memory_before_mb": 249.2578125,
+        "memory_after_mb": 510.74609375,
+        "memory_delta_mb": 261.48828125,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_lockfree_model_access": true,
+          "enable_fast_audio_validation": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "adaptive_access_10.0s",
+        "audio_duration": 10.0,
+        "processing_time": 1.3444773000082932,
+        "speed_factor": 7.437834762950863,
+        "memory_before_mb": 251.9140625,
+        "memory_after_mb": 510.47265625,
+        "memory_delta_mb": 258.55859375,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_lockfree_model_access": true,
+          "enable_fast_audio_validation": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "adaptive_access_15.0s",
+        "audio_duration": 15.0,
+        "processing_time": 1.3659403000201564,
+        "speed_factor": 10.981446260703088,
+        "memory_before_mb": 251.45703125,
+        "memory_after_mb": 510.96875,
+        "memory_delta_mb": 259.51171875,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_lockfree_model_access": true,
+          "enable_fast_audio_validation": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "adaptive_access_30.0s",
+        "audio_duration": 30.0,
+        "processing_time": 1.3943540999898687,
+        "speed_factor": 21.51533817716603,
+        "memory_before_mb": 251.953125,
+        "memory_after_mb": 511.1640625,
+        "memory_delta_mb": 259.2109375,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_lockfree_model_access": true,
+          "enable_fast_audio_validation": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "adaptive_access_empty",
+        "audio_duration": 0.0,
+        "processing_time": 0.00040889999945648015,
+        "speed_factor": 0.0,
+        "memory_before_mb": 251.37109375,
+        "memory_after_mb": 510.98828125,
+        "memory_delta_mb": 259.6171875,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_lockfree_model_access": true,
+          "enable_fast_audio_validation": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "adaptive_access_silence",
+        "audio_duration": 2.0,
+        "processing_time": 1.2400727999920491,
+        "speed_factor": 1.6128085383477673,
+        "memory_before_mb": 251.64453125,
+        "memory_after_mb": 510.6875,
+        "memory_delta_mb": 259.04296875,
+        "transcription_text": "You",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_lockfree_model_access": true,
+          "enable_fast_audio_validation": false,
+          "enable_memory_pooling": false,
+          "enable_chunked_long_audio": false,
+          "ultra_fast_mode": false
+        }
+      }
+    ],
+    "memory_optimization": [
+      {
+        "test_name": "memory_opt_1.0s",
+        "audio_duration": 1.0,
+        "processing_time": 1.2612528000026941,
+        "speed_factor": 0.7928624618299075,
+        "memory_before_mb": 251.75390625,
+        "memory_after_mb": 509.12109375,
+        "memory_delta_mb": 257.3671875,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "memory_opt_3.0s",
+        "audio_duration": 3.0,
+        "processing_time": 2.819799899996724,
+        "speed_factor": 1.0639052792375392,
+        "memory_before_mb": 251.875,
+        "memory_after_mb": 504.73828125,
+        "memory_delta_mb": 252.86328125,
+        "transcription_text": "I'm going to do a little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "memory_opt_5.0s",
+        "audio_duration": 5.0,
+        "processing_time": 1.3341972000198439,
+        "speed_factor": 3.747571948079065,
+        "memory_before_mb": 249.78125,
+        "memory_after_mb": 512.9375,
+        "memory_delta_mb": 263.15625,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "memory_opt_10.0s",
+        "audio_duration": 10.0,
+        "processing_time": 0.001712600002065301,
+        "speed_factor": 5839.075083464062,
+        "memory_before_mb": 251.609375,
+        "memory_after_mb": 511.23828125,
+        "memory_delta_mb": 259.62890625,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "memory_opt_15.0s",
+        "audio_duration": 15.0,
+        "processing_time": 0.0017756999877747148,
+        "speed_factor": 8447.372925196567,
+        "memory_before_mb": 252.12109375,
+        "memory_after_mb": 511.2890625,
+        "memory_delta_mb": 259.16796875,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "memory_opt_30.0s",
+        "audio_duration": 30.0,
+        "processing_time": 0.005063100019469857,
+        "speed_factor": 5925.22365440871,
+        "memory_before_mb": 252.4921875,
+        "memory_after_mb": 513.80859375,
+        "memory_delta_mb": 261.31640625,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "memory_opt_empty",
+        "audio_duration": 0.0,
+        "processing_time": 0.00024130000383593142,
+        "speed_factor": 0.0,
+        "memory_before_mb": 252.08984375,
+        "memory_after_mb": 512.55859375,
+        "memory_delta_mb": 260.46875,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "ultra_fast_mode": false
+        }
+      },
+      {
+        "test_name": "memory_opt_silence",
+        "audio_duration": 2.0,
+        "processing_time": 1.2623452999978326,
+        "speed_factor": 1.5843525539354675,
+        "memory_before_mb": 253.6875,
+        "memory_after_mb": 512.7265625,
+        "memory_delta_mb": 259.0390625,
+        "transcription_text": "You",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "enable_fast_audio_validation": false,
+          "enable_lockfree_model_access": false,
+          "ultra_fast_mode": false
+        }
+      }
+    ],
+    "combined_optimization": [
+      {
+        "test_name": "combined_1.0s",
+        "audio_duration": 1.0,
+        "processing_time": 1.3469585000129882,
+        "speed_factor": 0.7424133705606798,
+        "memory_before_mb": 252.23828125,
+        "memory_after_mb": 511.52734375,
+        "memory_delta_mb": 259.2890625,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.02,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": true,
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "ultra_fast_mode": true,
+          "skip_buffer_integrity_checks": true,
+          "minimal_segment_processing": true,
+          "disable_fallback_detection": true
+        }
+      },
+      {
+        "test_name": "combined_3.0s",
+        "audio_duration": 3.0,
+        "processing_time": 3.0484854000096675,
+        "speed_factor": 0.9840952493951541,
+        "memory_before_mb": 252.625,
+        "memory_after_mb": 506.0078125,
+        "memory_delta_mb": 253.3828125,
+        "transcription_text": "I'm going to do a little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a Little bit of a",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.02,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": true,
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "ultra_fast_mode": true,
+          "skip_buffer_integrity_checks": true,
+          "minimal_segment_processing": true,
+          "disable_fallback_detection": true
+        }
+      },
+      {
+        "test_name": "combined_5.0s",
+        "audio_duration": 5.0,
+        "processing_time": 1.3236106999975163,
+        "speed_factor": 3.777545769318261,
+        "memory_before_mb": 251.67578125,
+        "memory_after_mb": 512.16015625,
+        "memory_delta_mb": 260.484375,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.02,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": true,
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "ultra_fast_mode": true,
+          "skip_buffer_integrity_checks": true,
+          "minimal_segment_processing": true,
+          "disable_fallback_detection": true
+        }
+      },
+      {
+        "test_name": "combined_10.0s",
+        "audio_duration": 10.0,
+        "processing_time": 0.0013226000010035932,
+        "speed_factor": 7560.864957214552,
+        "memory_before_mb": 253.0,
+        "memory_after_mb": 511.1640625,
+        "memory_delta_mb": 258.1640625,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.02,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": true,
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "ultra_fast_mode": true,
+          "skip_buffer_integrity_checks": true,
+          "minimal_segment_processing": true,
+          "disable_fallback_detection": true
+        }
+      },
+      {
+        "test_name": "combined_15.0s",
+        "audio_duration": 15.0,
+        "processing_time": 0.0011693000269588083,
+        "speed_factor": 12828.18750890905,
+        "memory_before_mb": 253.15234375,
+        "memory_after_mb": 510.09765625,
+        "memory_delta_mb": 256.9453125,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.02,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": true,
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "ultra_fast_mode": true,
+          "skip_buffer_integrity_checks": true,
+          "minimal_segment_processing": true,
+          "disable_fallback_detection": true
+        }
+      },
+      {
+        "test_name": "combined_30.0s",
+        "audio_duration": 30.0,
+        "processing_time": 0.0026959000097122043,
+        "speed_factor": 11128.009159064692,
+        "memory_before_mb": 252.8359375,
+        "memory_after_mb": 510.09765625,
+        "memory_delta_mb": 257.26171875,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.02,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": true,
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "ultra_fast_mode": true,
+          "skip_buffer_integrity_checks": true,
+          "minimal_segment_processing": true,
+          "disable_fallback_detection": true
+        }
+      },
+      {
+        "test_name": "combined_empty",
+        "audio_duration": 0.0,
+        "processing_time": 0.00031140001374296844,
+        "speed_factor": 0.0,
+        "memory_before_mb": 252.3125,
+        "memory_after_mb": 509.00390625,
+        "memory_delta_mb": 256.69140625,
+        "transcription_text": "",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.02,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": true,
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "ultra_fast_mode": true,
+          "skip_buffer_integrity_checks": true,
+          "minimal_segment_processing": true,
+          "disable_fallback_detection": true
+        }
+      },
+      {
+        "test_name": "combined_silence",
+        "audio_duration": 2.0,
+        "processing_time": 1.2639368000091054,
+        "speed_factor": 1.5823575988812035,
+        "memory_before_mb": 251.6875,
+        "memory_after_mb": 509.57421875,
+        "memory_delta_mb": 257.88671875,
+        "transcription_text": "You",
+        "success": true,
+        "error_message": null,
+        "config_flags": {
+          "enable_fast_audio_validation": true,
+          "audio_validation_sample_rate": 0.02,
+          "fast_nan_inf_detection": true,
+          "disable_amplitude_warnings": true,
+          "enable_lockfree_model_access": true,
+          "enable_memory_pooling": true,
+          "enable_chunked_long_audio": true,
+          "chunk_size_seconds": 5.0,
+          "ultra_fast_mode": true,
+          "skip_buffer_integrity_checks": true,
+          "minimal_segment_processing": true,
+          "disable_fallback_detection": true
+        }
+      }
+    ]
+  }
+}

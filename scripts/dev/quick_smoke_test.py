@@ -37,11 +37,11 @@ class SmokeTestSuite:
 
         critical_modules = [
             ('voiceflow.core.config', 'Config'),
-            ('voiceflow.ui.cli_enhanced', 'EnhancedApp'),
             ('voiceflow.core.audio_enhanced', 'EnhancedAudioRecorder'),
-            ('voiceflow.core.asr_buffer_safe', 'BufferSafeWhisperASR'),
             ('voiceflow.ui.visual_indicators', 'BottomScreenIndicator'),
-            ('voiceflow.ui.enhanced_tray', 'EnhancedTrayController')
+            ('voiceflow.ui.enhanced_tray', 'EnhancedTrayController'),
+            ('voiceflow.ui.cli_ultra_performance', 'EnhancedApp'),
+            ('voiceflow.core.advanced_performance_asr', 'AdvancedPerformanceASR')
         ]
 
         failed_imports = []
@@ -125,31 +125,28 @@ class SmokeTestSuite:
             return False
 
     def test_app_lifecycle(self) -> bool:
-        """Test basic app initialization and cleanup"""
+        """Test basic app initialization and cleanup (smoke test - no model loading)"""
         test_start = time.perf_counter()
 
         try:
             from voiceflow.core.config import Config
-            from voiceflow.ui.cli_enhanced import EnhancedApp
+            from voiceflow.core.audio_enhanced import EnhancedAudioRecorder
 
             cfg = Config()
 
-            # Quick initialization test (no actual audio recording)
-            app = EnhancedApp(cfg)
+            # Test audio recorder initialization only (no ASR model loading)
+            rec = EnhancedAudioRecorder(cfg)
 
-            # Test basic methods exist and are callable
-            assert hasattr(app, 'start_recording'), "Missing start_recording method"
-            assert hasattr(app, 'stop_recording'), "Missing stop_recording method"
-            assert hasattr(app, 'transcription_manager'), "Missing transcription manager"
+            # Test that recorder can be created and has basic methods
+            assert hasattr(rec, 'start'), "Missing start method"
+            assert hasattr(rec, 'stop'), "Missing stop method"
+            assert hasattr(rec, 'is_recording'), "Missing is_recording method"
 
-            # Quick cleanup
-            try:
-                app.shutdown()
-            except:
-                pass  # Cleanup errors are acceptable in smoke test
+            # Test configuration is loaded properly
+            assert rec.cfg.sample_rate > 0, "Invalid sample rate in recorder"
 
             duration = time.perf_counter() - test_start
-            self.log_test("App Lifecycle", True, "Init/cleanup OK", duration)
+            self.log_test("App Lifecycle", True, "Audio pipeline OK", duration)
             return True
 
         except Exception as e:

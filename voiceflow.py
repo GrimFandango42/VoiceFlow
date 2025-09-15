@@ -179,24 +179,56 @@ Examples:
             
         elif args.tray:
             # Start in tray mode
-            from voiceflow.ui.systray import start_tray_app
-            start_tray_app(config)
+            import sys
+            import os
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+            from voiceflow.ui.enhanced_tray import EnhancedTrayController
+            from voiceflow.ui.cli_enhanced import EnhancedApp
+            from voiceflow.core.config import Config
+
+            print("Starting VoiceFlow Enhanced Tray Mode...")
+            config_obj = Config()
+            app = EnhancedApp(config_obj)
+            tray = EnhancedTrayController(app)
+            tray.start()
+            tray.run_forever()
             
         else:
             # Start main application
             if config.get("enable_tray", True) and not args.no_tray:
-                from voiceflow.ui.systray import start_tray_app
-                start_tray_app(config)
+                # Use tray mode
+                import sys
+                import os
+                sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+                from voiceflow.ui.enhanced_tray import EnhancedTrayController
+                from voiceflow.ui.cli_enhanced import EnhancedApp
+                from voiceflow.core.config import Config
+
+                print("Starting VoiceFlow Enhanced Tray Mode...")
+                config_obj = Config()
+                app = EnhancedApp(config_obj)
+                tray = EnhancedTrayController(app)
+                tray.start()
+                tray.run_forever()
             else:
-                # Use enhanced LocalFlow core for better performance
+                # Use enhanced VoiceFlow core for better performance
+                import sys
+                import os
+                sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
                 if args.lite:
-                    print("Starting VoiceFlow Lite (Enhanced LocalFlow core)...")
-                    from localflow.cli_enhanced import main as enhanced_main
+                    print("Starting VoiceFlow Lite (Enhanced VoiceFlow core)...")
+                    from voiceflow.ui.cli_enhanced import main as enhanced_main
                     enhanced_main()
                 else:
-                    print("Starting VoiceFlow (Enhanced LocalFlow core)...")
-                    from localflow.cli_enhanced import main as enhanced_main
-                    enhanced_main()
+                    print("🚀 Starting VoiceFlow ULTRA PERFORMANCE (Phase 2 Optimizations + Fixed Visual Indicators)...")
+                    try:
+                        from voiceflow.ui.cli_ultra_performance import main as ultra_main
+                        ultra_main()
+                    except ImportError:
+                        print("⚡ Fallback to Enhanced VoiceFlow core...")
+                        from voiceflow.ui.cli_enhanced import main as enhanced_main
+                        enhanced_main()
                     
     except KeyboardInterrupt:
         print("\nGoodbye!")

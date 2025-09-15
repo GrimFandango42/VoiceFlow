@@ -12,11 +12,14 @@ from pathlib import Path
 # Add localflow to path
 sys.path.append(str(Path(__file__).parent))
 
+# Add src to path for proper imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
+
 try:
-    from voiceflow.visual_config import (
+    from voiceflow.ui.visual_config import (
         VisualConfigManager, OverlayPosition, OverlaySize, ColorTheme
     )
-    from voiceflow.visual_indicators import BottomScreenIndicator, TranscriptionStatus
+    from voiceflow.ui.visual_indicators import BottomScreenIndicator, TranscriptionStatus
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure you're running from the VoiceFlow root directory")
@@ -172,10 +175,10 @@ def demo_accessibility_features():
             if overlay.window:
                 overlay.window.destroy()
 
-            print(f"  ✓ {test_name} accessibility works")
+            print(f"  [OK] {test_name} accessibility works")
 
         except Exception as e:
-            print(f"  ✗ {test_name} accessibility failed: {e}")
+            print(f"  [FAIL] {test_name} accessibility failed: {e}")
 
         time.sleep(0.5)
 
@@ -218,7 +221,7 @@ def demo_configuration_persistence():
         print("[OK] Loaded configuration works correctly")
 
     except Exception as e:
-        print(f"✗ Loaded configuration failed: {e}")
+        print(f"[FAIL] Loaded configuration failed: {e}")
 
 def reset_to_defaults():
     """Reset configuration to defaults"""

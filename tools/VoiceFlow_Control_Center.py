@@ -27,16 +27,61 @@ class VoiceFlowControlCenter:
 
         # State tracking
         self.current_process: Optional[subprocess.Popen] = None
+        self.visual_demo_process: Optional[subprocess.Popen] = None
+        self.visual_demo_running = False
         self.status_text = tk.StringVar(value="Ready")
         self.progress_var = tk.DoubleVar()
+
+        # Enhanced styling
+        self.colors = {
+            'primary': '#007ACC',      # Blue
+            'success': '#4CAF50',      # Green
+            'warning': '#FF9800',      # Orange
+            'danger': '#F44336',       # Red
+            'info': '#2196F3',         # Light Blue
+            'secondary': '#6C757D'     # Gray
+        }
 
         # UI Components
         self.log_text: Optional[scrolledtext.ScrolledText] = None
         self.status_label: Optional[tk.Label] = None
         self.progress_bar: Optional[ttk.Progressbar] = None
+        self.visual_demo_button: Optional[ttk.Button] = None
 
+        self._setup_styling()
         self._setup_ui()
         self._check_initial_status()
+
+    def _setup_styling(self):
+        """Setup enhanced styling and themes"""
+        style = ttk.Style()
+
+        # Configure button styles with colors
+        style.configure('Primary.TButton',
+                       background=self.colors['primary'],
+                       foreground='white',
+                       font=('Segoe UI', 9, 'bold'))
+
+        style.configure('Success.TButton',
+                       background=self.colors['success'],
+                       foreground='white',
+                       font=('Segoe UI', 9, 'bold'))
+
+        style.configure('Warning.TButton',
+                       background=self.colors['warning'],
+                       foreground='white',
+                       font=('Segoe UI', 9, 'bold'))
+
+        style.configure('Info.TButton',
+                       background=self.colors['info'],
+                       foreground='white',
+                       font=('Segoe UI', 9, 'bold'))
+
+        # Configure frame styles
+        style.configure('Header.TLabelFrame.Label', font=('Segoe UI', 10, 'bold'))
+
+        # Root window styling
+        self.root.configure(bg='#f5f5f5')
 
     def _setup_ui(self):
         """Set up the user interface"""
@@ -60,15 +105,15 @@ class VoiceFlowControlCenter:
         actions_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
         actions_frame.columnconfigure(1, weight=1)
 
-        # Action buttons
+        # Action buttons with enhanced styling
         ttk.Button(actions_frame, text="🚀 Launch VoiceFlow",
-                  command=self.launch_voiceflow, width=20).grid(row=0, column=0, padx=(0, 10))
+                  command=self.launch_voiceflow, width=20, style='Primary.TButton').grid(row=0, column=0, padx=(0, 10))
 
         ttk.Button(actions_frame, text="⚡ Quick Health Check",
-                  command=self.run_health_check, width=20).grid(row=0, column=1, padx=5)
+                  command=self.run_health_check, width=20, style='Success.TButton').grid(row=0, column=1, padx=5)
 
         ttk.Button(actions_frame, text="🔧 Setup & Install",
-                  command=self.run_setup, width=20).grid(row=0, column=2, padx=(10, 0))
+                  command=self.run_setup, width=20, style='Warning.TButton').grid(row=0, column=2, padx=(10, 0))
 
         # Testing Section
         testing_frame = ttk.LabelFrame(main_frame, text="Testing & Validation", padding="10")
@@ -80,8 +125,9 @@ class VoiceFlowControlCenter:
         ttk.Button(testing_frame, text="🔄 Full Test Suite",
                   command=self.run_full_tests, width=20).grid(row=0, column=1, padx=5)
 
-        ttk.Button(testing_frame, text="🎨 Visual Demo",
-                  command=self.run_visual_demo, width=20).grid(row=0, column=2, padx=(10, 0))
+        self.visual_demo_button = ttk.Button(testing_frame, text="🎨 Start Visual Demo",
+                                             command=self.toggle_visual_demo, width=20, style='Info.TButton')
+        self.visual_demo_button.grid(row=0, column=2, padx=(10, 0))
 
         # Status Section
         status_frame = ttk.LabelFrame(main_frame, text="System Status", padding="10")
@@ -269,10 +315,41 @@ class VoiceFlowControlCenter:
         command = [sys.executable, "scripts/dev/parallel_test_runner.py"]
         self.run_command_async(command, "Full Test Suite")
 
-    def run_visual_demo(self):
-        """Run visual configuration demo"""
-        command = [sys.executable, "scripts/dev/demo_visual_config.py"]
-        self.run_command_async(command, "Visual Configuration Demo")
+    def toggle_visual_demo(self):
+        """Toggle visual demo on/off"""
+        if self.visual_demo_running:
+            self.stop_visual_demo()
+        else:
+            self.start_visual_demo()
+
+    def start_visual_demo(self):
+        """Start visual configuration demo"""
+        try:
+            command = [sys.executable, "scripts/dev/demo_visual_config.py"]
+            self.visual_demo_process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=os.getcwd(),
+                text=True
+            )
+            self.visual_demo_running = True
+            self.visual_demo_button.configure(text="🛑 Stop Visual Demo")
+            self.log("🎨 Visual demo started", "INFO")
+        except Exception as e:
+            self.log(f"❌ Failed to start visual demo: {e}", "ERROR")
+
+    def stop_visual_demo(self):
+        """Stop visual configuration demo"""
+        try:
+            if self.visual_demo_process:
+                self.visual_demo_process.terminate()
+                self.visual_demo_process = None
+            self.visual_demo_running = False
+            self.visual_demo_button.configure(text="🎨 Start Visual Demo")
+            self.log("🛑 Visual demo stopped", "WARN")
+        except Exception as e:
+            self.log(f"❌ Failed to stop visual demo: {e}", "ERROR")
 
     def stop_current_process(self):
         """Stop currently running process"""
