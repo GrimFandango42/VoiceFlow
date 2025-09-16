@@ -837,7 +837,7 @@ class BufferSafeWhisperASR:
             (r'\bclaud code\b', 'Claude Code'),
             (r'\bcode claude\b', 'Claude Code'),
 
-            # Common pronunciation fixes for your speech patterns
+            # Advanced pronunciation and speech pattern fixes
             (r'\bbabel translation\b', 'Babel transpilation'),
             (r'\bby torch\b', 'PyTorch'),
             (r'\bpost-gre-sql\b', 'PostgreSQL'),
@@ -845,6 +845,33 @@ class BufferSafeWhisperASR:
             (r'\bto the graphql\b', 'The GraphQL'),
             (r'\bdeployed to production\b', 'deploy to production'),
             (r'\bto create docker\b', 'create Docker'),
+
+            # Common speech-to-text confusion patterns
+            (r'\bwebpack with\b', 'Webpack with'),
+            (r'\bconfigure webpack\b', 'configure Webpack'),
+            (r'\bgraph ql\b', 'GraphQL'),
+            (r'\bgraph q l\b', 'GraphQL'),
+            (r'\bschema needs\b', 'schema needs'),
+            (r'\buser authentication\b', 'user authentication'),
+            (r'\bmutations\b', 'mutations'),
+            (r'\bresolvers for\b', 'resolvers for'),
+
+            # Framework and tool combinations
+            (r'\bjavascript features\b', 'JavaScript features'),
+            (r'\bmodern javascript\b', 'modern JavaScript'),
+            (r'\bwith babel\b', 'with Babel'),
+            (r'\bfor modern\b', 'for modern'),
+            (r'\bthe webpack\b', 'the Webpack'),
+            (r'\bbabel transpilation\b', 'Babel transpilation'),
+
+            # Common workflow phrases
+            (r'\bwe need\b', 'we need'),
+            (r'\blets implement\b', 'let\'s implement'),
+            (r'\blets add\b', 'let\'s add'),
+            (r'\blets configure\b', 'let\'s configure'),
+            (r'\blets setup\b', 'let\'s set up'),
+            (r'\bsetup ci cd\b', 'set up CI/CD'),
+            (r'\bci cd pipeline\b', 'CI/CD pipeline'),
 
             # Natural conversation with assistant
             (r'\bokay claude\b', 'Okay Claude'),
@@ -855,6 +882,36 @@ class BufferSafeWhisperASR:
             (r'\bcan you help me\b', 'can you help me'),
             (r'\bi need you to\b', 'I need you to'),
             (r'\bgo ahead and\b', 'go ahead and'),
+
+            # Common development workflow vocabulary
+            (r'\blet me try\b', 'let me try'),
+            (r'\bi want to\b', 'I want to'),
+            (r'\bwe need to\b', 'we need to'),
+            (r'\blets see if\b', 'let\'s see if'),
+            (r'\bhow do i\b', 'how do I'),
+            (r'\bwhat if we\b', 'what if we'),
+            (r'\bmake sure that\b', 'make sure that'),
+            (r'\bcheck if\b', 'check if'),
+            (r'\bfind out\b', 'find out'),
+            (r'\bwork with\b', 'work with'),
+
+            # Context-aware technical corrections
+            (r'\bthe react\b', 'the React'),
+            (r'\bthe vue\b', 'the Vue'),
+            (r'\bthe angular\b', 'the Angular'),
+            (r'\busing react\b', 'using React'),
+            (r'\bwith react\b', 'with React'),
+            (r'\bin react\b', 'in React'),
+            (r'\bfor react\b', 'for React'),
+
+            # Grammar and flow improvements
+            (r'\bto try to\b', 'to try to'),
+            (r'\bneed to be\b', 'need to be'),
+            (r'\bgoing to be\b', 'going to be'),
+            (r'\bwant to make\b', 'want to make'),
+            (r'\btrying to get\b', 'trying to get'),
+            (r'\bable to use\b', 'able to use'),
+            (r'\bhave to do\b', 'have to do'),
 
             # Simple formatting commands (keep it practical)
             (r'\bnew line\b', '\n'),
