@@ -619,6 +619,9 @@ class BufferSafeWhisperASR:
             ' http ': ' HTTP ',
             ' https ': ' HTTPS ',
             ' sql ': ' SQL ',
+            ' post query sql ': ' PostgreSQL ',  # User-specific fix
+            ' post-query sql ': ' PostgreSQL ',  # With hyphen
+            ' postgres ': ' PostgreSQL ',
             ' database ': ' database ',
             ' function ': ' function ',
             ' variable ': ' variable ',
@@ -670,6 +673,8 @@ class BufferSafeWhisperASR:
             ' clod code ': ' Claude Code ',
             ' cloud code ': ' Claude Code ',
             ' clause code ': ' Claude Code ',
+            ' a plot code ': ' Hey Claude Code ',  # User-specific pronunciation
+            ' a-plot code ': ' Hey Claude Code ',  # With hyphen
             ' claude ': ' Claude ',
             ' claud ': ' Claude ',
             ' anthropic ': ' Anthropic ',
@@ -781,6 +786,10 @@ class BufferSafeWhisperASR:
             (r'\bebi\b', 'API'),
             (r'\be b i\b', 'API'),
             (r'\bdashboard ebi\b', 'dashboard API'),
+            (r'\bfastapi and find\b', 'FastAPI endpoint'),  # User-specific pattern
+            (r'\bapi and find\b', 'API endpoint'),
+            (r'\bpost query sql\b', 'PostgreSQL'),
+            (r'\bpost-query sql\b', 'PostgreSQL'),
 
             # Claude Code specific patterns (OPTIMIZATION 7)
             (r'\bclod code\b', 'Claude Code'),
