@@ -641,6 +641,7 @@ class BufferSafeWhisperASR:
             ' pie torch ': ' PyTorch ',
             ' tensor flow ': ' TensorFlow ',
             ' tensorflow ': ' TensorFlow ',
+            ' densorflow ': ' TensorFlow ',  # User-specific pronunciation
             ' numpy ': ' NumPy ',
             ' num pie ': ' NumPy ',
             ' pandas ': ' pandas ',
@@ -817,6 +818,9 @@ class BufferSafeWhisperASR:
             (r'\band sort of\b', 'instead of'),
             (r'\binstead of flask\b', 'instead of Flask'),
             (r'\bthe production\b', 'to production'),
+            (r'\bdensorflow\b', 'TensorFlow'),  # User pronunciation
+            (r'\bnumpy in pandas\b', 'NumPy and pandas'),  # Grammar fix
+            (r'\bwith a docker\b', 'using Docker'),  # Natural phrasing
         ]
 
         for pattern, replacement in tech_patterns:
