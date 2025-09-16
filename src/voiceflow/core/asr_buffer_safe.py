@@ -660,6 +660,43 @@ class BufferSafeWhisperASR:
             ' streamlit ': ' Streamlit ',
             ' gradio ': ' Gradio ',
 
+            # Claude Code specific corrections (OPTIMIZATION 7)
+            ' clod code ': ' Claude Code ',
+            ' cloud code ': ' Claude Code ',
+            ' clause code ': ' Claude Code ',
+            ' claude ': ' Claude ',
+            ' claud ': ' Claude ',
+            ' anthropic ': ' Anthropic ',
+            ' anthropic claude ': ' Anthropic Claude ',
+
+            # Programming languages (C++, Go, etc.)
+            ' c plus plus ': ' C++ ',
+            ' c++ ': ' C++ ',
+            ' see plus plus ': ' C++ ',
+            ' go lang ': ' Go ',
+            ' golang ': ' Go ',
+            ' rust ': ' Rust ',
+            ' kotlin ': ' Kotlin ',
+            ' swift ': ' Swift ',
+            ' dart ': ' Dart ',
+            ' php ': ' PHP ',
+            ' ruby ': ' Ruby ',
+            ' scala ': ' Scala ',
+            ' haskell ': ' Haskell ',
+            ' clojure ': ' Clojure ',
+            ' elixir ': ' Elixir ',
+
+            # Dashboard and UI terms
+            ' dashboard ': ' dashboard ',
+            ' ui ': ' UI ',
+            ' ux ': ' UX ',
+            ' frontend ': ' frontend ',
+            ' backend ': ' backend ',
+            ' full stack ': ' full-stack ',
+            ' responsive ': ' responsive ',
+            ' component ': ' component ',
+            ' widget ': ' widget ',
+
             # Coding agent instruction terms
             ' refactor ': ' refactor ',
             ' optimize ': ' optimize ',
@@ -731,6 +768,20 @@ class BufferSafeWhisperASR:
             (r'\bopen cv\b', 'OpenCV'),
             (r'\bhugging face\b', 'Hugging Face'),
             (r'\bfast api\b', 'FastAPI'),
+
+            # Claude Code specific patterns (OPTIMIZATION 7)
+            (r'\bclod code\b', 'Claude Code'),
+            (r'\bcloud code\b', 'Claude Code'),
+            (r'\bclause code\b', 'Claude Code'),
+            (r'\bclod\b', 'Claude'),
+            (r'\bclaud\b', 'Claude'),
+            (r'\bclaude\b', 'Claude'),
+
+            # Programming language patterns
+            (r'\bc plus plus\b', 'C++'),
+            (r'\bsee plus plus\b', 'C++'),
+            (r'\bgo lang\b', 'Go'),
+            (r'\bgolang\b', 'Go'),
 
             # Coding instruction patterns for agents
             (r'\bcreate a function\b', 'create a function'),
