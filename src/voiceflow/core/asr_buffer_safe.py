@@ -831,58 +831,43 @@ class BufferSafeWhisperASR:
             (r'\bnumpy in pandas\b', 'NumPy and pandas'),  # Grammar fix
             (r'\bwith a docker\b', 'using Docker'),  # Natural phrasing
 
-            # Enhanced conversational formatting commands (OPTIMIZATION 10)
+            # Assistant conversation patterns (focus on Claude Code interaction)
+            (r'\ba claude code\b', 'Hey Claude Code'),
+            (r'\bhey claude\b', 'Hey Claude'),
+            (r'\bclaud code\b', 'Claude Code'),
+            (r'\bcode claude\b', 'Claude Code'),
+
+            # Common pronunciation fixes for your speech patterns
+            (r'\bbabel translation\b', 'Babel transpilation'),
+            (r'\bby torch\b', 'PyTorch'),
+            (r'\bpost-gre-sql\b', 'PostgreSQL'),
+            (r'\bpost gre sql\b', 'PostgreSQL'),
+            (r'\bto the graphql\b', 'The GraphQL'),
+            (r'\bdeployed to production\b', 'deploy to production'),
+            (r'\bto create docker\b', 'create Docker'),
+
+            # Natural conversation with assistant
+            (r'\bokay claude\b', 'Okay Claude'),
+            (r'\bthanks claude\b', 'Thanks Claude'),
+            (r'\bclaud can you\b', 'Claude can you'),
+            (r'\bclaud please\b', 'Claude please'),
+            (r'\blet\'s work on\b', 'let\'s work on'),
+            (r'\bcan you help me\b', 'can you help me'),
+            (r'\bi need you to\b', 'I need you to'),
+            (r'\bgo ahead and\b', 'go ahead and'),
+
+            # Simple formatting commands (keep it practical)
             (r'\bnew line\b', '\n'),
-            (r'\bline break\b', '\n'),
             (r'\bnew paragraph\b', '\n\n'),
-            (r'\bnext paragraph\b', '\n\n'),
-            (r'\bstart paragraph\b', '\n\n'),
             (r'\bbullet point\b', '\n• '),
             (r'\bbullet\b', '\n• '),
-            (r'\bnext bullet\b', '\n• '),
-            (r'\badd bullet\b', '\n• '),
-            (r'\bdash point\b', '\n- '),
-            (r'\bdash\b(?=\s)', '\n- '),  # Add dash only when followed by space
-
-            # Smart numbered lists
             (r'\bnumber one\b', '\n1. '),
             (r'\bnumber two\b', '\n2. '),
             (r'\bnumber three\b', '\n3. '),
-            (r'\bnumber four\b', '\n4. '),
-            (r'\bnumber five\b', '\n5. '),
-            (r'\bnumber six\b', '\n6. '),
-            (r'\bnumber seven\b', '\n7. '),
-            (r'\bnumber eight\b', '\n8. '),
-            (r'\bnumber nine\b', '\n9. '),
-            (r'\bnumber ten\b', '\n10. '),
 
-            # Alternative number patterns
-            (r'\bfirst point\b', '\n1. '),
-            (r'\bsecond point\b', '\n2. '),
-            (r'\bthird point\b', '\n3. '),
-            (r'\bfourth point\b', '\n4. '),
-            (r'\bfifth point\b', '\n5. '),
-
-            # Formatting commands
-            (r'\bmake title\b', '\n# '),
-            (r'\btitle\b(?=\s)', '\n# '),  # Title only when followed by space
-            (r'\bheading\b(?=\s)', '\n## '),  # Heading only when followed by space
-            (r'\bsubheading\b(?=\s)', '\n### '),  # Subheading only when followed by space
-            (r'\bcode block\b', '\n```\n'),
-            (r'\bstart code\b', '\n```\n'),
-            (r'\bend code\b', '\n```\n'),
-            (r'\binline code\b', '`'),
-
-            # Text formatting hints
-            (r'\bbold text\b', '**'),
-            (r'\bmake bold\b', '**'),
-            (r'\bitalic text\b', '*'),
-            (r'\bmake italic\b', '*'),
-
-            # List continuation
+            # Natural list continuation
             (r'\band also\b(?=\s)', '\n• '),  # Continue bullet points
             (r'\badditionally\b(?=\s)', '\n• '),  # Continue bullet points
-            (r'\bmoreover\b(?=\s)', '\n• '),  # Continue bullet points
 
             # Intelligent hallucination cleanup - only remove obvious noise patterns
             (r'^\s*(?:okay\s*){3,}\s*$', ''),  # Remove only repetitive "okay okay okay..." patterns
