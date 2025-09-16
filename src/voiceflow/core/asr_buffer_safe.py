@@ -5,6 +5,8 @@ import logging
 import time
 import threading
 import copy
+import re
+import operator
 
 import numpy as np
 
@@ -55,6 +57,15 @@ class BufferSafeWhisperASR:
         
         # Critical: NO persistent state between recordings
         # Each transcription starts with a clean slate
+
+        # Compiled regex patterns for text processing optimization (OPTIMIZATION 2)
+        self._punctuation_spacing_regex = re.compile(r'\s+([,.!?])')
+        self._punctuation_sentence_regex = re.compile(r'([,.!?])\s*([A-Z])')
+
+        # Optimized sorting key function for segments (OPTIMIZATION 3)
+        def _get_segment_start(segment):
+            return getattr(segment, 'start', 0)
+        self._segment_sort_key = _get_segment_start
 
         # DeepSeek Optimization: Memory pooling for 5-10% speed gain
         self._buffer_pool = []
@@ -354,11 +365,30 @@ class BufferSafeWhisperASR:
                 logger.warning(f"Audio too short for reliable transcription: {len(validated_audio)} samples")
                 return False
 
-            # Check for mostly silent audio
+            # ENHANCED silent audio detection - prevent WK artifacts from empty recordings
             energy = np.mean(validated_audio ** 2)
-            if energy < 1e-6:  # Very low energy threshold
-                logger.info("Audio appears to be silent or very quiet")
-                # Still return True - might be intentional silence
+            peak_amplitude = np.max(np.abs(validated_audio))
+            rms_energy = np.sqrt(energy)
+
+            # Multi-criteria rejection to prevent hallucinations
+            if energy < 1e-7:  # Completely silent
+                logger.info("Audio completely silent - preventing hallucination artifacts")
+                return False
+
+            if energy < 1e-6 and peak_amplitude < 5e-4:  # Very quiet with no significant peaks
+                logger.info("Audio too quiet with no meaningful peaks - preventing WK artifacts")
+                return False
+
+            if rms_energy < 1e-3 and np.std(validated_audio) < 1e-4:  # Uniform low-level noise
+                logger.info("Audio appears to be uniform noise - preventing hallucination")
+                return False
+
+            # Additional check: look for actual speech-like characteristics
+            if peak_amplitude > 0:
+                dynamic_range = peak_amplitude / (rms_energy + 1e-8)
+                if dynamic_range < 2.0 and energy < 1e-5:  # Low dynamic range + low energy = likely noise
+                    logger.info("Audio lacks speech characteristics - preventing artifacts")
+                    return False
 
             # Check for clipping (digital distortion)
             clipped_samples = np.count_nonzero(np.abs(validated_audio) >= 0.99)
@@ -510,7 +540,8 @@ class BufferSafeWhisperASR:
             return ""
         
         # Sort segments chronologically (fixes buffer ordering issue)
-        segments_list.sort(key=lambda s: getattr(s, 'start', 0))
+        # Use precompiled key function for better performance (OPTIMIZATION 3)
+        segments_list.sort(key=self._segment_sort_key)
         
         # Process each segment independently
         processed_segments = []
@@ -561,9 +592,9 @@ class BufferSafeWhisperASR:
 
         # Minimal cleaning without state (skip in ultra mode)
         if not getattr(self.cfg, 'minimal_segment_processing', False):
-            import re
-            text = re.sub(r'\s+([,.!?])', r'\1', text)
-            text = re.sub(r'([,.!?])\s*([A-Z])', r'\1 \2', text)
+            # Use precompiled regex patterns for better performance (OPTIMIZATION 2)
+            text = self._punctuation_spacing_regex.sub(r'\1', text)
+            text = self._punctuation_sentence_regex.sub(r'\1 \2', text)
 
         return text.strip()
 
@@ -588,22 +619,358 @@ class BufferSafeWhisperASR:
             ' wouldnt ': ' wouldn\'t ',
             ' shouldnt ': ' shouldn\'t ',
             ' couldnt ': ' couldn\'t ',
+
+            # Technical/Programming corrections (OPTIMIZATION 5)
+            ' jason ': ' JSON ',
+            ' jay son ': ' JSON ',
+            ' html ': ' HTML ',
+            ' css ': ' CSS ',
+            ' javascript ': ' JavaScript ',
+            ' python ': ' Python ',
+            ' react ': ' React ',
+            ' node js ': ' Node.js ',
+            ' nodejs ': ' Node.js ',
+            ' api ': ' API ',
+            ' ebi ': ' API ',  # User-specific pronunciation fix
+            ' e b i ': ' API ',
+            ' a p i ': ' API ',
+            ' url ': ' URL ',
+            ' http ': ' HTTP ',
+            ' https ': ' HTTPS ',
+            ' sql ': ' SQL ',
+            ' post query sql ': ' PostgreSQL ',  # User-specific fix
+            ' post-query sql ': ' PostgreSQL ',  # With hyphen
+            ' postgres ': ' PostgreSQL ',
+            ' database ': ' database ',
+            ' function ': ' function ',
+            ' variable ': ' variable ',
+            ' class ': ' class ',
+            ' method ': ' method ',
+            ' array ': ' array ',
+            ' object ': ' object ',
+            ' string ': ' string ',
+            ' boolean ': ' boolean ',
+            ' integer ': ' integer ',
+            ' null ': ' null ',
+            ' undefined ': ' undefined ',
+            ' git hub ': ' GitHub ',
+            ' github ': ' GitHub ',
+
+            # Phonetic corrections for ML/AI frameworks (OPTIMIZATION 6)
+            ' bite arch ': ' PyTorch ',
+            ' pi torch ': ' PyTorch ',
+            ' pytorch ': ' PyTorch ',
+            ' pie torch ': ' PyTorch ',
+            ' tensor flow ': ' TensorFlow ',
+            ' tensorflow ': ' TensorFlow ',
+            ' densorflow ': ' TensorFlow ',  # User-specific pronunciation
+            ' numpy ': ' NumPy ',
+            ' num pie ': ' NumPy ',
+            ' pandas ': ' pandas ',
+            ' pan das ': ' pandas ',
+            ' scikit learn ': ' scikit-learn ',
+            ' sklearn ': ' scikit-learn ',
+            ' jupyter ': ' Jupyter ',
+            ' google colab ': ' Google Colab ',
+            ' anaconda ': ' Anaconda ',
+            ' conda ': ' conda ',
+            ' pip install ': ' pip install ',
+            ' opencv ': ' OpenCV ',
+            ' open cv ': ' OpenCV ',
+            ' hugging face ': ' Hugging Face ',
+            ' transformers ': ' Transformers ',
+            ' fast api ': ' FastAPI ',
+            ' fastapi ': ' FastAPI ',
+            ' fast ebi ': ' FastAPI ',  # User-specific pronunciation fix
+            ' flask ': ' Flask ',
+            ' sort of flask ': ' instead of Flask ',  # Fix transcription pattern
+            ' django ': ' Django ',
+            ' streamlit ': ' Streamlit ',
+            ' gradio ': ' Gradio ',
+
+            # Claude Code specific corrections (OPTIMIZATION 7)
+            ' clod code ': ' Claude Code ',
+            ' cloud code ': ' Claude Code ',
+            ' clause code ': ' Claude Code ',
+            ' a plot code ': ' Hey Claude Code ',  # User-specific pronunciation
+            ' a-plot code ': ' Hey Claude Code ',  # With hyphen
+            ' claude ': ' Claude ',
+            ' claud ': ' Claude ',
+            ' anthropic ': ' Anthropic ',
+            ' anthropic claude ': ' Anthropic Claude ',
+
+            # Programming languages (C++, Go, etc.)
+            ' c plus plus ': ' C++ ',
+            ' c++ ': ' C++ ',
+            ' see plus plus ': ' C++ ',
+            ' go lang ': ' Go ',
+            ' golang ': ' Go ',
+            ' rust ': ' Rust ',
+            ' kotlin ': ' Kotlin ',
+            ' swift ': ' Swift ',
+            ' dart ': ' Dart ',
+            ' php ': ' PHP ',
+            ' ruby ': ' Ruby ',
+            ' scala ': ' Scala ',
+            ' haskell ': ' Haskell ',
+            ' clojure ': ' Clojure ',
+            ' elixir ': ' Elixir ',
+
+            # Dashboard and UI terms
+            ' dashboard ': ' dashboard ',
+            ' ui ': ' UI ',
+            ' ux ': ' UX ',
+            ' frontend ': ' frontend ',
+            ' backend ': ' backend ',
+            ' full stack ': ' full-stack ',
+            ' responsive ': ' responsive ',
+            ' component ': ' component ',
+            ' widget ': ' widget ',
+
+            # Coding agent instruction terms
+            ' refactor ': ' refactor ',
+            ' optimize ': ' optimize ',
+            ' debug ': ' debug ',
+            ' implement ': ' implement ',
+            ' create function ': ' create function ',
+            ' add method ': ' add method ',
+            ' fix bug ': ' fix bug ',
+            ' update code ': ' update code ',
+            ' write test ': ' write test ',
+            ' add comment ': ' add comment ',
+            ' import library ': ' import library ',
+            ' install package ': ' install package ',
         }
 
         # Apply corrections efficiently
         for wrong, right in corrections.items():
             text = text.replace(wrong, right)
 
-        # Basic punctuation fixes (minimal regex for speed)
-        import re
-        text = re.sub(r'\s+([,.!?])', r'\1', text)  # Remove space before punctuation
-        text = re.sub(r'([,.!?])\s*([A-Z])', r'\1 \2', text)  # Space after punctuation
+        # Use compiled regex patterns for speed (OPTIMIZATION 2)
+        text = self._punctuation_spacing_regex.sub(r'\1', text)  # Remove space before punctuation
+        text = self._punctuation_sentence_regex.sub(r'\1 \2', text)  # Space after punctuation
+
+        # Technical documentation improvements (OPTIMIZATION 5)
+        text = self._enhance_technical_formatting(text)
 
         # Capitalize first letter if needed
         if text and text[0].islower():
             text = text[0].upper() + text[1:]
 
         return text.strip()
+
+    def _enhance_technical_formatting(self, text: str) -> str:
+        """Improve technical documentation and code-related formatting"""
+        # Handle common programming patterns
+        import re
+
+        # Fix common code-related phrases
+        tech_patterns = [
+            (r'\bconsole dot log\b', 'console.log'),
+            (r'\bdocument dot\b', 'document.'),
+            (r'\bwindow dot\b', 'window.'),
+            (r'\bjquery\b', 'jQuery'),
+            (r'\bvs code\b', 'VS Code'),
+            (r'\bvisual studio code\b', 'Visual Studio Code'),
+            (r'\bgit commit\b', 'git commit'),
+            (r'\bgit push\b', 'git push'),
+            (r'\bgit pull\b', 'git pull'),
+            (r'\bnpm install\b', 'npm install'),
+            (r'\bnpm run\b', 'npm run'),
+            (r'\byarn install\b', 'yarn install'),
+            (r'\bdocker run\b', 'docker run'),
+            (r'\bdocker build\b', 'docker build'),
+            (r'\bkubernetes\b', 'Kubernetes'),
+            (r'\breact js\b', 'React.js'),
+            (r'\bvue js\b', 'Vue.js'),
+            (r'\bangular js\b', 'Angular.js'),
+            (r'\btype script\b', 'TypeScript'),
+
+            # Enhanced ML/AI framework patterns (OPTIMIZATION 6)
+            (r'\bbite arch\b', 'PyTorch'),
+            (r'\bpi torch\b', 'PyTorch'),
+            (r'\bpie torch\b', 'PyTorch'),
+            (r'\btensor flow\b', 'TensorFlow'),
+            (r'\bnum py\b', 'NumPy'),
+            (r'\bnum pie\b', 'NumPy'),
+            (r'\bnumpy or numpy\b', 'NumPy'),  # Fix duplication pattern
+            (r'\bpan das\b', 'pandas'),
+            (r'\bscikit learn\b', 'scikit-learn'),
+            (r'\bopen cv\b', 'OpenCV'),
+            (r'\bhugging face\b', 'Hugging Face'),
+            (r'\bfast api\b', 'FastAPI'),
+            (r'\bfast ebi\b', 'FastAPI'),  # User-specific pronunciation
+
+            # API pronunciation fixes (OPTIMIZATION 8)
+            (r'\bebi\b', 'API'),
+            (r'\be b i\b', 'API'),
+            (r'\bdashboard ebi\b', 'dashboard API'),
+            (r'\bfastapi and find\b', 'FastAPI endpoint'),  # User-specific pattern
+            (r'\bapi and find\b', 'API endpoint'),
+            (r'\bpost query sql\b', 'PostgreSQL'),
+            (r'\bpost-query sql\b', 'PostgreSQL'),
+
+            # Claude Code specific patterns (OPTIMIZATION 7)
+            (r'\bclod code\b', 'Claude Code'),
+            (r'\bcloud code\b', 'Claude Code'),
+            (r'\bclause code\b', 'Claude Code'),
+            (r'\bclod\b', 'Claude'),
+            (r'\bclaud\b', 'Claude'),
+            (r'\bclaude\b', 'Claude'),
+
+            # Programming language patterns
+            (r'\bc plus plus\b', 'C++'),
+            (r'\bsee plus plus\b', 'C++'),
+            (r'\bgo lang\b', 'Go'),
+            (r'\bgolang\b', 'Go'),
+
+            # Coding instruction patterns for agents
+            (r'\bcreate a function\b', 'create a function'),
+            (r'\bwrite a function\b', 'write a function'),
+            (r'\badd a method\b', 'add a method'),
+            (r'\bimplement a class\b', 'implement a class'),
+            (r'\bfix the bug\b', 'fix the bug'),
+            (r'\brefactor this code\b', 'refactor this code'),
+            (r'\boptimize the performance\b', 'optimize the performance'),
+            (r'\badd error handling\b', 'add error handling'),
+            (r'\bwrite unit tests\b', 'write unit tests'),
+            (r'\badd documentation\b', 'add documentation'),
+            (r'\bimport the library\b', 'import the library'),
+            (r'\binstall the package\b', 'install the package'),
+            (r'\bupdate the dependencies\b', 'update the dependencies'),
+            (r'\brun the tests\b', 'run the tests'),
+            (r'\bdeploy to production\b', 'deploy to production'),
+
+            # Common transcription fixes (OPTIMIZATION 8)
+            (r'\bwhen they try\b', 'when I try'),
+            (r'\band sort of\b', 'instead of'),
+            (r'\binstead of flask\b', 'instead of Flask'),
+            (r'\bthe production\b', 'to production'),
+            (r'\bdensorflow\b', 'TensorFlow'),  # User pronunciation
+            (r'\bnumpy in pandas\b', 'NumPy and pandas'),  # Grammar fix
+            (r'\bwith a docker\b', 'using Docker'),  # Natural phrasing
+
+            # Assistant conversation patterns (focus on Claude Code interaction)
+            (r'\ba claude code\b', 'Hey Claude Code'),
+            (r'\bhey claude\b', 'Hey Claude'),
+            (r'\bclaud code\b', 'Claude Code'),
+            (r'\bcode claude\b', 'Claude Code'),
+
+            # Critical pronunciation fixes from live testing
+            (r'\bbeed\b', 'speed'),  # User pronunciation: "beed" → "speed"
+            (r'\btree\b(?=\s)', 'tray'),  # User pronunciation: "tree" → "tray" (when followed by space)
+            (r'\bthe tree\b', 'the tray'),
+            (r'\bwith this beed\b', 'with this speed'),
+
+            # Advanced pronunciation and speech pattern fixes
+            (r'\bbabel translation\b', 'Babel transpilation'),
+            (r'\bby torch\b', 'PyTorch'),
+            (r'\bpost-gre-sql\b', 'PostgreSQL'),
+            (r'\bpost gre sql\b', 'PostgreSQL'),
+            (r'\bto the graphql\b', 'The GraphQL'),
+            (r'\bdeployed to production\b', 'deploy to production'),
+            (r'\bto create docker\b', 'create Docker'),
+
+            # Common speech-to-text confusion patterns
+            (r'\bwebpack with\b', 'Webpack with'),
+            (r'\bconfigure webpack\b', 'configure Webpack'),
+            (r'\bgraph ql\b', 'GraphQL'),
+            (r'\bgraph q l\b', 'GraphQL'),
+            (r'\bschema needs\b', 'schema needs'),
+            (r'\buser authentication\b', 'user authentication'),
+            (r'\bmutations\b', 'mutations'),
+            (r'\bresolvers for\b', 'resolvers for'),
+
+            # Framework and tool combinations
+            (r'\bjavascript features\b', 'JavaScript features'),
+            (r'\bmodern javascript\b', 'modern JavaScript'),
+            (r'\bwith babel\b', 'with Babel'),
+            (r'\bfor modern\b', 'for modern'),
+            (r'\bthe webpack\b', 'the Webpack'),
+            (r'\bbabel transpilation\b', 'Babel transpilation'),
+
+            # Common workflow phrases
+            (r'\bwe need\b', 'we need'),
+            (r'\blets implement\b', 'let\'s implement'),
+            (r'\blets add\b', 'let\'s add'),
+            (r'\blets configure\b', 'let\'s configure'),
+            (r'\blets setup\b', 'let\'s set up'),
+            (r'\bsetup ci cd\b', 'set up CI/CD'),
+            (r'\bci cd pipeline\b', 'CI/CD pipeline'),
+
+            # Natural conversation with assistant
+            (r'\bokay claude\b', 'Okay Claude'),
+            (r'\bthanks claude\b', 'Thanks Claude'),
+            (r'\bclaud can you\b', 'Claude can you'),
+            (r'\bclaud please\b', 'Claude please'),
+            (r'\blet\'s work on\b', 'let\'s work on'),
+            (r'\bcan you help me\b', 'can you help me'),
+            (r'\bi need you to\b', 'I need you to'),
+            (r'\bgo ahead and\b', 'go ahead and'),
+
+            # Common development workflow vocabulary
+            (r'\blet me try\b', 'let me try'),
+            (r'\bi want to\b', 'I want to'),
+            (r'\bwe need to\b', 'we need to'),
+            (r'\blets see if\b', 'let\'s see if'),
+            (r'\bhow do i\b', 'how do I'),
+            (r'\bwhat if we\b', 'what if we'),
+            (r'\bmake sure that\b', 'make sure that'),
+            (r'\bcheck if\b', 'check if'),
+            (r'\bfind out\b', 'find out'),
+            (r'\bwork with\b', 'work with'),
+
+            # Context-aware technical corrections
+            (r'\bthe react\b', 'the React'),
+            (r'\bthe vue\b', 'the Vue'),
+            (r'\bthe angular\b', 'the Angular'),
+            (r'\busing react\b', 'using React'),
+            (r'\bwith react\b', 'with React'),
+            (r'\bin react\b', 'in React'),
+            (r'\bfor react\b', 'for React'),
+
+            # Grammar and flow improvements
+            (r'\bto try to\b', 'to try to'),
+            (r'\bneed to be\b', 'need to be'),
+            (r'\bgoing to be\b', 'going to be'),
+            (r'\bwant to make\b', 'want to make'),
+            (r'\btrying to get\b', 'trying to get'),
+            (r'\bable to use\b', 'able to use'),
+            (r'\bhave to do\b', 'have to do'),
+
+            # Simple formatting commands (keep it practical)
+            (r'\bnew line\b', '\n'),
+            (r'\bnew paragraph\b', '\n\n'),
+            (r'\bbullet point\b', '\n• '),
+            (r'\bbullet\b', '\n• '),
+            (r'\bnumber one\b', '\n1. '),
+            (r'\bnumber two\b', '\n2. '),
+            (r'\bnumber three\b', '\n3. '),
+
+            # Natural list continuation
+            (r'\band also\b(?=\s)', '\n• '),  # Continue bullet points
+            (r'\badditionally\b(?=\s)', '\n• '),  # Continue bullet points
+
+            # Enhanced buffer overflow and hallucination cleanup
+            (r'^\s*(?:okay\s*){2,}\s*$', ''),  # Remove "okay okay..." patterns (2+ repetitions)
+            (r'(?:okay,?\s*){3,}', 'okay, '),  # Fix "okay, okay, okay" mid-sentence → "okay, "
+            (r'\b(?:okay\s+){2,}(?=\w)', 'okay '),  # Fix "okay okay something" → "okay something"
+            (r'^\s*(?:uh\s*){2,}$', ''),  # Remove "uh uh..." filler patterns
+            (r'^\s*(?:um\s*){2,}$', ''),  # Remove "um um..." filler patterns
+            (r'^\s*(?:buffer\s*){2,}.*$', ''),  # Remove "buffer buffer..." artifacts
+            (r'^\s*(?:over our\s*){2,}.*$', ''),  # Remove repeated "over our" artifacts
+
+            # Whisper hallucination artifact cleanup (empty recording artifacts)
+            (r'^\s*(?:wk\s*)+$', ''),  # Remove "wk wk wk..." artifacts from empty recordings
+            (r'^\s*(?:w\s*k\s*)+$', ''),  # Remove "w k w k..." artifacts
+            (r'^\s*(?:thank you\s*)+$', ''),  # Remove repetitive "thank you" artifacts
+            (r'^\s*(?:thanks for watching\s*)+$', ''),  # Remove YouTube-style artifacts
+        ]
+
+        for pattern, replacement in tech_patterns:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+
+        return text
 
     def _update_session_stats(self, recording_state: dict, result: str):
         """Update only session-level statistics (no recording state persisted)"""

@@ -21,19 +21,19 @@ class Config:
     max_batch_size: int = 4  # Process multiple segments together
     enable_streaming: bool = True  # Enable real-time streaming feedback
 
-    # ASR - EXTREME Performance Mode (target: sub-500ms for first sentence)
-    model_name: str = "tiny.en"  # Ultra-fast model for immediate response
+    # ASR - BALANCED Performance + Quality Mode (GPT-5 recommended)
+    model_name: str = "base.en"  # Balanced model for good speed + quality (was tiny.en)
     device: str = "cuda"  # GPU acceleration for 6-7x speedup
     compute_type: str = "float16"  # Optimized for GPU inference
     fallback_device: str = "cpu"  # Fallback if GPU unavailable
     fallback_compute_type: str = "int8"  # CPU fallback settings
     vad_filter: bool = False  # CRITICAL FIX: VAD was removing all audio after 2 recordings
-    beam_size: int = 1  # 1 = greedy, fastest possible
+    beam_size: int = 2  # Improved from 1 (greedy) to 2 for better quality
     temperature: float = 0.0
 
-    # Whisper-specific EXTREME optimizations for quality + speed
+    # Whisper-specific BALANCED optimizations for quality + speed
     word_timestamps: bool = False  # Disable expensive timestamp computation
-    condition_on_previous_text: bool = False  # Disable context for consistency
+    condition_on_previous_text: bool = True  # Enable context for better accuracy (was False)
     compression_ratio_threshold: float = 3.5  # Balanced threshold for quality (vs 4.0)
     log_prob_threshold: float = -0.7  # Balanced threshold for quality (vs -0.5)
     no_speech_threshold: float = 0.7  # Balanced threshold (vs 0.8)
@@ -87,22 +87,24 @@ class Config:
     parallel_processing: bool = False  # Can't parallelize Whisper on same model
     aggressive_segment_merge: bool = True  # Merge segments aggressively to reduce overhead
 
-    # Performance-first optimizations
+    # Performance-first optimizations (SAFE DEFAULTS)
     max_transcriptions_before_reload: int = 100  # Reduce model reloads from 20 to 100
     disable_detailed_logging: bool = True  # Skip expensive logging in hot paths
-    skip_buffer_integrity_checks: bool = False  # Keep safety checks but optimize them
     enable_model_caching: bool = True  # Cache model in memory between sessions
 
-    # ULTRA-AGGRESSIVE audio validation optimizations (VALIDATED)
+    # BALANCED audio validation optimizations (SAFE + FAST)
     enable_optimized_audio_validation: bool = True  # Enable smart audio validation system
     enable_fast_audio_validation: bool = True  # Use statistical sampling instead of full validation
     audio_validation_sample_rate: float = 0.05  # VALIDATED: 5% sampling for +15-50% performance
     skip_redundant_format_checks: bool = True  # Skip format validation after first successful check
     disable_amplitude_warnings: bool = True  # Skip non-critical amplitude logging
     fast_nan_inf_detection: bool = True  # Use optimized NaN/Inf detection algorithm
-    skip_buffer_integrity_checks: bool = True  # ULTRA MODE: Skip integrity checks for maximum speed
+
+    # CRITICAL: Buffer integrity protection (DO NOT DISABLE - prevents buffer overflow)
+    skip_buffer_integrity_checks: bool = False  # Keep buffer protection ENABLED for stability
     minimal_segment_processing: bool = True  # Skip non-essential segment processing
     disable_fallback_detection: bool = True  # Skip fallback phrase detection for speed
+    use_enhanced_post_processing: bool = True  # Enable enhanced text formatting (capitalization, punctuation)
 
     # Visual Indicators Configuration
     visual_indicators_enabled: bool = True  # Enable visual feedback when recording

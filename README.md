@@ -4,9 +4,17 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](https://pytest.org/)
-[![Performance](https://img.shields.io/badge/performance-15x%20realtime-brightgreen.svg)](#performance)
+[![Offline](https://img.shields.io/badge/offline-privacy%20focused-green.svg)](#privacy)
 
-VoiceFlow is a local voice transcription system built on OpenAI Whisper that processes audio at 12-15x realtime speed. The system operates entirely offline with no external dependencies.
+A local voice transcription system for Windows that converts speech to text using OpenAI Whisper. Works completely offline with no data sent to external servers.
+
+## Why Use VoiceFlow?
+
+- **Privacy First**: All processing happens locally - your voice never leaves your computer
+- **Always Available**: Works without internet connection or cloud services
+- **Practical Speed**: Fast enough for real-time dictation and note-taking
+- **System Integration**: Automatically types or pastes transcribed text into any application
+- **Developer Friendly**: Built for coding conversations with technical term recognition
 
 ## Control Center
 
@@ -28,16 +36,23 @@ tools\launchers\LAUNCH_CONTROL_CENTER.bat
 python tools/VoiceFlow_Control_Center.py
 ```
 
-## Features
+## What It Does
 
-- Real-time speech-to-text transcription using OpenAI Whisper
-- Visual overlay (200x40) for status indication
-- System tray integration with status indicators
-- Automatic text injection with configurable hotkeys (default: Ctrl+Shift)
-- Configurable UI themes and positioning
-- Audio device selection and processing configuration
-- Memory-optimized processing with minimal resource usage
-- Error recovery and input validation
+**Voice to Text Conversion**
+- Press and hold Ctrl+Shift to record speech
+- Automatic transcription using OpenAI Whisper
+- Text is automatically typed into any application
+
+**System Integration**
+- Visual status indicator shows recording/processing state
+- System tray for easy access and configuration
+- Works with any Windows application (browsers, editors, documents)
+
+**Technical Features**
+- Offline processing - no internet required
+- Configurable audio devices and settings
+- Smart text formatting for programming and technical terms
+- Clipboard or direct typing output modes
 
 ## Installation & Usage
 
@@ -155,7 +170,7 @@ src/voiceflow/
 - **ASR Engine**: OpenAI Whisper integration with faster-whisper optimizations
 - **Text Processing**: Smart formatting with code-mode support
 - **Visual System**: Thread-safe overlays with color-coded status indicators
-- **Performance Engine**: Lock-free data structures and memory pooling
+- **Performance Engine**: Lock-free data structures, memory pooling, and micro-optimizations
 
 ## 🧪 Testing
 
