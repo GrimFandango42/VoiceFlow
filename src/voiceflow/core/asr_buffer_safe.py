@@ -369,7 +369,7 @@ class BufferSafeWhisperASR:
             energy = np.mean(validated_audio ** 2)
             if energy < 1e-6:  # Very low energy threshold
                 logger.info("Audio appears to be silent or very quiet")
-                # Still return True - might be intentional silence
+                # Don't reject - just log for now
 
             # Check for clipping (digital distortion)
             clipped_samples = np.count_nonzero(np.abs(validated_audio) >= 0.99)
@@ -821,6 +821,23 @@ class BufferSafeWhisperASR:
             (r'\bdensorflow\b', 'TensorFlow'),  # User pronunciation
             (r'\bnumpy in pandas\b', 'NumPy and pandas'),  # Grammar fix
             (r'\bwith a docker\b', 'using Docker'),  # Natural phrasing
+
+            # Conversational formatting commands (OPTIMIZATION 10)
+            (r'\bnew line\b', '\n'),
+            (r'\bnew paragraph\b', '\n\n'),
+            (r'\bnext paragraph\b', '\n\n'),
+            (r'\bbullet point\b', '\n• '),
+            (r'\bbullet\b', '\n• '),
+            (r'\bnext bullet\b', '\n• '),
+            (r'\bnumber one\b', '\n1. '),
+            (r'\bnumber two\b', '\n2. '),
+            (r'\bnumber three\b', '\n3. '),
+            (r'\bnumber four\b', '\n4. '),
+            (r'\bnumber five\b', '\n5. '),
+            (r'\bnumber six\b', '\n6. '),
+
+            # Silence hallucination cleanup (OPTIMIZATION 9) - less aggressive
+            (r'^\s*ok+\s*$', ''),  # Remove standalone "ok" only if entire line
         ]
 
         for pattern, replacement in tech_patterns:
