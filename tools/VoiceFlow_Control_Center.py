@@ -71,7 +71,7 @@ class VoiceFlowControlCenter:
         subtitle_label = ttk.Label(title_frame, text="🚀 Unified Interface for VoiceFlow Operations")
         subtitle_label.pack()
 
-        # Quick Actions Section
+        # Quick Actions Section - Clean version without custom styles
         actions_frame = ttk.LabelFrame(main_frame, text="Quick Actions", padding="10")
         actions_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
         actions_frame.columnconfigure(1, weight=1)
