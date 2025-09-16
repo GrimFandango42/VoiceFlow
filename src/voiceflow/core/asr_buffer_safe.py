@@ -365,23 +365,30 @@ class BufferSafeWhisperASR:
                 logger.warning(f"Audio too short for reliable transcription: {len(validated_audio)} samples")
                 return False
 
-            # BALANCED silent audio detection - less aggressive to preserve quiet speech
+            # ENHANCED silent audio detection - prevent WK artifacts from empty recordings
             energy = np.mean(validated_audio ** 2)
-            if energy < 1e-7:  # Only reject truly silent audio (was 1e-6, too strict)
-                logger.info("Audio appears completely silent - rejecting to prevent buffer artifacts")
-                return False  # Reject only truly silent audio
+            peak_amplitude = np.max(np.abs(validated_audio))
+            rms_energy = np.sqrt(energy)
 
-            # Check for completely uniform audio (digital silence) but allow quiet speech
-            if energy < 1e-6 and np.std(validated_audio) < 1e-5:
-                # Additional check: look for any meaningful audio activity
-                peak_amplitude = np.max(np.abs(validated_audio))
-                if peak_amplitude < 1e-4:  # Truly dead audio
-                    logger.info("Audio uniformly quiet with no peaks - likely empty recording")
+            # Multi-criteria rejection to prevent hallucinations
+            if energy < 1e-7:  # Completely silent
+                logger.info("Audio completely silent - preventing hallucination artifacts")
+                return False
+
+            if energy < 1e-6 and peak_amplitude < 5e-4:  # Very quiet with no significant peaks
+                logger.info("Audio too quiet with no meaningful peaks - preventing WK artifacts")
+                return False
+
+            if rms_energy < 1e-3 and np.std(validated_audio) < 1e-4:  # Uniform low-level noise
+                logger.info("Audio appears to be uniform noise - preventing hallucination")
+                return False
+
+            # Additional check: look for actual speech-like characteristics
+            if peak_amplitude > 0:
+                dynamic_range = peak_amplitude / (rms_energy + 1e-8)
+                if dynamic_range < 2.0 and energy < 1e-5:  # Low dynamic range + low energy = likely noise
+                    logger.info("Audio lacks speech characteristics - preventing artifacts")
                     return False
-                else:
-                    logger.info("Quiet audio detected but has peaks - allowing transcription")
-                    # Normalize quiet audio to help Whisper
-                    # validated_audio = validated_audio * (0.1 / peak_amplitude) if peak_amplitude > 0 else validated_audio
 
             # Check for clipping (digital distortion)
             clipped_samples = np.count_nonzero(np.abs(validated_audio) >= 0.99)
@@ -952,6 +959,12 @@ class BufferSafeWhisperASR:
             (r'^\s*(?:um\s*){2,}$', ''),  # Remove "um um..." filler patterns
             (r'^\s*(?:buffer\s*){2,}.*$', ''),  # Remove "buffer buffer..." artifacts
             (r'^\s*(?:over our\s*){2,}.*$', ''),  # Remove repeated "over our" artifacts
+
+            # Whisper hallucination artifact cleanup (empty recording artifacts)
+            (r'^\s*(?:wk\s*)+$', ''),  # Remove "wk wk wk..." artifacts from empty recordings
+            (r'^\s*(?:w\s*k\s*)+$', ''),  # Remove "w k w k..." artifacts
+            (r'^\s*(?:thank you\s*)+$', ''),  # Remove repetitive "thank you" artifacts
+            (r'^\s*(?:thanks for watching\s*)+$', ''),  # Remove YouTube-style artifacts
         ]
 
         for pattern, replacement in tech_patterns:
