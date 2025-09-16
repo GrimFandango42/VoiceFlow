@@ -831,22 +831,63 @@ class BufferSafeWhisperASR:
             (r'\bnumpy in pandas\b', 'NumPy and pandas'),  # Grammar fix
             (r'\bwith a docker\b', 'using Docker'),  # Natural phrasing
 
-            # Conversational formatting commands (OPTIMIZATION 10)
+            # Enhanced conversational formatting commands (OPTIMIZATION 10)
             (r'\bnew line\b', '\n'),
+            (r'\bline break\b', '\n'),
             (r'\bnew paragraph\b', '\n\n'),
             (r'\bnext paragraph\b', '\n\n'),
+            (r'\bstart paragraph\b', '\n\n'),
             (r'\bbullet point\b', '\n• '),
             (r'\bbullet\b', '\n• '),
             (r'\bnext bullet\b', '\n• '),
+            (r'\badd bullet\b', '\n• '),
+            (r'\bdash point\b', '\n- '),
+            (r'\bdash\b(?=\s)', '\n- '),  # Add dash only when followed by space
+
+            # Smart numbered lists
             (r'\bnumber one\b', '\n1. '),
             (r'\bnumber two\b', '\n2. '),
             (r'\bnumber three\b', '\n3. '),
             (r'\bnumber four\b', '\n4. '),
             (r'\bnumber five\b', '\n5. '),
             (r'\bnumber six\b', '\n6. '),
+            (r'\bnumber seven\b', '\n7. '),
+            (r'\bnumber eight\b', '\n8. '),
+            (r'\bnumber nine\b', '\n9. '),
+            (r'\bnumber ten\b', '\n10. '),
 
-            # Silence hallucination cleanup (OPTIMIZATION 9) - less aggressive
-            (r'^\s*ok+\s*$', ''),  # Remove standalone "ok" only if entire line
+            # Alternative number patterns
+            (r'\bfirst point\b', '\n1. '),
+            (r'\bsecond point\b', '\n2. '),
+            (r'\bthird point\b', '\n3. '),
+            (r'\bfourth point\b', '\n4. '),
+            (r'\bfifth point\b', '\n5. '),
+
+            # Formatting commands
+            (r'\bmake title\b', '\n# '),
+            (r'\btitle\b(?=\s)', '\n# '),  # Title only when followed by space
+            (r'\bheading\b(?=\s)', '\n## '),  # Heading only when followed by space
+            (r'\bsubheading\b(?=\s)', '\n### '),  # Subheading only when followed by space
+            (r'\bcode block\b', '\n```\n'),
+            (r'\bstart code\b', '\n```\n'),
+            (r'\bend code\b', '\n```\n'),
+            (r'\binline code\b', '`'),
+
+            # Text formatting hints
+            (r'\bbold text\b', '**'),
+            (r'\bmake bold\b', '**'),
+            (r'\bitalic text\b', '*'),
+            (r'\bmake italic\b', '*'),
+
+            # List continuation
+            (r'\band also\b(?=\s)', '\n• '),  # Continue bullet points
+            (r'\badditionally\b(?=\s)', '\n• '),  # Continue bullet points
+            (r'\bmoreover\b(?=\s)', '\n• '),  # Continue bullet points
+
+            # Intelligent hallucination cleanup - only remove obvious noise patterns
+            (r'^\s*(?:okay\s*){3,}\s*$', ''),  # Remove only repetitive "okay okay okay..." patterns
+            (r'^\s*(?:uh\s*)+$', ''),  # Remove only "uh uh uh..." filler patterns
+            (r'^\s*(?:um\s*)+$', ''),  # Remove only "um um um..." filler patterns
         ]
 
         for pattern, replacement in tech_patterns:
