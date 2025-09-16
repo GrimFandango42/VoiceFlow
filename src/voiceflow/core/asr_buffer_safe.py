@@ -365,11 +365,16 @@ class BufferSafeWhisperASR:
                 logger.warning(f"Audio too short for reliable transcription: {len(validated_audio)} samples")
                 return False
 
-            # Check for mostly silent audio
+            # Enhanced silent audio detection and rejection
             energy = np.mean(validated_audio ** 2)
             if energy < 1e-6:  # Very low energy threshold
-                logger.info("Audio appears to be silent or very quiet")
-                # Don't reject - just log for now
+                logger.info("Audio appears to be silent - rejecting to prevent buffer artifacts")
+                return False  # Reject silent audio to prevent "okay okay" hallucinations
+
+            # Additional check for very quiet audio with minimal variation
+            if energy < 1e-5 and np.std(validated_audio) < 1e-4:
+                logger.info("Audio too quiet and uniform - likely empty recording")
+                return False
 
             # Check for clipping (digital distortion)
             clipped_samples = np.count_nonzero(np.abs(validated_audio) >= 0.99)
@@ -837,6 +842,12 @@ class BufferSafeWhisperASR:
             (r'\bclaud code\b', 'Claude Code'),
             (r'\bcode claude\b', 'Claude Code'),
 
+            # Critical pronunciation fixes from live testing
+            (r'\bbeed\b', 'speed'),  # User pronunciation: "beed" → "speed"
+            (r'\btree\b(?=\s)', 'tray'),  # User pronunciation: "tree" → "tray" (when followed by space)
+            (r'\bthe tree\b', 'the tray'),
+            (r'\bwith this beed\b', 'with this speed'),
+
             # Advanced pronunciation and speech pattern fixes
             (r'\bbabel translation\b', 'Babel transpilation'),
             (r'\bby torch\b', 'PyTorch'),
@@ -926,10 +937,14 @@ class BufferSafeWhisperASR:
             (r'\band also\b(?=\s)', '\n• '),  # Continue bullet points
             (r'\badditionally\b(?=\s)', '\n• '),  # Continue bullet points
 
-            # Intelligent hallucination cleanup - only remove obvious noise patterns
-            (r'^\s*(?:okay\s*){3,}\s*$', ''),  # Remove only repetitive "okay okay okay..." patterns
-            (r'^\s*(?:uh\s*)+$', ''),  # Remove only "uh uh uh..." filler patterns
-            (r'^\s*(?:um\s*)+$', ''),  # Remove only "um um um..." filler patterns
+            # Enhanced buffer overflow and hallucination cleanup
+            (r'^\s*(?:okay\s*){2,}\s*$', ''),  # Remove "okay okay..." patterns (2+ repetitions)
+            (r'(?:okay,?\s*){3,}', 'okay, '),  # Fix "okay, okay, okay" mid-sentence → "okay, "
+            (r'\b(?:okay\s+){2,}(?=\w)', 'okay '),  # Fix "okay okay something" → "okay something"
+            (r'^\s*(?:uh\s*){2,}$', ''),  # Remove "uh uh..." filler patterns
+            (r'^\s*(?:um\s*){2,}$', ''),  # Remove "um um..." filler patterns
+            (r'^\s*(?:buffer\s*){2,}.*$', ''),  # Remove "buffer buffer..." artifacts
+            (r'^\s*(?:over our\s*){2,}.*$', ''),  # Remove repeated "over our" artifacts
         ]
 
         for pattern, replacement in tech_patterns:
