@@ -103,6 +103,7 @@ class Config:
     skip_buffer_integrity_checks: bool = True  # ULTRA MODE: Skip integrity checks for maximum speed
     minimal_segment_processing: bool = True  # Skip non-essential segment processing
     disable_fallback_detection: bool = True  # Skip fallback phrase detection for speed
+    use_enhanced_post_processing: bool = True  # Enable enhanced text formatting (capitalization, punctuation)
 
     # Visual Indicators Configuration
     visual_indicators_enabled: bool = True  # Enable visual feedback when recording

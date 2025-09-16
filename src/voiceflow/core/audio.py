@@ -63,6 +63,8 @@ class AudioRecorder:
             if not self._frames:
                 return np.array([], dtype=np.float32)
             audio = np.concatenate(self._frames).astype(np.float32)
+            # Clear frames to prevent buffer overflow on next recording (OPTIMIZATION 4)
+            self._frames.clear()
             # Clamp just in case
             audio = np.clip(audio, -1.0, 1.0)
             return audio

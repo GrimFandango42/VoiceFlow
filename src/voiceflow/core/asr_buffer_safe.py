@@ -606,10 +606,9 @@ class BufferSafeWhisperASR:
         for wrong, right in corrections.items():
             text = text.replace(wrong, right)
 
-        # Basic punctuation fixes (minimal regex for speed)
-        import re
-        text = re.sub(r'\s+([,.!?])', r'\1', text)  # Remove space before punctuation
-        text = re.sub(r'([,.!?])\s*([A-Z])', r'\1 \2', text)  # Space after punctuation
+        # Use compiled regex patterns for speed (OPTIMIZATION 2)
+        text = self._punctuation_spacing_regex.sub(r'\1', text)  # Remove space before punctuation
+        text = self._punctuation_sentence_regex.sub(r'\1 \2', text)  # Space after punctuation
 
         # Capitalize first letter if needed
         if text and text[0].islower():

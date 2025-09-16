@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](https://pytest.org/)
-[![Performance](https://img.shields.io/badge/performance-15x%20realtime-brightgreen.svg)](#performance)
+[![Performance](https://img.shields.io/badge/performance-19x%20realtime-brightgreen.svg)](#performance)
 
-VoiceFlow is a local voice transcription system built on OpenAI Whisper that processes audio at 12-15x realtime speed. The system operates entirely offline with no external dependencies.
+VoiceFlow is a local voice transcription system built on OpenAI Whisper that processes audio at 14-19x realtime speed with advanced micro-optimizations. The system operates entirely offline with no external dependencies.
 
 ## Control Center
 
@@ -155,7 +155,7 @@ src/voiceflow/
 - **ASR Engine**: OpenAI Whisper integration with faster-whisper optimizations
 - **Text Processing**: Smart formatting with code-mode support
 - **Visual System**: Thread-safe overlays with color-coded status indicators
-- **Performance Engine**: Lock-free data structures and memory pooling
+- **Performance Engine**: Lock-free data structures, memory pooling, and micro-optimizations
 
 ## 🧪 Testing
 
