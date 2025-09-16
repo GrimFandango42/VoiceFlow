@@ -612,6 +612,9 @@ class BufferSafeWhisperASR:
             ' node js ': ' Node.js ',
             ' nodejs ': ' Node.js ',
             ' api ': ' API ',
+            ' ebi ': ' API ',  # User-specific pronunciation fix
+            ' e b i ': ' API ',
+            ' a p i ': ' API ',
             ' url ': ' URL ',
             ' http ': ' HTTP ',
             ' https ': ' HTTPS ',
@@ -655,7 +658,9 @@ class BufferSafeWhisperASR:
             ' transformers ': ' Transformers ',
             ' fast api ': ' FastAPI ',
             ' fastapi ': ' FastAPI ',
+            ' fast ebi ': ' FastAPI ',  # User-specific pronunciation fix
             ' flask ': ' Flask ',
+            ' sort of flask ': ' instead of Flask ',  # Fix transcription pattern
             ' django ': ' Django ',
             ' streamlit ': ' Streamlit ',
             ' gradio ': ' Gradio ',
@@ -763,11 +768,18 @@ class BufferSafeWhisperASR:
             (r'\btensor flow\b', 'TensorFlow'),
             (r'\bnum py\b', 'NumPy'),
             (r'\bnum pie\b', 'NumPy'),
+            (r'\bnumpy or numpy\b', 'NumPy'),  # Fix duplication pattern
             (r'\bpan das\b', 'pandas'),
             (r'\bscikit learn\b', 'scikit-learn'),
             (r'\bopen cv\b', 'OpenCV'),
             (r'\bhugging face\b', 'Hugging Face'),
             (r'\bfast api\b', 'FastAPI'),
+            (r'\bfast ebi\b', 'FastAPI'),  # User-specific pronunciation
+
+            # API pronunciation fixes (OPTIMIZATION 8)
+            (r'\bebi\b', 'API'),
+            (r'\be b i\b', 'API'),
+            (r'\bdashboard ebi\b', 'dashboard API'),
 
             # Claude Code specific patterns (OPTIMIZATION 7)
             (r'\bclod code\b', 'Claude Code'),
@@ -799,6 +811,12 @@ class BufferSafeWhisperASR:
             (r'\bupdate the dependencies\b', 'update the dependencies'),
             (r'\brun the tests\b', 'run the tests'),
             (r'\bdeploy to production\b', 'deploy to production'),
+
+            # Common transcription fixes (OPTIMIZATION 8)
+            (r'\bwhen they try\b', 'when I try'),
+            (r'\band sort of\b', 'instead of'),
+            (r'\binstead of flask\b', 'instead of Flask'),
+            (r'\bthe production\b', 'to production'),
         ]
 
         for pattern, replacement in tech_patterns:
