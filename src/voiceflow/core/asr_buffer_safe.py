@@ -365,16 +365,23 @@ class BufferSafeWhisperASR:
                 logger.warning(f"Audio too short for reliable transcription: {len(validated_audio)} samples")
                 return False
 
-            # Enhanced silent audio detection and rejection
+            # BALANCED silent audio detection - less aggressive to preserve quiet speech
             energy = np.mean(validated_audio ** 2)
-            if energy < 1e-6:  # Very low energy threshold
-                logger.info("Audio appears to be silent - rejecting to prevent buffer artifacts")
-                return False  # Reject silent audio to prevent "okay okay" hallucinations
+            if energy < 1e-7:  # Only reject truly silent audio (was 1e-6, too strict)
+                logger.info("Audio appears completely silent - rejecting to prevent buffer artifacts")
+                return False  # Reject only truly silent audio
 
-            # Additional check for very quiet audio with minimal variation
-            if energy < 1e-5 and np.std(validated_audio) < 1e-4:
-                logger.info("Audio too quiet and uniform - likely empty recording")
-                return False
+            # Check for completely uniform audio (digital silence) but allow quiet speech
+            if energy < 1e-6 and np.std(validated_audio) < 1e-5:
+                # Additional check: look for any meaningful audio activity
+                peak_amplitude = np.max(np.abs(validated_audio))
+                if peak_amplitude < 1e-4:  # Truly dead audio
+                    logger.info("Audio uniformly quiet with no peaks - likely empty recording")
+                    return False
+                else:
+                    logger.info("Quiet audio detected but has peaks - allowing transcription")
+                    # Normalize quiet audio to help Whisper
+                    # validated_audio = validated_audio * (0.1 / peak_amplitude) if peak_amplitude > 0 else validated_audio
 
             # Check for clipping (digital distortion)
             clipped_samples = np.count_nonzero(np.abs(validated_audio) >= 0.99)
