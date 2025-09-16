@@ -600,6 +600,36 @@ class BufferSafeWhisperASR:
             ' wouldnt ': ' wouldn\'t ',
             ' shouldnt ': ' shouldn\'t ',
             ' couldnt ': ' couldn\'t ',
+
+            # Technical/Programming corrections (OPTIMIZATION 5)
+            ' jason ': ' JSON ',
+            ' jay son ': ' JSON ',
+            ' html ': ' HTML ',
+            ' css ': ' CSS ',
+            ' javascript ': ' JavaScript ',
+            ' python ': ' Python ',
+            ' react ': ' React ',
+            ' node js ': ' Node.js ',
+            ' nodejs ': ' Node.js ',
+            ' api ': ' API ',
+            ' url ': ' URL ',
+            ' http ': ' HTTP ',
+            ' https ': ' HTTPS ',
+            ' sql ': ' SQL ',
+            ' database ': ' database ',
+            ' function ': ' function ',
+            ' variable ': ' variable ',
+            ' class ': ' class ',
+            ' method ': ' method ',
+            ' array ': ' array ',
+            ' object ': ' object ',
+            ' string ': ' string ',
+            ' boolean ': ' boolean ',
+            ' integer ': ' integer ',
+            ' null ': ' null ',
+            ' undefined ': ' undefined ',
+            ' git hub ': ' GitHub ',
+            ' github ': ' GitHub ',
         }
 
         # Apply corrections efficiently
@@ -610,11 +640,47 @@ class BufferSafeWhisperASR:
         text = self._punctuation_spacing_regex.sub(r'\1', text)  # Remove space before punctuation
         text = self._punctuation_sentence_regex.sub(r'\1 \2', text)  # Space after punctuation
 
+        # Technical documentation improvements (OPTIMIZATION 5)
+        text = self._enhance_technical_formatting(text)
+
         # Capitalize first letter if needed
         if text and text[0].islower():
             text = text[0].upper() + text[1:]
 
         return text.strip()
+
+    def _enhance_technical_formatting(self, text: str) -> str:
+        """Improve technical documentation and code-related formatting"""
+        # Handle common programming patterns
+        import re
+
+        # Fix common code-related phrases
+        tech_patterns = [
+            (r'\bconsole dot log\b', 'console.log'),
+            (r'\bdocument dot\b', 'document.'),
+            (r'\bwindow dot\b', 'window.'),
+            (r'\bjquery\b', 'jQuery'),
+            (r'\bvs code\b', 'VS Code'),
+            (r'\bvisual studio code\b', 'Visual Studio Code'),
+            (r'\bgit commit\b', 'git commit'),
+            (r'\bgit push\b', 'git push'),
+            (r'\bgit pull\b', 'git pull'),
+            (r'\bnpm install\b', 'npm install'),
+            (r'\bnpm run\b', 'npm run'),
+            (r'\byarn install\b', 'yarn install'),
+            (r'\bdocker run\b', 'docker run'),
+            (r'\bdocker build\b', 'docker build'),
+            (r'\bkubernetes\b', 'Kubernetes'),
+            (r'\breact js\b', 'React.js'),
+            (r'\bvue js\b', 'Vue.js'),
+            (r'\bangular js\b', 'Angular.js'),
+            (r'\btype script\b', 'TypeScript'),
+        ]
+
+        for pattern, replacement in tech_patterns:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+
+        return text
 
     def _update_session_stats(self, recording_state: dict, result: str):
         """Update only session-level statistics (no recording state persisted)"""
