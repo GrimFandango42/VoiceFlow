@@ -142,35 +142,102 @@ The system uses a modular 4-layer architecture optimized for low-latency audio p
 
 ![VoiceFlow Architecture](assets/voiceflow-architecture-diagram.png)
 
-The system is organized into four distinct layers:
-- **User Interface Layer**: Control Center, System Tray, Visual Overlays
-- **Integration Layer**: Global hotkeys, text injection, system events
-- **Core Processing Layer**: Audio capture, ASR engine, performance optimizations
-- **Hardware/OS Layer**: Audio devices, drivers, system resources
+VoiceFlow uses a **4-layer modular architecture** designed for low-latency, real-time speech processing:
 
-### Component Interactions
+#### 🎨 **User Interface Layer**
+```
+┌─────────────────────────────────────────────────────────┐
+│  Control Center GUI  │  System Tray  │  Visual Overlays │
+│  ├─ Launch Controls  │  ├─ Settings  │  ├─ Status LEDs  │
+│  ├─ System Status    │  ├─ Quick     │  ├─ Progress     │
+│  └─ Test Suite       │  └─ Toggle    │  └─ Indicators   │
+└─────────────────────────────────────────────────────────┘
+```
 
-![Component Interactions](assets/component-interactions.png)
+#### 🔗 **Integration Layer**
+```
+┌─────────────────────────────────────────────────────────┐
+│  Global Hotkeys  │  Text Injection  │  System Events   │
+│  ├─ Ctrl+Shift   │  ├─ Direct Type  │  ├─ Focus Track  │
+│  ├─ Custom Keys  │  ├─ Clipboard    │  ├─ App Monitor  │
+│  └─ Key Capture  │  └─ Smart Paste  │  └─ State Sync   │
+└─────────────────────────────────────────────────────────┘
+```
 
-### Technology Stack
+#### ⚡ **Core Processing Layer**
+```
+┌─────────────────────────────────────────────────────────┐
+│  Audio Engine    │  ASR Pipeline    │  Performance     │
+│  ├─ Real-time    │  ├─ Whisper      │  ├─ Memory Pool  │
+│  ├─ Capture      │  ├─ faster-      │  ├─ Lock-free    │
+│  ├─ Buffering    │  │   whisper     │  ├─ Threading    │
+│  └─ VAD Filter   │  └─ Text Proc    │  └─ Optimization │
+└─────────────────────────────────────────────────────────┘
+```
 
-![Technology Stack](assets/technology-stack.png)
+#### 🖥️ **Hardware/OS Layer**
+```
+┌─────────────────────────────────────────────────────────┐
+│  Audio Devices   │  OS Integration  │  System Resources│
+│  ├─ Microphone   │  ├─ Windows API  │  ├─ CPU/GPU      │
+│  ├─ Drivers      │  ├─ DirectSound  │  ├─ Memory       │
+│  └─ Sample Rate  │  └─ Permissions  │  └─ Storage      │
+└─────────────────────────────────────────────────────────┘
+```
 
 ### Core Components
 
 ```
 src/voiceflow/
-├── core/           # Audio processing and transcription
-├── ui/             # User interface components
-├── integrations/   # System integrations and hotkeys
-└── utils/          # Utilities and helpers
+├── core/                    # 🎵 Audio processing and transcription
+│   ├── config.py           #    Configuration management
+│   ├── textproc.py         #    Text processing and formatting
+│   ├── memory_optimized_audio.py  #  Audio capture & buffering
+│   └── adaptive_model_access.py   #  Whisper model management
+├── ui/                      # 🎨 User interface components
+│   ├── tray.py             #    System tray integration
+│   ├── enhanced_tray.py    #    Advanced tray features
+│   ├── visual_config.py    #    Visual overlay system
+│   └── visual_indicators.py #    Status indicators
+├── integrations/            # 🔗 System integrations and hotkeys
+│   └── [platform-specific] #    OS-specific implementations
+└── utils/                   # 🛠️ Utilities and helpers
+    ├── logging_setup.py    #    Centralized logging
+    ├── validation.py       #    Input validation
+    └── utils.py            #    Common utilities
 ```
 
-- **Audio Processing**: Real-time audio capture with optimized buffer management
-- **ASR Engine**: OpenAI Whisper integration with faster-whisper optimizations
-- **Text Processing**: Smart formatting with code-mode support
-- **Visual System**: Thread-safe overlays with color-coded status indicators
-- **Performance Engine**: Lock-free data structures, memory pooling, and micro-optimizations
+#### Component Details
+
+🎵 **Audio Processing Pipeline**
+- **Real-time Capture**: Low-latency audio streaming with configurable buffer sizes
+- **VAD Integration**: Voice Activity Detection for automatic start/stop
+- **Adaptive Buffering**: Dynamic buffer management for optimal performance
+- **Multi-device Support**: Flexible audio device selection and fallback
+
+⚡ **ASR Engine Integration**
+- **Whisper Models**: Support for all OpenAI Whisper model sizes (tiny → large)
+- **faster-whisper**: CTranslate2-optimized inference for 4x speed improvement
+- **GPU Acceleration**: CUDA support with automatic CPU fallback
+- **Model Caching**: Intelligent model loading and memory management
+
+📝 **Text Processing Features**
+- **Smart Formatting**: Context-aware punctuation and capitalization
+- **Code Mode**: Programming-optimized transcription with technical terms
+- **Custom Vocabularies**: User-defined word replacements and shortcuts
+- **Multi-language**: Support for 50+ languages with automatic detection
+
+🎨 **Visual Feedback System**
+- **Status Overlays**: Non-intrusive color-coded indicators
+- **Thread-safe UI**: Concurrent visual updates without blocking
+- **Customizable Themes**: User-configurable colors and positions
+- **Progress Tracking**: Real-time transcription progress visualization
+
+🚀 **Performance Optimizations**
+- **Lock-free Architecture**: Minimal contention for real-time performance
+- **Memory Pooling**: Pre-allocated buffers to reduce garbage collection
+- **Async Processing**: Non-blocking I/O and concurrent operations
+- **Micro-optimizations**: Profile-guided performance improvements
 
 ## 🧪 Testing
 
@@ -194,10 +261,11 @@ python scripts/dev/quick_smoke_test.py
 
 ## 📚 Documentation
 
-- **[Installation Guide](docs/installation.md)**: Detailed setup instructions
-- **[User Guide](docs/user-guide.md)**: Complete usage documentation
-- **[Developer Guide](docs/developer-guide.md)**: Development and contribution info
-- **[API Reference](docs/api/)**: Comprehensive API documentation
+- **[Build Guide](docs/BUILD_GUIDE.md)**: Detailed setup and installation instructions
+- **[User Guide](docs/USER_GUIDE.md)**: Complete usage and configuration documentation
+- **[Technical Overview](docs/TECHNICAL_OVERVIEW.md)**: Architecture and development details
+- **[Contributing Guide](docs/CONTRIBUTING.md)**: Development and contribution guidelines
+- **[Testing Notes](docs/TESTING_NOTES.md)**: Testing framework and procedures
 
 ## 🤝 Contributing
 
