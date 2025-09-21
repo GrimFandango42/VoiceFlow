@@ -7,8 +7,8 @@ import time
 
 import pyperclip
 
-from localflow.config import Config
-from localflow.inject import ClipboardInjector
+from voiceflow.config import Config
+from voiceflow.inject import ClipboardInjector
 
 
 def test_clipboard_restore_roundtrip():

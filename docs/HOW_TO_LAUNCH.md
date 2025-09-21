@@ -2,35 +2,56 @@
 
 ## 🚀 Quick Launch Options
 
-VoiceFlow has been cleaned up and simplified to **2 main ways** to launch:
+VoiceFlow offers **3 main ways** to launch:
 
-### Option 1: Visual Mode (Recommended)
-**Double-click:** `LAUNCH_TRAY.bat`
-- ✅ System tray icon with status colors
-- ✅ Bottom-screen overlay (Wispr Flow-style)  
-- ✅ Visual feedback for transcription states
-- ✅ Can minimize to background
-- ✅ Right-click tray for settings menu
+### Option 1: Control Center (Recommended)
+**Double-click:** `tools/launchers/LAUNCH_CONTROL_CENTER.bat`
+- ✅ Full GUI control interface
+- ✅ Real-time status monitoring
+- ✅ Easy configuration management
+- ✅ Performance metrics display
+- ✅ System diagnostics and validation
 
-### Option 2: Terminal Mode (Debugging)
-**Double-click:** `LAUNCH_TERMINAL.bat`
-- ✅ Terminal output only
-- ✅ No visual indicators 
+### Option 2: Enhanced Tray Mode
+**Double-click:** `START_VOICEFLOW.bat`
+- ✅ System tray icon with visual indicators
+- ✅ Real-time transcription feedback
+- ✅ Quick access to settings
+- ✅ Background operation mode
+
+### Option 3: Terminal Mode (Debugging)
+**Double-click:** `LAUNCH_VOICEFLOW.bat`
+- ✅ Terminal output with detailed logs
+- ✅ No visual indicators
 - ✅ Good for troubleshooting
-- ✅ Shows detailed logs
+- ✅ Performance monitoring output
 
 ## 🔧 Manual Launch (Advanced)
 
 If batch files don't work, use command line:
 
 ```bash
-# Visual mode
+# Control Center (Recommended)
 cd C:\AI_Projects\VoiceFlow
-python -m localflow.cli_enhanced
+python tools/VoiceFlow_Control_Center.py
 
-# Terminal mode
-cd C:\AI_Projects\VoiceFlow  
-python -m localflow.cli_enhanced --no-tray
+# Enhanced Tray Mode
+cd C:\AI_Projects\VoiceFlow
+venv/Scripts/python.exe -c "
+import sys
+sys.path.insert(0, 'src')
+from voiceflow.ui.enhanced_tray import main
+main()
+"
+
+# Terminal Mode
+cd C:\AI_Projects\VoiceFlow
+venv/Scripts/python.exe -c "
+import sys
+sys.path.insert(0, 'src')
+from voiceflow.ui.cli_ultra_performance import main
+main()
+"
 ```
 
 ## 📋 Requirements Check

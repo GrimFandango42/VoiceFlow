@@ -19,14 +19,14 @@ from pathlib import Path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 try:
-    from localflow.config import Config
-    from localflow.cli_enhanced import EnhancedApp
-    from localflow.audio_enhanced import EnhancedAudioRecorder
-    from localflow.asr_buffer_safe import BufferSafeWhisperASR
-    from localflow.inject import ClipboardInjector
-    from localflow.enhanced_tray import EnhancedTrayController
-    from localflow.visual_indicators import show_listening, show_complete, hide_status
-    from localflow.textproc import apply_code_mode
+    from voiceflow.config import Config
+    from voiceflow.cli_enhanced import EnhancedApp
+    from voiceflow.audio_enhanced import EnhancedAudioRecorder
+    from voiceflow.asr_buffer_safe import BufferSafeWhisperASR
+    from voiceflow.inject import ClipboardInjector
+    from voiceflow.enhanced_tray import EnhancedTrayController
+    from voiceflow.visual_indicators import show_listening, show_complete, hide_status
+    from voiceflow.textproc import apply_code_mode
 except ImportError as e:
     print(f"Import error: {e}")
     print("Please run from VoiceFlow root directory")
@@ -420,7 +420,7 @@ class EdgeCaseTestSuite:
             
             # Test visual indicator cleanup
             try:
-                from localflow.visual_indicators import cleanup_indicators
+                from voiceflow.visual_indicators import cleanup_indicators
                 cleanup_indicators()
                 self.log_test("Visual indicators cleanup", "PASS", "Cleanup completed")
             except Exception as e:

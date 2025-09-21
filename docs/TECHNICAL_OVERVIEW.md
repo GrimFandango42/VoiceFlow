@@ -1,30 +1,30 @@
-LocalFlow: Technical Overview
+VoiceFlow: Technical Overview
 
 Purpose
-- Local, privacy-first push-to-talk dictation for Windows.
+- Local, privacy-first voice transcription and workflow automation for Windows.
 - Works in any focused application (VSCode, browsers, editors) by pasting or typing recognized text.
+- Features advanced performance optimizations, visual indicators, and comprehensive guardrails.
 
 High-level Architecture
-- Hotkey Listener: global chord detection (modifier-only chords supported) to start/stop capture.
-- Audio Capture: `sounddevice` input stream at 16 kHz mono buffers audio while PTT is held.
-- ASR Engine: `faster-whisper` with CUDA fp16 transcribes buffered audio on release.
-- Text Processing: optional “code mode” maps spoken phrases to coding symbols.
-- Injection: injects text via clipboard paste or simulated typing; clipboard is restored.
-- Tray: lightweight system tray for toggles and PTT hotkey presets.
-- Settings: persisted JSON under `%LOCALAPPDATA%\LocalFlow\config.json`.
-- Logging: async rotating log in `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`.
+- Control Center: GUI-based control interface for easy management and monitoring.
+- Audio Capture: High-performance audio input stream at 16 kHz mono with optimized buffering.
+- ASR Engine: `faster-whisper` with CUDA fp16 and performance optimizations for real-time transcription.
+- Text Processing: Enhanced text formatting with smart capitalization, punctuation, and code mode support.
+- Injection: Secure text injection via clipboard paste or keyboard simulation with restored clipboard.
+- Visual Indicators: Real-time status indicators showing listening, processing, and completion states.
+- Settings: Persistent configuration with comprehensive validation and safe defaults.
+- Logging: Advanced logging system with performance monitoring and diagnostic capabilities.
 
-Modules
-- `localflow/config.py`: dataclass with all runtime behavior flags (ASR, hotkeys, injection, code mode, tray).
-- `localflow/audio.py`: microphone stream using `sounddevice` with a thread-safe frame buffer.
-- `localflow/asr.py`: lazy-initialized Whisper model via `faster-whisper`; VAD filter and greedy decode by default; warm-up on load.
-- `localflow/textproc.py`: code-mode mapping; replace phrases with symbols, normalize whitespace.
-- `localflow/inject.py`: sanitized clipboard/typing injection with rate limiting and fallback.
-- `localflow/hotkeys.py`: dynamic-chord PTT; reads current config on each event; supports modifier-only chords.
-- `localflow/tray.py`: pystray-based tray with toggles and PTT presets; optional dependency.
-- `localflow/logging_setup.py`: non-blocking logging via `QueueHandler` + `RotatingFileHandler`.
-- `localflow/settings.py`: load/save config JSON in `%LOCALAPPDATA%\LocalFlow`.
-- `localflow/cli.py`: application wire-up, toggles via hotkeys, tray, and logging.
+Core Modules
+- `voiceflow/core/config.py`: Comprehensive configuration system with validation and performance settings.
+- `voiceflow/core/memory_optimized_audio.py`: High-performance audio capture with optimized memory usage.
+- `voiceflow/core/advanced_performance_asr.py`: Production-ready ASR engine with performance monitoring.
+- `voiceflow/core/textproc.py`: Enhanced text processing with smart formatting and code mode mapping.
+- `voiceflow/integrations/inject.py`: Secure text injection with rate limiting and safety validations.
+- `voiceflow/ui/enhanced_tray.py`: System tray interface with visual indicators and control options.
+- `voiceflow/ui/visual_indicators.py`: Real-time visual feedback system for user awareness.
+- `voiceflow/utils/logging_setup.py`: Advanced logging with performance tracking and diagnostics.
+- `voiceflow/utils/validation.py`: Comprehensive validation and safety guardrails system.
 
 Hotkeys
 - Default PTT: Ctrl+Shift+Space (avoids conflicts with common setups).

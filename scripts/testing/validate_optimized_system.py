@@ -16,8 +16,21 @@ from pathlib import Path
 import numpy as np
 import psutil
 
+
+def safe_print(text: str, fallback_text: str = None):
+    """Print text with unicode fallback for Windows terminal compatibility"""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        if fallback_text:
+            print(fallback_text)
+        else:
+            # Replace common unicode symbols with ASCII equivalents
+            safe_text = text.replace('✓', '[PASS]').replace('✗', '[FAIL]').replace('•', '*')
+            print(safe_text)
+
 # Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent / 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from voiceflow.core.config import Config
 from voiceflow.core.asr_buffer_safe import BufferSafeWhisperASR
@@ -434,9 +447,9 @@ def main():
         print("=" * 50)
 
         if report['overall_validation_passed']:
-            print("✓ VALIDATION PASSED - Optimized system meets all requirements")
+            safe_print("✓ VALIDATION PASSED - Optimized system meets all requirements")
         else:
-            print("✗ VALIDATION FAILED - Issues detected with optimized system")
+            safe_print("✗ VALIDATION FAILED - Issues detected with optimized system")
 
         if 'performance_metrics' in report and 'error' not in report['performance_metrics']:
             avg_speed = report['performance_metrics']['avg_speed_factor']

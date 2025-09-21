@@ -29,10 +29,10 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 try:
-    from localflow.config import Config
-    from localflow.audio_enhanced import EnhancedAudioRecorder, BoundedRingBuffer
-    from localflow.cli_enhanced import EnhancedApp, EnhancedTranscriptionManager
-    from localflow.hotkeys_enhanced import EnhancedPTTHotkeyListener
+    from voiceflow.config import Config
+    from voiceflow.audio_enhanced import EnhancedAudioRecorder, BoundedRingBuffer
+    from voiceflow.cli_enhanced import EnhancedApp, EnhancedTranscriptionManager
+    from voiceflow.hotkeys_enhanced import EnhancedPTTHotkeyListener
 except ImportError as e:
     print(f"Warning: Could not import enhanced modules: {e}")
     print("Falling back to basic imports for compatibility...")
@@ -242,7 +242,7 @@ class TestLongConversationIntegration(unittest.TestCase):
     @patch('localflow.hotkeys_enhanced.keyboard')
     def test_tail_end_buffer_functionality(self, mock_keyboard):
         """Test tail-end buffer prevents audio cutoff"""
-        from localflow.hotkeys_enhanced import EnhancedPTTHotkeyListener
+        from voiceflow.hotkeys_enhanced import EnhancedPTTHotkeyListener
         
         start_called = []
         stop_called = []

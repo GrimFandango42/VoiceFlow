@@ -1,43 +1,25 @@
 # VoiceFlow
 
+> **Author's Note**: This project is primarily coded by me, but it's been fun to code with Claude. Feel free to tear the code apart - submit issues where Claude is good and bad at coding. Feel free to fork it off. I promise it should mostly work on a Windows machine, which is where I've tested it. Feel free to make your own, do what you need to, and hopefully you find it useful to avoid paying for equivalent transcription services (likely better transcription services for more money, but oh well). Do with it as you please, and again feel free to submit any issues. I may or may not ever get to them.
+
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](https://pytest.org/)
-[![Offline](https://img.shields.io/badge/offline-privacy%20focused-green.svg)](#privacy)
 
-A local voice transcription system for Windows that converts speech to text using OpenAI Whisper. Works completely offline with no data sent to external servers.
+A local voice transcription system for Windows that converts speech to text using OpenAI Whisper. Works offline with no data sent to external servers. Built for personal use - your mileage may vary.
 
-## Why Use VoiceFlow?
+## What It Does
 
-- **Privacy First**: All processing happens locally - your voice never leaves your computer
-- **Always Available**: Works without internet connection or cloud services
-- **Practical Speed**: Fast enough for real-time dictation and note-taking
-- **System Integration**: Automatically types or pastes transcribed text into any application
-- **Developer Friendly**: Built for coding conversations with technical term recognition
-- **🛡️ Enterprise Stability**: Critical guardrails prevent crashes and ensure graceful degradation
-
-## 🆕 Recent Improvements
-
-**Enhanced User Experience** (Latest Updates):
-- **✅ Visual Indicators Fixed**: Real-time visual feedback now works perfectly during recording (Ctrl+Shift)
-- **📝 Improved Text Formatting**: Better punctuation, capitalization, and sentence structure for all transcripts
-- **🛡️ Critical Guardrails**: Comprehensive stability improvements prevent edge case crashes (28/40 issues resolved)
-- **🎯 Application Testing**: Validated across VSCode (95%), Browser (90%), Terminal (85%), and Notepad (98%) confidence levels
-
-**Current Status**: Ready for production use with professional-grade stability and formatting.
+- Press and hold a hotkey (default: Ctrl+Shift+Space) to record speech
+- Automatically transcribes using OpenAI Whisper when you release the key
+- Types the transcribed text into whatever application you're using
+- Everything happens locally on your machine - no internet required
 
 ## Control Center
 
-![VoiceFlow Control Center](assets/control-center-gui-clean.png)
+![VoiceFlow Control Center](assets/control-center-current.png)
 
-The Control Center provides a unified interface for system management:
-- System launch and configuration
-- Visual demo controls for testing
-- Real-time status monitoring with progress indicators
-- Test suite execution and health checks
-
-Launch commands:
+The Control Center provides system management and monitoring. Launch it with:
 
 ```bash
 # Windows
@@ -47,429 +29,168 @@ tools\launchers\LAUNCH_CONTROL_CENTER.bat
 python tools/VoiceFlow_Control_Center.py
 ```
 
-## What It Does
+## Installation
 
-**Voice to Text Conversion**
-- Press and hold Ctrl+Shift to record speech
-- Automatic transcription using OpenAI Whisper
-- Text is automatically typed into any application
+### Prerequisites
+- Python 3.9 or higher
+- Windows (tested here, other platforms untested)
+- A microphone
+- 4GB+ RAM recommended
 
-**System Integration**
-- Visual status indicator shows recording/processing state
-- System tray for easy access and configuration
-- Works with any Windows application (browsers, editors, documents)
-
-**Technical Features**
-- Offline processing - no internet required
-- Configurable audio devices and settings
-- **Enhanced text formatting** with smart punctuation, capitalization, and readability improvements
-- **Visual feedback system** with real-time recording status indicators
-- **Critical guardrails** for stability and graceful error handling
-- Clipboard or direct typing output modes
-
-## Installation & Usage
-
-### Installation
+### Install Steps
 
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/voiceflow.git
 cd voiceflow
 
-# Install with pip (recommended)
-pip install -e .
+# Create virtual environment (recommended)
+python -m venv venv
+venv\Scripts\activate  # Windows
 
-# Or install from PyPI (when available)
-pip install voiceflow
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-### Basic Usage
+## Usage
+
+### Quick Start
 
 ```bash
-# Launch with system tray (recommended)
-voiceflow-tray
+# Launch with system tray
+START_VOICEFLOW.bat
 
-# Or launch in terminal mode
-voiceflow
-
-# Setup and configuration wizard
-voiceflow-setup
+# Or launch terminal mode
+LAUNCH_VOICEFLOW.bat
 ```
 
-### Windows Quick Launch
+### Basic Operation
 
-For Windows users, use the convenient batch launchers:
+1. Launch VoiceFlow using one of the methods above
+2. Press and hold `Ctrl+Shift+Space` to start recording
+3. Speak while holding the key
+4. Release the key to stop recording and transcribe
+5. The transcribed text appears in your active window
 
-```batch
-# Double-click to launch
-tools/launchers/LAUNCH_TRAY.bat        # System tray mode
-tools/launchers/LAUNCH_TERMINAL.bat    # Terminal mode
-tools/launchers/LAUNCH_CONTROL_CENTER.bat  # Control center GUI
-```
+### Visual Indicators
 
-## Visual Status System
+The system shows status with colored indicators:
 
-The system uses color-coded indicators to show current state:
-
-| Color | Status | Description |
-|-------|--------|-------------|
-| 🔵 Blue | Ready | System ready for voice input |
-| 🟠 Orange | Listening | Recording audio (hold `Ctrl+Shift`) |
-| 🟢 Green | Processing | Transcribing and processing audio |
-| 🔴 Red | Error | Error state or system issue |
-
-## Default Controls
-
-- Voice Activation: `Ctrl + Shift` (press and hold)
-- System Tray: Right-click for settings and options
-- Visual Overlay: Bottom-center screen display
-- Auto Text Injection: Automatic paste after transcription
+- **Blue**: Ready for input
+- **Orange**: Recording (while holding hotkey)
+- **Green**: Processing/transcribing
+- **Red**: Error occurred
 
 ## Configuration
 
-Configuration options are available through multiple interfaces:
+Settings can be adjusted through:
 
-### System Tray Menu
-- Toggle code mode for programming
-- Switch between typing and paste injection
-- Configure hotkey combinations
-- Adjust visual indicator settings
+- **System Tray**: Right-click the tray icon for basic toggles
+- **Configuration Files**: JSON files in the config directory
+- **Command Line**: Various startup options available
 
-### Configuration Files
-- **Main Config**: Automatic creation and management
-- **Visual Settings**: Themes, positions, and display options
-- **Audio Settings**: Sample rates, devices, and processing options
+Common settings:
+- Change hotkey combinations
+- Switch between typing and clipboard paste
+- Toggle "code mode" for programming terms
+- Adjust audio devices and quality
 
-### Environment Variables
-```bash
-export VOICEFLOW_MODEL="base.en"     # Whisper model
-export VOICEFLOW_DEVICE="cuda"       # Processing device
-export VOICEFLOW_LOG_LEVEL="INFO"    # Logging level
-```
+## Architecture
 
-## 🎨 Architecture
+The system has four main layers:
 
-VoiceFlow showcases a **visually stunning, enterprise-grade architecture** with sophisticated ASCII art presentation that matches its advanced technical capabilities:
-
-### System Architecture Overview
-
-VoiceFlow uses a **sophisticated 4-layer modular architecture** engineered for enterprise-grade, low-latency speech processing with advanced performance optimizations:
-
-<div align="center">
-
-```
-██████████████████████████████████████████████████████████████████████████████████████████
-█                                                                                        █
-█   ██╗   ██╗ ██████╗ ██╗ ██████╗███████╗███████╗██╗      ██████╗ ██╗    ██╗             █
-█   ██║   ██║██╔═══██╗██║██╔════╝██╔════╝██╔════╝██║     ██╔═══██╗██║    ██║             █
-█   ██║   ██║██║   ██║██║██║     █████╗  █████╗  ██║     ██║   ██║██║ █╗ ██║             █
-█   ╚██╗ ██╔╝██║   ██║██║██║     ██╔══╝  ██╔══╝  ██║     ██║   ██║██║███╗██║             █
-█    ╚████╔╝ ╚██████╔╝██║╚██████╗███████╗██║     ███████╗╚██████╔╝╚███╔███╔╝             █
-█     ╚═══╝   ╚═════╝ ╚═╝ ╚═════╝╚══════╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝              █
-█                                                                                        █
-█              🚀 ENTERPRISE-GRADE REAL-TIME SPEECH PROCESSING ARCHITECTURE              █
-█                                                                                        █
-██████████████████████████████████████████████████████████████████████████████████████████
-
-
-╔══════════════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                          ║
-║    🎨 ████████████████████ USER INTERFACE LAYER ████████████████████ 🎨                ║
-║                                                                                          ║
-╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
-║                                                                                          ║
-║  ╭─────────────────╮  ╭─────────────────╮  ╭─────────────────╮  ╭────────────────╮     ║
-║  │ 🖥️  CONTROL GUI │  │ 🔧 SYSTEM TRAY  │  │ 💻 CLI SUITE    │  │ 🎪 VISUAL      │     ║
-║  │                 │  │                 │  │                 │  │    OVERLAYS    │     ║
-║  │ ⚡ Launcher      │  │ ⚙️  Settings     │  │ 📝 Basic        │  │                │     ║
-║  │ 📊 Monitor       │  │ 🔄 Toggle       │  │ 🚀 Enhanced     │  │ 🔴 Status LEDs │     ║
-║  │ 🏥 Health        │  │ ⚡ Actions      │  │ ⚡ Ultra Perf   │  │ 🎨 Themes      │     ║
-║  ╰─────────────────╯  ╰─────────────────╯  ╰─────────────────╯  ╰────────────────╯     ║
-║                                                                                          ║
-╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
-║                                                                                          ║
-║    🔗 ██████████████████ INTEGRATION LAYER ██████████████████ 🔗                       ║
-║                                                                                          ║
-╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
-║                                                                                          ║
-║  ╭─────────────────╮  ╭─────────────────╮  ╭─────────────────╮  ╭────────────────╮     ║
-║  │ ⌨️  HOTKEYS      │  │ 📝 TEXT INJECT  │  │ 🔄 SYS EVENTS   │  │ ⚙️  CONFIG     │     ║
-║  │                 │  │                 │  │                 │  │    MANAGER     │     ║
-║  │ 🎮 Ctrl+Shift   │  │ ⚡ Direct Type  │  │ 🎯 Focus Track  │  │                │     ║
-║  │ 🚀 Enhanced     │  │ 📋 Clipboard    │  │ 🖥️  App Monitor │  │ 📊 Settings    │     ║
-║  │ 🎯 Capture      │  │ 🧠 Smart Paste  │  │ 🔄 State Sync   │  │ 🔧 Profiles    │     ║
-║  ╰─────────────────╯  ╰─────────────────╯  ╰─────────────────╯  ╰────────────────╯     ║
-║                                                                                          ║
-╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
-║                                                                                          ║
-║    ⚡ ████████████████ CORE PROCESSING LAYER ████████████████ ⚡                      ║
-║                                                                                          ║
-╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
-║                                                                                          ║
-║  ╭─────────────────╮  ╭─────────────────╮  ╭─────────────────╮  ╭────────────────╮     ║
-║  │ 🎵 AUDIO ENGINE │  │ 🤖 ASR PIPELINE │  │ 📝 TEXT PROC    │  │ 🚀 PERFORMANCE │     ║
-║  │                 │  │                 │  │                 │  │    ENGINE      │     ║
-║  │ 🎤 Core Audio   │  │ 🧠 Base ASR     │  │ ✨ Smart Format │  │                │     ║
-║  │ 🚀 Enhanced     │  │ ⚡ Enhanced     │  │ 💻 Code Mode    │  │ 🔓 Lock-free   │     ║
-║  │ 💾 Memory Opt   │  │ 🛡️  Buffer Safe │  │ 📚 Vocabulary   │  │ 🧠 Memory Pool │     ║
-║  │ ✅ Validation   │  │ 🚀 Performance  │  │ 🌐 Multi-lang   │  │ 🧵 Threading   │     ║
-║  │ 📦 Buffering    │  │    ASR Engine   │  │    Support      │  │ 🎮 GPU Accel   │     ║
-║  ╰─────────────────╯  ╰─────────────────╯  ╰─────────────────╯  ╰────────────────╯     ║
-║                                                                                          ║
-╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
-║                                                                                          ║
-║    🖥️ ██████████ HARDWARE/OPERATING SYSTEM LAYER ██████████ 🖥️                        ║
-║                                                                                          ║
-╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
-║                                                                                          ║
-║  ╭─────────────────╮  ╭─────────────────╮  ╭─────────────────╮  ╭────────────────╮     ║
-║  │ 🎙️  AUDIO DEV   │  │ 🖥️  OS PLATFORM │  │ 🖨️  RESOURCES   │  │ 📁 FILE SYSTEM │     ║
-║  │                 │  │                 │  │                 │  │                │     ║
-║  │ 🎤 Microphone   │  │ 🪟 Windows API  │  │ 🧠 CPU/GPU      │  │ ⚙️  Config     │     ║
-║  │ 🔌 Drivers      │  │ 🎵 DirectSound  │  │ 💾 Memory       │  │ 📋 Logs        │     ║
-║  │ 📊 Sample Rate  │  │ 🔐 Permissions  │  │ 💿 Storage      │  │ 🗂️  Cache      │     ║
-║  ╰─────────────────╯  ╰─────────────────╯  ╰─────────────────╯  ╰────────────────╯     ║
-║                                                                                          ║
-╚══════════════════════════════════════════════════════════════════════════════════════════╝
-
-
-     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
-   ▓                                                                                   ▓
-  ▓         🌊 REAL-TIME DATA FLOW PIPELINE (Ultra-Low Latency <100ms) 🌊             ▓
-  ▓                                                                                   ▓
-  ▓  ┌─────────────────────────────────────────────────────────────────────────────┐  ▓
-  ▓  │                                                                             │  ▓
-  ▓  │  🎤 Audio → 📦 Buffer → 🔍 VAD → 🤖 Whisper → ✨ Text → 💻 Injection      │  ▓
-  ▓  │   Input      Management   Filter    Model      Output    Integration        │  ▓
-  ▓  │     ↓           ↓          ↓         ↓          ↓           ↓              │  ▓
-  ▓  │  Hardware   Memory Opt  Voice    GPU/CPU    Smart      System             │  ▓
-  ▓  │  Interface  Buffering   Activity Processing  Format     Integration       │  ▓
-  ▓  │                                              & Cleanup                     │  ▓
-  ▓  └─────────────────────────────────────────────────────────────────────────────┘  ▓
-  ▓                                                                                   ▓
-   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
-```
-
-</div>
-
-
-### Core Components
+1. **UI Layer**: System tray, visual indicators, Control Center GUI
+2. **Integration Layer**: Hotkey capture, text injection, system events
+3. **Core Processing**: Audio capture, Whisper transcription, text formatting
+4. **Hardware Layer**: Audio devices, OS integration, file system
 
 ```
 src/voiceflow/
-├── core/                          # 🎵 Audio processing and transcription
-│   ├── config.py                 #    Configuration management
-│   ├── asr.py                    #    Core ASR engine (WhisperASR)
-│   ├── asr_enhanced.py           #    Enhanced ASR with optimizations
-│   ├── asr_buffer_safe.py        #    Thread-safe ASR processing
-│   ├── audio.py                  #    Core audio capture
-│   ├── audio_enhanced.py         #    Enhanced audio processing
-│   ├── memory_optimized_audio.py #    Memory-efficient audio handling
-│   ├── adaptive_model_access.py  #    Lock-free model management
-│   ├── advanced_performance_asr.py #  High-performance ASR pipeline
-│   ├── textproc.py              #    Text processing and formatting
-│   └── optimized_audio_validation.py # Audio validation systems
-├── ui/                           # 🎨 User interface components
-│   ├── tray.py                  #    Basic system tray integration
-│   ├── enhanced_tray.py         #    Advanced tray with extended features
-│   ├── cli.py                   #    Command-line interface
-│   ├── cli_enhanced.py          #    Enhanced CLI with more features
-│   ├── cli_ultra_performance.py #    High-performance CLI mode
-│   ├── visual_config.py         #    Visual overlay configuration
-│   └── visual_indicators.py     #    Real-time status indicators
-├── integrations/                 # 🔗 System integrations and hotkeys
-│   ├── hotkeys.py              #    Core hotkey handling
-│   ├── hotkeys_enhanced.py     #    Enhanced hotkey features
-│   └── inject.py               #    Text injection system
-└── utils/                        # 🛠️ Utilities and helpers
-    ├── logging_setup.py         #    Centralized logging configuration
-    ├── production_logging.py    #    Production-ready logging
-    ├── settings.py              #    Settings management
-    ├── validation.py            #    Input validation and sanitization
-    └── utils.py                 #    Common utility functions
+├── core/           # Audio processing and transcription
+├── ui/             # User interface components
+├── integrations/   # System integrations and hotkeys
+└── utils/          # Utilities and configuration
 ```
 
-#### Component Details
+Key components:
+- `core/advanced_performance_asr.py`: Main transcription engine
+- `ui/enhanced_tray.py`: System tray interface
+- `integrations/inject.py`: Text injection system
+- `ui/visual_indicators.py`: Status display system
 
-🎵 **Audio Processing Pipeline**
-- **Multi-tier Audio Engines**: Core, Enhanced, and Memory-optimized audio processing
-- **Real-time Capture**: Low-latency streaming with configurable buffer management
-- **Advanced Validation**: Comprehensive audio quality validation and error handling
-- **VAD Integration**: Voice Activity Detection with smart filtering
-- **Adaptive Buffering**: Dynamic buffer optimization for different audio scenarios
-- **Multi-device Support**: Flexible device selection with intelligent fallback
-
-⚡ **Multi-tier ASR Engine Architecture**
-- **Base WhisperASR**: Core faster-whisper integration with standard optimizations
-- **Enhanced ASR**: Advanced pipeline with smart prompting and post-processing
-- **Buffer-Safe ASR**: Thread-safe processing for concurrent operations
-- **Performance ASR**: High-throughput pipeline with lock-free model access
-- **Adaptive Model Management**: Dynamic model loading with 50-87% performance boost
-- **GPU Acceleration**: CUDA support with automatic CPU fallback and type optimization
-
-📝 **Text Processing Features**
-- **Smart Formatting**: Context-aware punctuation and capitalization
-- **Code Mode**: Programming-optimized transcription with technical terms
-- **Custom Vocabularies**: User-defined word replacements and shortcuts
-- **Multi-language**: Support for 50+ languages with automatic detection
-
-🎨 **Multi-Interface User Experience**
-- **Control Center GUI**: Unified tkinter-based management interface with system monitoring
-- **Multi-tier CLI**: Basic CLI, Enhanced CLI with advanced features, Ultra-Performance CLI
-- **Advanced System Tray**: Enhanced tray integration with extended configuration options
-- **Visual Feedback System**: Thread-safe overlays with customizable themes and real-time progress
-- **Status Indicators**: Color-coded status LEDs with configurable positioning and themes
-- **Health Monitoring**: Integrated system health checks and performance validation
-
-🚀 **Performance Optimizations**
-- **Lock-free Architecture**: Minimal contention for real-time performance with 50-87% speedup
-- **Adaptive Model Access**: Dynamic model management with intelligent caching
-- **Memory Pooling**: Pre-allocated buffers to reduce garbage collection overhead
-- **Async Processing**: Non-blocking I/O with concurrent pipeline operations
-- **Micro-optimizations**: Profile-guided performance improvements and buffer management
-- **GPU Acceleration**: CUDA optimization with automatic CPU fallback strategies
-
-🛡️ **Critical Stability Guardrails**
-- **Audio Input Sanitization**: Prevents crashes from NaN/infinite values and empty arrays
-- **Visual Thread Safety**: Queue-based updates prevent GUI threading errors
-- **Configuration Validation**: Automatic correction of invalid settings with safe fallbacks
-- **Error Recovery**: Exponential backoff retry mechanisms with graceful degradation
-- **Resource Monitoring**: Memory leak prevention with automatic garbage collection
-
-### 📊 **Performance Characteristics**
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Metric            │  Value          │  Optimization               │
-├────────────────────┼─────────────────┼─────────────────────────────┤
-│  Latency           │  <100ms         │  Real-time processing       │
-│  Throughput        │  12.5x baseline │  VAD-based batching         │
-│  Memory Usage      │  <2GB RAM       │  Memory pooling & caching   │
-│  Accuracy          │  95%+ WER       │  Enhanced post-processing   │
-│  Concurrent Boost  │  50-87%         │  Lock-free model access     │
-│  GPU Acceleration  │  4-6x speedup   │  CUDA + faster-whisper      │
-│  Edge Case Success │  >95%           │  Critical guardrails        │
-│  Error Recovery    │  <3 retries     │  Exponential backoff        │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-## 🧪 Testing
-
-VoiceFlow includes comprehensive testing and validation:
+## Testing
 
 ```bash
+# Run unit tests
+pytest tests/unit/
+
 # Run all tests
 pytest
 
-# Run specific test categories
-pytest tests/unit          # Unit tests
-pytest tests/integration   # Integration tests
-pytest tests/e2e          # End-to-end tests
+# Quick health check
+python scripts/dev/health_check_simple.py
 
-# Run critical guardrails validation
-python scripts/validate_guardrails.py
-
-# Run comprehensive guardrails test suite
-python tests/test_critical_guardrails.py
-
-# Run with coverage
-pytest --cov=src/voiceflow --cov-report=html
-
-# Quick smoke test
-python scripts/dev/quick_smoke_test.py
+# Stress testing
+python tests/stress/test_edge_case_stress.py
 ```
 
-### 🛡️ **Guardrails Validation**
+## Performance
 
-Critical stability testing ensures edge case resilience:
+Typical performance on modern hardware:
+- Transcription speed: 10-15x realtime
+- Latency: 50-150ms after key release
+- Memory usage: 1-3GB depending on model size
+- Works with or without GPU acceleration
 
-- **[Guardrails Testing Guide](CRITICAL_GUARDRAILS_USER_TESTING_GUIDE.md)**: Comprehensive end-user validation
-- **[Application-Specific Scenarios](APPLICATION_SPECIFIC_TEST_SCENARIOS.md)**: Confidence-based testing for different apps
-- **[Automated Validation](scripts/validate_guardrails.py)**: Pre-testing guardrails verification
+## Troubleshooting
 
-## 📚 Documentation
-
-- **[Build Guide](docs/BUILD_GUIDE.md)**: Detailed setup and installation instructions
-- **[User Guide](docs/USER_GUIDE.md)**: Complete usage and configuration documentation
-- **[Technical Overview](docs/TECHNICAL_OVERVIEW.md)**: Architecture and development details
-- **[Contributing Guide](docs/CONTRIBUTING.md)**: Development and contribution guidelines
-- **[Testing Notes](docs/TESTING_NOTES.md)**: Testing framework and procedures
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](docs/CONTRIBUTING.md) for details.
-
-### Development Setup
-
+**Audio not working**:
 ```bash
-# Clone and setup development environment
-git clone https://github.com/yourusername/voiceflow.git
-cd voiceflow
-
-# Install with development dependencies
-pip install -e ".[dev,test,docs]"
-
-# Install pre-commit hooks
-pre-commit install
-
-# Run development checks
-ruff check src tests      # Linting
-mypy src                  # Type checking
-pytest tests/            # Testing
-```
-
-## 📋 Requirements
-
-- **Python**: 3.9 or higher
-- **Operating System**: Windows (primary), Linux/macOS (community support)
-- **Hardware**:
-  - Microphone for voice input
-  - 4GB+ RAM recommended
-  - GPU optional (CUDA support for faster processing)
-
-### Dependencies
-
-Core dependencies are automatically managed through `pyproject.toml`:
-
-- **Audio**: `sounddevice`, `pyaudio`, `pydub`
-- **AI/ML**: `faster-whisper`, `torch`, `ctranslate2`
-- **UI**: `pystray`, `tkinter`, `Pillow`
-- **System**: `keyboard`, `pyperclip`
-
-## 🚨 Troubleshooting
-
-### Common Issues
-
-**Audio not detected**:
-```bash
-python scripts/dev/list_audio_devices.py  # List available devices
+python scripts/list_audio_devices.py  # List available microphones
 ```
 
 **Performance issues**:
-```bash
-python scripts/dev/health_check.py        # System health check
-```
+- Try smaller Whisper model (`base.en` instead of `large`)
+- Check if GPU drivers are installed for CUDA support
+- Close other memory-intensive applications
 
 **Permission errors**:
-- Run as administrator (Windows)
-- Check microphone permissions
+- Run as administrator on Windows
+- Check microphone permissions in Windows settings
 
-### Getting Help
+## Known Issues
 
-- 📖 Check our [Documentation](docs/)
-- 🐛 [Report Issues](https://github.com/yourusername/voiceflow/issues)
-- 💬 [Discussions](https://github.com/yourusername/voiceflow/discussions)
+- Primarily tested on Windows 11
+- May not work well with some applications that block input simulation
+- Large Whisper models require significant RAM
+- GPU support depends on CUDA installation
 
-## 📜 License
+## Dependencies
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Main dependencies:
+- `faster-whisper`: Optimized Whisper inference
+- `sounddevice`: Audio capture
+- `keyboard`: Hotkey detection and text injection
+- `pyperclip`: Clipboard operations
+- `tkinter`: GUI components
+- `torch`: ML framework (CPU/CUDA)
 
-## 🙏 Acknowledgments
+## Documentation
 
-- [OpenAI Whisper](https://github.com/openai/whisper) for the speech recognition engine
+- [Technical Overview](docs/TECHNICAL_OVERVIEW.md): Architecture details
+- [User Guide](docs/USER_GUIDE.md): Detailed usage instructions
+- [Testing Notes](docs/TESTING_NOTES.md): Testing framework info
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file.
+
+## Acknowledgments
+
+- [OpenAI Whisper](https://github.com/openai/whisper) for the speech recognition
 - [faster-whisper](https://github.com/guillaumekln/faster-whisper) for optimized inference
-- [Wispr Flow](https://www.wisprapp.com) for visual design inspiration
+- Various Python libraries that make this possible
 
 ---
 
-**VoiceFlow** - *Transforming voice to text with modern AI*
+**VoiceFlow** - Local speech-to-text for personal use

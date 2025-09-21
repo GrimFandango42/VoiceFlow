@@ -32,8 +32,8 @@ import numpy as np
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from localflow.config import Config
-from localflow.asr_enhanced import EnhancedWhisperASR
+from voiceflow.config import Config
+from voiceflow.asr_enhanced import EnhancedWhisperASR
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
