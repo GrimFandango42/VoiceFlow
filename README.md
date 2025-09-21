@@ -1,6 +1,6 @@
 # VoiceFlow
 
-> **Author's Note**: This project is primarily coded by me, but it's been fun to code with Claude. Feel free to tear the code apart - submit issues where Claude is good and bad at coding. Feel free to fork it off. I promise it should mostly work on a Windows machine, which is where I've tested it. Feel free to make your own, do what you need to, and hopefully you find it useful to avoid paying for equivalent transcription services (likely better transcription services for more money, but oh well). Do with it as you please, and again feel free to submit any issues. I may or may not ever get to them.
+> **Author's Note**: This project has been primarily vibe coded with Claude. It's been fun to code with Claude. Feel free to tear the code apart - submit issues where Claude is good and bad at coding. Feel free to fork it off. I promise it should mostly work on a Windows machine, which is where I've tested it. Feel free to make your own, do what you need to, and hopefully you find it useful to avoid paying for equivalent transcription services (likely better transcription services for more money, but oh well). Do with it as you please, and again feel free to submit any issues. I may or may not ever get to them.
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -17,7 +17,7 @@ A local voice transcription system for Windows that converts speech to text usin
 
 ## Control Center
 
-![VoiceFlow Control Center](assets/control-center-current.png)
+![VoiceFlow Control Center](assets/control-center-gui-clean.png)
 
 The Control Center provides system management and monitoring. Launch it with:
 

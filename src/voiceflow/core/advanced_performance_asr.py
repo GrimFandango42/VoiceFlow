@@ -21,6 +21,7 @@ import numpy as np
 
 from .config import Config
 from .asr_buffer_safe import BufferSafeWhisperASR
+from ..utils.buffer_overflow_protection import buffer_protector
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,12 @@ class AdvancedPerformanceASR(BufferSafeWhisperASR):
         transcription_start_time = time.perf_counter()
 
         try:
+            # Validate audio buffer for corruption BEFORE transcription
+            is_valid, error_msg = buffer_protector.validate_audio_buffer(audio)
+            if not is_valid:
+                logger.warning(f"Audio buffer validation failed: {error_msg}")
+                return ""
+
             # Ensure model is loaded
             if self._model is None:
                 self.load()
@@ -374,6 +381,11 @@ class AdvancedPerformanceASR(BufferSafeWhisperASR):
 
         # Process segments
         text = self._process_segments_isolated(segments, recording_state['recording_id'])
+
+        # Apply buffer overflow protection and clean transcription
+        text = buffer_protector.clean_transcription(text)
+        text = buffer_protector.detect_trailing_garbage(text)
+
         return text
 
     def _transcribe_chunk_with_model(self, chunk: np.ndarray, model, chunk_idx: int) -> str:
