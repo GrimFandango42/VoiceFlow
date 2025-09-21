@@ -59,10 +59,10 @@ Testing
   - `scripts/check_mappings.py`: preview code-mode replacements.
   - `scripts/list_audio_devices.py`: enumerate inputs.
   - `scripts/bench_env.py`: environment snapshot.
-- Test runner: `python run_tests.py --type unit` aggregates results if pytest is installed.
+- Test runner: `pytest tests/unit/` runs unit tests, `pytest` runs all tests.
 
 Extension Points
-- Code mode: extend `localflow/textproc.py` mappings; consider making it data-driven (JSON/CSV) for language-specific presets.
+- Code mode: extend `voiceflow/core/textproc.py` mappings; consider making it data-driven (JSON/CSV) for language-specific presets.
 - Injection: per-app policy layer (future) to choose paste vs type and Enter behavior by target application.
 - ASR: switch engines (e.g., whisper.cpp) or add streaming partials for continuous dictation mode.
 - UI: add a minimal status overlay for listen/transcribe states.
