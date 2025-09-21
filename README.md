@@ -134,72 +134,111 @@ export VOICEFLOW_DEVICE="cuda"       # Processing device
 export VOICEFLOW_LOG_LEVEL="INFO"    # Logging level
 ```
 
-## Architecture
+## 🎨 Architecture
 
-The system uses a modular 4-layer architecture optimized for low-latency audio processing:
+VoiceFlow showcases a **visually stunning, enterprise-grade architecture** with sophisticated ASCII art presentation that matches its advanced technical capabilities:
 
 ### System Architecture Overview
 
-![VoiceFlow Architecture](assets/voiceflow-architecture-diagram.png)
-
 VoiceFlow uses a **sophisticated 4-layer modular architecture** engineered for enterprise-grade, low-latency speech processing with advanced performance optimizations:
 
+<div align="center">
+
 ```
-    ┌─ 🎨 USER INTERFACE ─────────────────────────────────────┐
-    │                                                         │
-    ├─ 🔗 INTEGRATION ────────────────────────────────────────┤
-    │                                                         │
-    ├─ ⚡ CORE PROCESSING ─────────────────────────────────────┤
-    │                                                         │
-    └─ 🖥️ HARDWARE/OS ───────────────────────────────────────┘
-         Data Flow: Audio → Buffer → Whisper → Text → UI
+██████████████████████████████████████████████████████████████████████████████████████████
+█                                                                                        █
+█   ██╗   ██╗ ██████╗ ██╗ ██████╗███████╗███████╗██╗      ██████╗ ██╗    ██╗             █
+█   ██║   ██║██╔═══██╗██║██╔════╝██╔════╝██╔════╝██║     ██╔═══██╗██║    ██║             █
+█   ██║   ██║██║   ██║██║██║     █████╗  █████╗  ██║     ██║   ██║██║ █╗ ██║             █
+█   ╚██╗ ██╔╝██║   ██║██║██║     ██╔══╝  ██╔══╝  ██║     ██║   ██║██║███╗██║             █
+█    ╚████╔╝ ╚██████╔╝██║╚██████╗███████╗██║     ███████╗╚██████╔╝╚███╔███╔╝             █
+█     ╚═══╝   ╚═════╝ ╚═╝ ╚═════╝╚══════╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝              █
+█                                                                                        █
+█              🚀 ENTERPRISE-GRADE REAL-TIME SPEECH PROCESSING ARCHITECTURE              █
+█                                                                                        █
+██████████████████████████████████████████████████████████████████████████████████████████
+
+
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                          ║
+║    🎨 ████████████████████ USER INTERFACE LAYER ████████████████████ 🎨                ║
+║                                                                                          ║
+╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
+║                                                                                          ║
+║  ╭─────────────────╮  ╭─────────────────╮  ╭─────────────────╮  ╭────────────────╮     ║
+║  │ 🖥️  CONTROL GUI │  │ 🔧 SYSTEM TRAY  │  │ 💻 CLI SUITE    │  │ 🎪 VISUAL      │     ║
+║  │                 │  │                 │  │                 │  │    OVERLAYS    │     ║
+║  │ ⚡ Launcher      │  │ ⚙️  Settings     │  │ 📝 Basic        │  │                │     ║
+║  │ 📊 Monitor       │  │ 🔄 Toggle       │  │ 🚀 Enhanced     │  │ 🔴 Status LEDs │     ║
+║  │ 🏥 Health        │  │ ⚡ Actions      │  │ ⚡ Ultra Perf   │  │ 🎨 Themes      │     ║
+║  ╰─────────────────╯  ╰─────────────────╯  ╰─────────────────╯  ╰────────────────╯     ║
+║                                                                                          ║
+╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
+║                                                                                          ║
+║    🔗 ██████████████████ INTEGRATION LAYER ██████████████████ 🔗                       ║
+║                                                                                          ║
+╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
+║                                                                                          ║
+║  ╭─────────────────╮  ╭─────────────────╮  ╭─────────────────╮  ╭────────────────╮     ║
+║  │ ⌨️  HOTKEYS      │  │ 📝 TEXT INJECT  │  │ 🔄 SYS EVENTS   │  │ ⚙️  CONFIG     │     ║
+║  │                 │  │                 │  │                 │  │    MANAGER     │     ║
+║  │ 🎮 Ctrl+Shift   │  │ ⚡ Direct Type  │  │ 🎯 Focus Track  │  │                │     ║
+║  │ 🚀 Enhanced     │  │ 📋 Clipboard    │  │ 🖥️  App Monitor │  │ 📊 Settings    │     ║
+║  │ 🎯 Capture      │  │ 🧠 Smart Paste  │  │ 🔄 State Sync   │  │ 🔧 Profiles    │     ║
+║  ╰─────────────────╯  ╰─────────────────╯  ╰─────────────────╯  ╰────────────────╯     ║
+║                                                                                          ║
+╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
+║                                                                                          ║
+║    ⚡ ████████████████ CORE PROCESSING LAYER ████████████████ ⚡                      ║
+║                                                                                          ║
+╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
+║                                                                                          ║
+║  ╭─────────────────╮  ╭─────────────────╮  ╭─────────────────╮  ╭────────────────╮     ║
+║  │ 🎵 AUDIO ENGINE │  │ 🤖 ASR PIPELINE │  │ 📝 TEXT PROC    │  │ 🚀 PERFORMANCE │     ║
+║  │                 │  │                 │  │                 │  │    ENGINE      │     ║
+║  │ 🎤 Core Audio   │  │ 🧠 Base ASR     │  │ ✨ Smart Format │  │                │     ║
+║  │ 🚀 Enhanced     │  │ ⚡ Enhanced     │  │ 💻 Code Mode    │  │ 🔓 Lock-free   │     ║
+║  │ 💾 Memory Opt   │  │ 🛡️  Buffer Safe │  │ 📚 Vocabulary   │  │ 🧠 Memory Pool │     ║
+║  │ ✅ Validation   │  │ 🚀 Performance  │  │ 🌐 Multi-lang   │  │ 🧵 Threading   │     ║
+║  │ 📦 Buffering    │  │    ASR Engine   │  │    Support      │  │ 🎮 GPU Accel   │     ║
+║  ╰─────────────────╯  ╰─────────────────╯  ╰─────────────────╯  ╰────────────────╯     ║
+║                                                                                          ║
+╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
+║                                                                                          ║
+║    🖥️ ██████████ HARDWARE/OPERATING SYSTEM LAYER ██████████ 🖥️                        ║
+║                                                                                          ║
+╠═══════════════════════════════════════════════════════════════════════════════════════▼═╣
+║                                                                                          ║
+║  ╭─────────────────╮  ╭─────────────────╮  ╭─────────────────╮  ╭────────────────╮     ║
+║  │ 🎙️  AUDIO DEV   │  │ 🖥️  OS PLATFORM │  │ 🖨️  RESOURCES   │  │ 📁 FILE SYSTEM │     ║
+║  │                 │  │                 │  │                 │  │                │     ║
+║  │ 🎤 Microphone   │  │ 🪟 Windows API  │  │ 🧠 CPU/GPU      │  │ ⚙️  Config     │     ║
+║  │ 🔌 Drivers      │  │ 🎵 DirectSound  │  │ 💾 Memory       │  │ 📋 Logs        │     ║
+║  │ 📊 Sample Rate  │  │ 🔐 Permissions  │  │ 💿 Storage      │  │ 🗂️  Cache      │     ║
+║  ╰─────────────────╯  ╰─────────────────╯  ╰─────────────────╯  ╰────────────────╯     ║
+║                                                                                          ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+
+     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+   ▓                                                                                   ▓
+  ▓         🌊 REAL-TIME DATA FLOW PIPELINE (Ultra-Low Latency <100ms) 🌊             ▓
+  ▓                                                                                   ▓
+  ▓  ┌─────────────────────────────────────────────────────────────────────────────┐  ▓
+  ▓  │                                                                             │  ▓
+  ▓  │  🎤 Audio → 📦 Buffer → 🔍 VAD → 🤖 Whisper → ✨ Text → 💻 Injection      │  ▓
+  ▓  │   Input      Management   Filter    Model      Output    Integration        │  ▓
+  ▓  │     ↓           ↓          ↓         ↓          ↓           ↓              │  ▓
+  ▓  │  Hardware   Memory Opt  Voice    GPU/CPU    Smart      System             │  ▓
+  ▓  │  Interface  Buffering   Activity Processing  Format     Integration       │  ▓
+  ▓  │                                              & Cleanup                     │  ▓
+  ▓  └─────────────────────────────────────────────────────────────────────────────┘  ▓
+  ▓                                                                                   ▓
+   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
 ```
 
-#### 🎨 **User Interface Layer**
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Control Center GUI  │  System Tray  │  CLI Interfaces  │  Visual     │
-│  ├─ Launch Controls  │  ├─ Settings  │  ├─ CLI Basic    │  Overlays   │
-│  ├─ System Status    │  ├─ Quick     │  ├─ CLI Enhanced │  ├─ Status  │
-│  ├─ Test Suite       │  ├─ Toggle    │  └─ CLI Ultra    │  │   LEDs   │
-│  ├─ Health Checks    │  └─ Actions   │     Performance  │  ├─ Progress│
-│  └─ Visual Demo      │              │                  │  └─ Themes  │
-└─────────────────────────────────────────────────────────────────────┘
-```
+</div>
 
-#### 🔗 **Integration Layer**
-```
-┌─────────────────────────────────────────────────────────┐
-│  Global Hotkeys  │  Text Injection  │  System Events   │
-│  ├─ Ctrl+Shift   │  ├─ Direct Type  │  ├─ Focus Track  │
-│  ├─ Custom Keys  │  ├─ Clipboard    │  ├─ App Monitor  │
-│  └─ Key Capture  │  └─ Smart Paste  │  └─ State Sync   │
-└─────────────────────────────────────────────────────────┘
-```
-
-#### ⚡ **Core Processing Layer**
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Audio Engines        │  ASR Pipelines       │  Performance Engine  │
-│  ├─ Core Audio        │  ├─ Base WhisperASR  │  ├─ Lock-free Access │
-│  ├─ Enhanced Audio    │  ├─ Enhanced ASR     │  ├─ Memory Pooling   │
-│  ├─ Memory Optimized  │  ├─ Buffer-Safe ASR  │  ├─ Adaptive Models  │
-│  ├─ Real-time Capture │  ├─ Performance ASR  │  ├─ Threading Opt    │
-│  ├─ Validation        │  └─ Text Processing  │  └─ Micro-optimized  │
-│  └─ Buffering/VAD     │     ├─ Code Mode     │     Buffer Mgmt      │
-│                       │     └─ Smart Format  │                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-#### 🖥️ **Hardware/OS Layer**
-```
-┌─────────────────────────────────────────────────────────┐
-│  Audio Devices   │  OS Integration  │  System Resources│
-│  ├─ Microphone   │  ├─ Windows API  │  ├─ CPU/GPU      │
-│  ├─ Drivers      │  ├─ DirectSound  │  ├─ Memory       │
-│  └─ Sample Rate  │  └─ Permissions  │  └─ Storage      │
-└─────────────────────────────────────────────────────────┘
-```
 
 ### Core Components
 
