@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import types
 
-from localflow.config import Config
-from localflow.inject import ClipboardInjector
+from voiceflow.core.config import Config
+from voiceflow.integrations.inject import ClipboardInjector
 
 
 class DummyClipboard:
@@ -20,8 +20,8 @@ def test_inject_paste_then_type(monkeypatch):
 
     # Patch pyperclip
     dummy = DummyClipboard()
-    monkeypatch.setattr("localflow.inject.pyperclip.copy", dummy.copy)
-    monkeypatch.setattr("localflow.inject.pyperclip.paste", dummy.paste)
+    monkeypatch.setattr("voiceflow.integrations.inject.pyperclip.copy", dummy.copy)
+    monkeypatch.setattr("voiceflow.integrations.inject.pyperclip.paste", dummy.paste)
 
     # Patch keyboard
     sent = []
@@ -29,8 +29,8 @@ def test_inject_paste_then_type(monkeypatch):
         sent.append(seq)
     def fake_write(text: str, delay=0):
         sent.append(f"WRITE:{text}")
-    monkeypatch.setattr("localflow.inject.keyboard.send", fake_send)
-    monkeypatch.setattr("localflow.inject.keyboard.write", fake_write)
+    monkeypatch.setattr("voiceflow.integrations.inject.keyboard.send", fake_send)
+    monkeypatch.setattr("voiceflow.integrations.inject.keyboard.write", fake_write)
 
     inj = ClipboardInjector(cfg)
     assert inj.inject("hello")

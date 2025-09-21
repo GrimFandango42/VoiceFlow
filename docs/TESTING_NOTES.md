@@ -2,13 +2,13 @@
 
 This document summarizes the current automated testing status and recent fixes.
 
-- Environment: Windows, Python 3.13, venv with `requirements-localflow.txt` + `requirements-dev.txt`.
+- Environment: Windows, Python 3.13, venv with `requirements-voiceflow.txt` + `requirements-dev.txt`.
 - Commands
-  - LocalFlow unit slice: `pytest -q tests/test_textproc.py tests/test_injector_logic.py tests/test_sanitization_and_rate.py`
+  - VoiceFlow unit slice: `pytest -q tests/test_textproc.py tests/test_injector_logic.py tests/test_sanitization_and_rate.py`
   - Full suite: `pytest -q` (includes broader VoiceFlow tests)
 
 Recent fixes
-- Fixed LocalFlow code-mode regex replacement and whitespace handling.
+- Fixed VoiceFlow code-mode regex replacement and whitespace handling.
 - Hardened injection fallbacks; added clipboard preservation safety.
 - Cleaned `localflow/config.py` duplication; consistent defaults.
 - Added `paste_hotkey` and `get_config()` in `voiceflow.core.config` for tests.

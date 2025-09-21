@@ -31,8 +31,8 @@ from typing import List, Optional, Dict, Any
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from localflow.config import Config
-from localflow.asr import WhisperASR
+from voiceflow.config import Config
+from voiceflow.asr import WhisperASR
 
 # Set up logging for test debugging
 logging.basicConfig(level=logging.DEBUG)

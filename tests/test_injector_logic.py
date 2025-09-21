@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import types
 
-from localflow.config import Config
-from localflow.inject import ClipboardInjector
+from voiceflow.config import Config
+from voiceflow.inject import ClipboardInjector
 
 
 class DummyClipboard:

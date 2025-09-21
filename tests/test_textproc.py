@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from localflow.textproc import apply_code_mode
+from voiceflow.textproc import apply_code_mode
 
 
 def test_basic_symbols():

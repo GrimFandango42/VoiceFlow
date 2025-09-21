@@ -21,12 +21,12 @@ import gc
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 try:
-    from localflow.config import Config
-    from localflow.cli_enhanced import EnhancedApp
-    from localflow.audio_enhanced import EnhancedAudioRecorder
-    from localflow.asr_buffer_safe import BufferSafeWhisperASR
-    from localflow.enhanced_tray import EnhancedTrayController
-    from localflow.visual_indicators import show_listening, show_complete, hide_status
+    from voiceflow.config import Config
+    from voiceflow.cli_enhanced import EnhancedApp
+    from voiceflow.audio_enhanced import EnhancedAudioRecorder
+    from voiceflow.asr_buffer_safe import BufferSafeWhisperASR
+    from voiceflow.enhanced_tray import EnhancedTrayController
+    from voiceflow.visual_indicators import show_listening, show_complete, hide_status
 except ImportError as e:
     print(f"Import error: {e}")
     print("Please run from VoiceFlow root directory")
@@ -211,7 +211,7 @@ class ExtremeStressTestSuite:
                 elif state == "complete":
                     show_complete(f"Test message {i}")
                 elif state == "error":
-                    from localflow.visual_indicators import show_error
+                    from voiceflow.visual_indicators import show_error
                     show_error(f"Test error {i}")
                 
                 # Brief pause to avoid overwhelming the system
@@ -429,7 +429,7 @@ class ExtremeStressTestSuite:
             for i, test_str in enumerate(test_strings):
                 try:
                     # Test text processing
-                    from localflow.textproc import apply_code_mode
+                    from voiceflow.textproc import apply_code_mode
                     
                     processed = apply_code_mode(test_str, lowercase=False)
                     results.append(f"Test_{i}: OK ({len(processed)} chars)")

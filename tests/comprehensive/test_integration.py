@@ -20,19 +20,19 @@ from pathlib import Path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 try:
-    from localflow.config import Config
-    from localflow.cli_enhanced import EnhancedApp
-    from localflow.audio_enhanced import EnhancedAudioRecorder
-    from localflow.asr_buffer_safe import BufferSafeWhisperASR
-    from localflow.inject import ClipboardInjector
-    from localflow.enhanced_tray import EnhancedTrayController
-    from localflow.visual_indicators import (
+    from voiceflow.config import Config
+    from voiceflow.cli_enhanced import EnhancedApp
+    from voiceflow.audio_enhanced import EnhancedAudioRecorder
+    from voiceflow.asr_buffer_safe import BufferSafeWhisperASR
+    from voiceflow.inject import ClipboardInjector
+    from voiceflow.enhanced_tray import EnhancedTrayController
+    from voiceflow.visual_indicators import (
         show_listening, show_processing, show_transcribing, 
         show_complete, show_error, hide_status,
         cleanup_indicators
     )
-    from localflow.textproc import apply_code_mode
-    from localflow.hotkeys_enhanced import EnhancedPTTHotkeyListener
+    from voiceflow.textproc import apply_code_mode
+    from voiceflow.hotkeys_enhanced import EnhancedPTTHotkeyListener
 except ImportError as e:
     print(f"Import error: {e}")
     print("Please run from VoiceFlow root directory")
