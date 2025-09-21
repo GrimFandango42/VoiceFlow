@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-09-16 10:26:28",
+  "timestamp": "2025-09-20 23:25:32",
   "system": {
     "platform": "Windows-11-10.0.26100-SP0",
     "python_version": "3.13.5",
@@ -14,12 +14,12 @@
     {
       "name": "Pip Available",
       "passed": true,
-      "message": "pip available: pip 25.1.1 from C:\\Users\\Nithin\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\pip (python 3.13)"
+      "message": "pip available: pip 25.2 from C:\\AI_Projects\\VoiceFlow\\venv\\Lib\\site-packages\\pip (python 3.13)"
     },
     {
       "name": "Virtual Environment",
-      "passed": false,
-      "message": "Not in virtual environment (recommended for isolation)"
+      "passed": true,
+      "message": "Virtual environment: C:\\AI_Projects\\VoiceFlow\\venv"
     },
     {
       "name": "Windows Specific",
@@ -53,13 +53,13 @@
     {
       "name": "faster-whisper",
       "installed": true,
-      "version": "1.2.0",
+      "version": "1.1.1",
       "error": ""
     },
     {
       "name": "torch",
       "installed": true,
-      "version": "2.7.0+cpu",
+      "version": "2.7.1+cpu",
       "error": ""
     },
     {
@@ -101,7 +101,7 @@
     {
       "name": "pytest",
       "installed": true,
-      "version": "8.3.5",
+      "version": "8.4.2",
       "error": ""
     },
     {
@@ -112,11 +112,15 @@
     }
   ],
   "issues_found": [],
-  "fixes_applied": [],
+  "fixes_applied": [
+    "Installed pyautogui",
+    "Installed python-dotenv",
+    "Installed pytest-asyncio"
+  ],
   "summary": {
     "total_dependencies": 12,
     "installed_dependencies": 12,
     "issues_count": 0,
-    "fixes_count": 0
+    "fixes_count": 3
   }
 }

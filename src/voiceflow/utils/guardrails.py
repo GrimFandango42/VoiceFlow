@@ -133,33 +133,11 @@ def safe_visual_update(update_func: Callable, *args, **kwargs) -> Any:
         Result of update_func if successful, None if failed
     """
     try:
-        # Check if we're already on the main thread
-        if threading.current_thread() is threading.main_thread():
-            return update_func(*args, **kwargs)
-        else:
-            # Queue update for main thread execution
-            result_container = {}
-
-            def wrapped_update():
-                try:
-                    result_container['result'] = update_func(*args, **kwargs)
-                except Exception as e:
-                    result_container['error'] = e
-                    logger.error(f"Visual update failed: {e}")
-
-            visual_update_queue.put(wrapped_update)
-
-            # Wait briefly for result (non-blocking approach)
-            time.sleep(0.001)  # 1ms wait
-
-            if 'error' in result_container:
-                logger.warning(f"Queued visual update failed: {result_container['error']}")
-                return None
-
-            return result_container.get('result')
-
+        # Visual indicators handle their own thread safety via command queue
+        # Just call directly with error protection
+        return update_func(*args, **kwargs)
     except Exception as e:
-        logger.warning(f"Visual update wrapper failed: {e}")
+        logger.error(f"Visual update error: {e}")
         return None
 
 
