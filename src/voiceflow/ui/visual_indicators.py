@@ -5,6 +5,7 @@ VoiceFlow Visual Indicators
 Bottom-screen transcription status overlay similar to Wispr Flow
 """
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 import threading
@@ -12,6 +13,9 @@ import time
 from typing import Optional, Callable, Dict, Any
 from enum import Enum
 from .visual_config import get_visual_config, VisualConfigManager
+from ..utils.guardrails import safe_visual_update, process_visual_update_queue, with_error_recovery
+
+logger = logging.getLogger(__name__)
 
 class TranscriptionStatus(Enum):
     """Status states for visual indication"""
@@ -209,49 +213,56 @@ class BottomScreenIndicator:
         )
         self.progress_bar.configure(style="Custom.Horizontal.TProgressbar")
     
+    @with_error_recovery(fallback_value=None)
     def show_status(self, status: TranscriptionStatus, message: str = None, duration: float = None):
         """
-        Show status indicator with message - Thread-safe
+        Show status indicator with message - Thread-safe with CRITICAL GUARDRAILS
 
         Args:
             status: TranscriptionStatus enum
             message: Custom message (optional)
             duration: Auto-hide after seconds (optional)
         """
-        if not self.gui_ready or not self.command_queue:
-            print(f"[VisualIndicator] GUI not ready, status: {status.value}")
-            return
+        # CRITICAL GUARDRAIL: Use safe visual update wrapper
+        def _safe_status_update():
+            if not self.gui_ready or not self.command_queue:
+                logger.debug(f"GUI not ready, status: {status.value}")
+                return
 
-        with self.lock:
-            self.current_status = status
+            with self.lock:
+                self.current_status = status
 
-            # Cancel existing auto-hide timer
-            if self.auto_hide_timer:
-                self.auto_hide_timer.cancel()
+                # Cancel existing auto-hide timer
+                if self.auto_hide_timer:
+                    self.auto_hide_timer.cancel()
 
-            # Update message
-            if message:
-                display_message = message
-            else:
-                display_message = self._get_default_message(status)
+                # Update message
+                if message:
+                    display_message = message
+                else:
+                    display_message = self._get_default_message(status)
 
-            # Queue command for GUI thread
-            try:
-                self.command_queue.put((self._update_ui, (status, display_message), {}))
+                # Queue command for GUI thread with error protection
+                try:
+                    self.command_queue.put((self._update_ui, (status, display_message), {}))
 
-                # Auto-hide timer
-                if duration:
-                    self.auto_hide_timer = threading.Timer(duration, self.hide)
-                    self.auto_hide_timer.start()
+                    # Auto-hide timer
+                    if duration:
+                        self.auto_hide_timer = threading.Timer(duration, self.hide)
+                        self.auto_hide_timer.start()
 
-            except Exception as e:
-                print(f"[VisualIndicator] Failed to queue status update: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to queue status update: {e}")
+
+        return safe_visual_update(_safe_status_update)
     
+    @with_error_recovery(fallback_value=None)
     def _update_ui(self, status: TranscriptionStatus, message: str):
-        """Update UI elements (must run on main thread)"""
+        """Update UI elements (must run on main thread) - CRITICAL GUARDRAIL PROTECTED"""
         if not self.window or not self.status_var:
+            logger.debug("Window or status_var not available for UI update")
             return
-            
+
         try:
             # Show window
             self.window.deiconify()
@@ -365,21 +376,23 @@ def get_indicator() -> BottomScreenIndicator:
     
     return _indicator
 
+@with_error_recovery(fallback_value=None)
 def show_transcription_status(status: TranscriptionStatus, message: str = None, duration: float = None):
-    """Convenient function to show transcription status"""
-    try:
+    """Convenient function to show transcription status - CRITICAL GUARDRAIL PROTECTED"""
+    def _safe_show():
         indicator = get_indicator()
         indicator.show_status(status, message, duration)
-    except Exception as e:
-        print(f"[VisualIndicator] Failed to show status: {e}")
 
+    return safe_visual_update(_safe_show)
+
+@with_error_recovery(fallback_value=None)
 def hide_status():
-    """Hide the status indicator"""
-    try:
+    """Hide the status indicator - CRITICAL GUARDRAIL PROTECTED"""
+    def _safe_hide():
         if _indicator:
             _indicator.hide()
-    except Exception as e:
-        print(f"[VisualIndicator] Failed to hide: {e}")
+
+    return safe_visual_update(_safe_hide)
 
 def cleanup_indicators():
     """Clean up visual indicators"""
