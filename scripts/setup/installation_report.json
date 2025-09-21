@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-09-20 23:25:32",
+  "timestamp": "2025-09-20 23:34:28",
   "system": {
     "platform": "Windows-11-10.0.26100-SP0",
     "python_version": "3.13.5",
@@ -112,15 +112,11 @@
     }
   ],
   "issues_found": [],
-  "fixes_applied": [
-    "Installed pyautogui",
-    "Installed python-dotenv",
-    "Installed pytest-asyncio"
-  ],
+  "fixes_applied": [],
   "summary": {
     "total_dependencies": 12,
     "installed_dependencies": 12,
     "issues_count": 0,
-    "fixes_count": 3
+    "fixes_count": 0
   }
 }

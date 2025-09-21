@@ -17,7 +17,7 @@ from voiceflow.core.asr_buffer_safe import BufferSafeWhisperASR as WhisperASR
 from voiceflow.integrations.inject import ClipboardInjector
 from voiceflow.integrations.hotkeys_enhanced import EnhancedPTTHotkeyListener
 from voiceflow.utils.utils import is_admin, nvidia_smi_info
-from voiceflow.core.textproc import apply_code_mode
+from voiceflow.core.textproc import apply_code_mode, format_transcript_text
 import keyboard
 from voiceflow.ui.tray import TrayController
 from voiceflow.ui.enhanced_tray import EnhancedTrayController, update_tray_status
@@ -234,6 +234,9 @@ class EnhancedApp:
             # Apply processing
             if self.code_mode:
                 text = apply_code_mode(text, lowercase=self.cfg.code_mode_lowercase)
+            else:
+                # Apply improved text formatting for better readability
+                text = format_transcript_text(text)
             
             # Performance tracking
             transcription_time = time.perf_counter() - start_time

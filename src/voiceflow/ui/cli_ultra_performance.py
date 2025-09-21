@@ -30,7 +30,7 @@ from voiceflow.core.advanced_performance_asr import AdvancedPerformanceASR
 from voiceflow.integrations.inject import ClipboardInjector
 from voiceflow.integrations.hotkeys_enhanced import EnhancedPTTHotkeyListener
 from voiceflow.utils.utils import is_admin, nvidia_smi_info
-from voiceflow.core.textproc import apply_code_mode
+from voiceflow.core.textproc import apply_code_mode, format_transcript_text
 import keyboard
 from voiceflow.ui.tray import TrayController
 from voiceflow.ui.enhanced_tray import EnhancedTrayController, update_tray_status
@@ -262,7 +262,11 @@ class EnhancedApp:
                         print("[VISUAL] Completion indicator shown")
 
                 # Enhanced text processing with code mode support
-                processed_text = apply_code_mode(text, self.cfg)
+                if hasattr(self.cfg, 'code_mode') and self.cfg.code_mode:
+                    processed_text = apply_code_mode(text, self.cfg.code_mode_lowercase)
+                else:
+                    # Apply improved text formatting for better readability
+                    processed_text = format_transcript_text(text)
 
                 # Enhanced injection
                 self.injector.inject_text(processed_text)
