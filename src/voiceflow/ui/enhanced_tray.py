@@ -22,8 +22,8 @@ except Exception:
     TRAY_AVAILABLE = False
 
 try:
-    from voiceflow.utils.visual_indicators import (
-        show_listening, show_processing, show_transcribing, 
+    from voiceflow.ui.visual_indicators import (
+        show_listening, show_processing, show_transcribing,
         show_complete, show_error, hide_status,
         TranscriptionStatus, show_transcription_status
     )
@@ -205,7 +205,7 @@ class EnhancedTrayController:
         def quit_app(icon, item):
             try:
                 if VISUAL_INDICATORS_AVAILABLE:
-                    from voiceflow.utils.visual_indicators import cleanup_indicators
+                    from voiceflow.ui.visual_indicators import cleanup_indicators
                     cleanup_indicators()
                 
                 if self._icon:
@@ -337,7 +337,7 @@ class EnhancedTrayController:
         if self._icon is not None:
             try:
                 if VISUAL_INDICATORS_AVAILABLE:
-                    from voiceflow.utils.visual_indicators import cleanup_indicators
+                    from voiceflow.ui.visual_indicators import cleanup_indicators
                     cleanup_indicators()
                     
                 self._icon.stop()

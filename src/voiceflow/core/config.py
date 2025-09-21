@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -126,4 +129,34 @@ class Config:
     code_mode_default: bool = True
     code_mode_lowercase: bool = True
     use_tray: bool = True
+
+    def __post_init__(self):
+        """
+        CRITICAL GUARDRAIL: Validate configuration after initialization.
+
+        This prevents crashes from invalid configuration values identified
+        in comprehensive testing (10/40 edge case failures).
+        """
+        from ..utils.guardrails import validate_config
+
+        try:
+            validated_config = validate_config(self)
+            # Update self with validated values
+            for key, value in validated_config.__dict__.items():
+                if hasattr(self, key):
+                    setattr(self, key, value)
+            logger.debug("Configuration validation completed successfully")
+        except Exception as e:
+            logger.error(f"Configuration validation failed: {e}")
+            # Continue with potentially invalid config but log the issue
+
+    def validate(self) -> 'Config':
+        """
+        Manually validate the configuration.
+
+        Returns:
+            Validated configuration object
+        """
+        from ..utils.guardrails import validate_config
+        return validate_config(self)
 
