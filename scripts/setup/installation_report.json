@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-09-21 11:03:01",
+  "timestamp": "2025-09-29 00:01:18",
   "system": {
     "platform": "Windows-11-10.0.26100-SP0",
     "python_version": "3.13.5",
@@ -14,12 +14,12 @@
     {
       "name": "Pip Available",
       "passed": true,
-      "message": "pip available: pip 25.2 from C:\\AI_Projects\\VoiceFlow\\venv\\Lib\\site-packages\\pip (python 3.13)"
+      "message": "pip available: pip 25.1.1 from C:\\Users\\Nithin\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\pip (python 3.13)"
     },
     {
       "name": "Virtual Environment",
-      "passed": true,
-      "message": "Virtual environment: C:\\AI_Projects\\VoiceFlow\\venv"
+      "passed": false,
+      "message": "Not in virtual environment (recommended for isolation)"
     },
     {
       "name": "Windows Specific",
@@ -34,7 +34,7 @@
     {
       "name": "Audio System",
       "passed": true,
-      "message": "Audio OK: Microphone (3- fifine Microphon (2 ch, 44100.0Hz)"
+      "message": "Audio OK: Microphone (NexiGo N60 FHD Webc (1 ch, 44100.0Hz)"
     }
   ],
   "dependencies": [
@@ -53,13 +53,13 @@
     {
       "name": "faster-whisper",
       "installed": true,
-      "version": "1.1.1",
+      "version": "1.2.0",
       "error": ""
     },
     {
       "name": "torch",
       "installed": true,
-      "version": "2.7.1+cpu",
+      "version": "2.7.0+cpu",
       "error": ""
     },
     {
@@ -101,7 +101,7 @@
     {
       "name": "pytest",
       "installed": true,
-      "version": "8.4.2",
+      "version": "8.3.5",
       "error": ""
     },
     {

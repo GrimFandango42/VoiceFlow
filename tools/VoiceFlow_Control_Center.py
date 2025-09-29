@@ -32,6 +32,13 @@ class VoiceFlowControlCenter:
         self.status_text = tk.StringVar(value="Ready")
         self.progress_var = tk.DoubleVar()
 
+        # Process monitoring and restart capability
+        self.auto_restart_enabled = True
+        self.process_start_time = None
+        self.restart_count = 0
+        self.max_restarts = 3
+        self.restart_cooldown = 30  # seconds
+
 
         # UI Components
         self.log_text: Optional[scrolledtext.ScrolledText] = None
@@ -251,19 +258,41 @@ class VoiceFlowControlCenter:
         thread = threading.Thread(target=run_in_thread, daemon=True)
         thread.start()
 
+        # Start process monitoring if enabled
+        if self.auto_restart_enabled:
+            self.start_process_monitoring()
+
     def smart_launch(self):
         """Smart launch with auto health check and intelligent error handling"""
         self.log("🚀 Smart Launch: Auto health-check → VoiceFlow...")
 
+        # CRITICAL: Clean up any persistent visual indicators from previous sessions
+        try:
+            self.log("🧹 Cleaning up persistent visual indicators...")
+            python_cleanup = [
+                sys.executable,
+                "-c",
+                "import sys; sys.path.insert(0, 'src'); "
+                "from voiceflow.ui.visual_indicators import ensure_clean_startup; "
+                "ensure_clean_startup()"
+            ]
+            subprocess.run(python_cleanup, timeout=5, capture_output=True)
+            self.log("✅ Visual indicator cleanup completed")
+        except Exception as e:
+            self.log(f"⚠️ Visual cleanup warning: {e}", "WARN")
+
         def after_health_check():
             # If health check passed, launch VoiceFlow
             self.log("✅ Health check passed - launching VoiceFlow...")
+            self.process_start_time = time.time()  # Track start time
             command = [
                 sys.executable,
                 "-c",
-                "import sys; sys.path.insert(0, 'src'); exec(open('src/voiceflow/ui/cli_enhanced.py').read())"
+                "import sys; sys.path.insert(0, 'src'); "
+                "import os; os.chdir('.'); "
+                "from voiceflow.ui.cli_ultra_simple import main; main()"
             ]
-            self.run_command_async(command, "VoiceFlow Application")
+            self.run_command_async(command, "VoiceFlow Ultra-Simple Application")
 
         def on_health_failure():
             # Show troubleshooting options if health check fails
@@ -386,6 +415,71 @@ class VoiceFlowControlCenter:
         """Clear the log text"""
         if self.log_text:
             self.log_text.delete(1.0, tk.END)
+
+    def start_process_monitoring(self):
+        """Start monitoring the current process for hangs and crashes"""
+        if not self.current_process:
+            return
+
+        def monitor_process():
+            """Monitor process health in background thread"""
+            check_interval = 60  # Check every minute
+            last_status_time = time.time()
+
+            while self.current_process and self.current_process.poll() is None:
+                try:
+                    current_time = time.time()
+                    uptime = current_time - (self.process_start_time or time.time())
+
+                    # Log health status every 10 minutes (not 5)
+                    if current_time - last_status_time > 600:  # 10 minutes
+                        self.log(f"[MONITOR] Process healthy, uptime: {uptime/60:.1f} minutes", "INFO")
+                        last_status_time = current_time
+
+                    time.sleep(check_interval)
+
+                except Exception as e:
+                    self.log(f"[MONITOR] Monitoring error: {e}", "ERROR")
+                    break
+
+            # Process ended - check if restart needed
+            if self.current_process and self.current_process.poll() is not None:
+                return_code = self.current_process.poll()
+                if return_code != 0 and self.auto_restart_enabled:
+                    self.schedule_restart(f"Process crashed with exit code {return_code}")
+
+        # Start monitoring thread
+        monitor_thread = threading.Thread(target=monitor_process, daemon=True)
+        monitor_thread.start()
+
+    def schedule_restart(self, reason: str):
+        """Schedule an automatic restart if conditions are met"""
+        if self.restart_count >= self.max_restarts:
+            self.log(f"[RESTART] Max restarts ({self.max_restarts}) reached. Manual intervention required.", "ERROR")
+            return
+
+        self.log(f"[RESTART] Scheduling restart: {reason}", "WARN")
+        self.restart_count += 1
+
+        def do_restart():
+            self.log(f"[RESTART] Attempting restart {self.restart_count}/{self.max_restarts}...", "INFO")
+
+            # Stop current process
+            self.stop_current_process()
+            time.sleep(2)  # Brief pause
+
+            # Restart VoiceFlow
+            self.smart_launch()
+
+        # Schedule restart after cooldown
+        restart_timer = threading.Timer(self.restart_cooldown, do_restart)
+        restart_timer.start()
+
+    def reset_restart_counter(self):
+        """Reset restart counter after successful operation"""
+        if self.restart_count > 0:
+            self.log(f"[RESTART] Reset counter after successful operation", "INFO")
+            self.restart_count = 0
 
     def exit_application(self):
         """Exit the control center"""

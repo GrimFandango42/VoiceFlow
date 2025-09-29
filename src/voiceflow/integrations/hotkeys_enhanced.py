@@ -48,6 +48,12 @@ class EnhancedPTTHotkeyListener:
         self._recording = False
         self._lock = threading.Lock()
         self._hook: Optional[Callable] = None
+
+        # CRITICAL: Track actual key down/up lifecycle instead of polling
+        self._pressed_keys = set()  # Normalize key names: "left ctrl" -> "ctrl"
+        self._chord_first_active_time = 0.0  # Track when chord FIRST became active
+        self._chord_was_active = False  # Track if chord was active in previous event
+        self._minimum_hold_duration = 0.05  # 50ms minimum hold to prevent flutter
         self._blocked_key: Optional[str] = None
         
         # CRITICAL FIX: Tail-end buffer system
@@ -59,17 +65,33 @@ class EnhancedPTTHotkeyListener:
         self._recording_start_time = 0.0
         self._max_recording_duration = 300.0  # 5 minutes max
 
+    def _normalize_key_name(self, key_name: str) -> str:
+        """Normalize key names for consistent tracking"""
+        key_lower = key_name.lower()
+        # Normalize modifier keys
+        if 'ctrl' in key_lower:
+            return 'ctrl'
+        elif 'shift' in key_lower:
+            return 'shift'
+        elif 'alt' in key_lower:
+            return 'alt'
+        else:
+            return key_lower
+
     def _chord_active(self) -> bool:
-        """Evaluate chord from current keyboard state"""
-        if self.cfg.hotkey_ctrl and not keyboard.is_pressed('ctrl'):
+        """Check if the hotkey combination is currently pressed using tracked keys"""
+        # Check required modifier keys
+        if self.cfg.hotkey_ctrl and 'ctrl' not in self._pressed_keys:
             return False
-        if self.cfg.hotkey_shift and not keyboard.is_pressed('shift'):
+        if self.cfg.hotkey_shift and 'shift' not in self._pressed_keys:
             return False
-        if self.cfg.hotkey_alt and not keyboard.is_pressed('alt'):
+        if self.cfg.hotkey_alt and 'alt' not in self._pressed_keys:
             return False
-        key = (self.cfg.hotkey_key or '').strip()
+
+        # Check primary key
+        key = (self.cfg.hotkey_key or '').strip().lower()
         if key:
-            if not keyboard.is_pressed(key):
+            if key not in self._pressed_keys:
                 return False
         return True
 
@@ -104,20 +126,43 @@ class EnhancedPTTHotkeyListener:
             self._tail_timer = None
 
     def _on_event(self, event):  # noqa: D401
-        """Enhanced event handler with tail-end buffer support"""
-        with self._lock:
-            active = self._chord_active()
+        """Enhanced event handler with explicit key tracking to prevent Ctrl-only activation"""
+
+        # CRITICAL: Track actual key down/up lifecycle
+        if hasattr(event, 'name') and hasattr(event, 'event_type'):
+            key_name = self._normalize_key_name(event.name)
             current_time = time.time()
-            
-            # START RECORDING
-            if active and not self._recording:
+
+            if event.event_type == keyboard.KEY_DOWN:
+                self._pressed_keys.add(key_name)
+            elif event.event_type == keyboard.KEY_UP:
+                self._pressed_keys.discard(key_name)
+
+        with self._lock:
+            current_time = time.time()
+
+            # Check if chord is currently active
+            chord_active = self._chord_active()
+
+            # Track when chord first becomes active
+            if chord_active and not self._chord_was_active:
+                # Chord just became active - start timing
+                self._chord_first_active_time = current_time
+            elif not chord_active:
+                # Chord is not active - reset timing
+                self._chord_first_active_time = 0.0
+
+            self._chord_was_active = chord_active
+
+            # START RECORDING - when chord becomes active
+            if chord_active and not self._recording:
                 # Cancel any pending stop
                 self._cancel_tail_timer()
                 self._pending_stop = False
-                
+
                 self._recording = True
                 self._recording_start_time = current_time
-                
+
                 # Block the primary key while recording to avoid stray characters
                 key = (self.cfg.hotkey_key or '').strip()
                 if key:
@@ -126,27 +171,36 @@ class EnhancedPTTHotkeyListener:
                         self._blocked_key = key
                     except Exception:
                         self._blocked_key = None
-                
+
                 print(f"[PTT] Recording started")
                 try:
                     self.on_start()
                 except Exception as e:
                     print(f"[PTT] Error in on_start callback: {e}")
                     self._recording = False
-            
-            # INITIATE STOP WITH TAIL BUFFER
-            elif not active and self._recording and not self._pending_stop:
+
+            # INITIATE STOP WITH TAIL BUFFER - only when all keys released
+            elif not chord_active and self._recording and not self._pending_stop:
                 # Check for maximum recording duration safety limit
                 recording_duration = current_time - self._recording_start_time
                 if recording_duration >= self._max_recording_duration:
                     print(f"[PTT] Max recording duration reached ({self._max_recording_duration}s), stopping immediately")
                     self._actual_stop_recording()
                     return
-                
-                # Start tail-end buffer timer
+
+                # CRITICAL FIX: Only use tail buffer for recordings longer than minimum duration
+                # This prevents "OK OK OK" spam from quick press/release without speaking
+                min_recording_for_tail_buffer = 0.5  # Minimum 500ms to trigger tail buffer
+
+                if recording_duration < min_recording_for_tail_buffer:
+                    print(f"[PTT] Short recording ({recording_duration:.1f}s < {min_recording_for_tail_buffer}s), stopping immediately without tail buffer")
+                    self._actual_stop_recording()
+                    return
+
+                # Start tail-end buffer timer for longer recordings
                 self._pending_stop = True
-                print(f"[PTT] Key released, starting {self._tail_buffer_duration}s tail buffer...")
-                
+                print(f"[PTT] All keys released after {recording_duration:.1f}s, starting {self._tail_buffer_duration}s tail buffer...")
+
                 self._tail_timer = threading.Timer(
                     self._tail_buffer_duration,
                     self._actual_stop_recording
@@ -154,7 +208,7 @@ class EnhancedPTTHotkeyListener:
                 self._tail_timer.start()
             
             # RESUME RECORDING (key pressed again during tail buffer)
-            elif active and self._recording and self._pending_stop:
+            elif chord_active and self._recording and self._pending_stop:
                 print(f"[PTT] Key pressed again, canceling tail buffer")
                 self._cancel_tail_timer()
                 self._pending_stop = False

@@ -24,32 +24,32 @@ class Config:
     max_batch_size: int = 4  # Process multiple segments together
     enable_streaming: bool = True  # Enable real-time streaming feedback
 
-    # ASR - BALANCED Performance + Quality Mode (GPT-5 recommended)
-    model_name: str = "base.en"  # Balanced model for good speed + quality (was tiny.en)
-    device: str = "cuda"  # GPU acceleration for 6-7x speedup
-    compute_type: str = "float16"  # Optimized for GPU inference
+    # ASR - STABILITY-FIRST Configuration based on community solutions
+    model_name: str = "tiny.en"  # CRITICAL: Use smallest model for maximum stability
+    device: str = "cpu"   # CRITICAL: Force CPU for stability
+    compute_type: str = "int8"    # CRITICAL: Force int8 for CPU stability
     fallback_device: str = "cpu"  # Fallback if GPU unavailable
     fallback_compute_type: str = "int8"  # CPU fallback settings
-    vad_filter: bool = False  # CRITICAL FIX: VAD was removing all audio after 2 recordings
-    beam_size: int = 2  # Improved from 1 (greedy) to 2 for better quality
-    temperature: float = 0.0
+    vad_filter: bool = False  # CRITICAL: VAD disabled for stability
+    beam_size: int = 1  # CRITICAL: Use greedy decoding for fastest/most stable processing
+    temperature: float = 0.0  # CRITICAL: Use deterministic processing
 
-    # Whisper-specific BALANCED optimizations for quality + speed
-    word_timestamps: bool = False  # Disable expensive timestamp computation
-    condition_on_previous_text: bool = True  # Enable context for better accuracy (was False)
-    compression_ratio_threshold: float = 3.5  # Balanced threshold for quality (vs 4.0)
-    log_prob_threshold: float = -0.7  # Balanced threshold for quality (vs -0.5)
-    no_speech_threshold: float = 0.7  # Balanced threshold (vs 0.8)
+    # Whisper-specific STABILITY-FIRST settings to prevent stuck transcriptions
+    word_timestamps: bool = False  # CRITICAL: Disable for maximum stability
+    condition_on_previous_text: bool = False  # CRITICAL: Disable context to prevent repetition loops
+    compression_ratio_threshold: float = 2.4  # CRITICAL: Conservative threshold to prevent hangs
+    log_prob_threshold: float = -1.0  # CRITICAL: Conservative threshold for stability
+    no_speech_threshold: float = 0.9  # CRITICAL: Very aggressive silence detection
 
     # Quality improvements without speed impact
     enable_smart_prompting: bool = True  # Adaptive prompting for better accuracy
     use_enhanced_post_processing: bool = True  # Smart text cleaning
 
-    # DeepSeek Advanced Optimizations (VALIDATED: 30-40% speed improvement)
-    enable_lockfree_model_access: bool = True  # VALIDATED: +50-87% concurrent performance
-    enable_ultra_fast_mode_bypass: bool = False  # Keep disabled for quality
-    enable_memory_pooling: bool = False  # VALIDATED: Disabled due to performance regression
-    enable_chunked_long_audio: bool = False  # Keep disabled for quality
+    # STABILITY-FIRST: Disable all advanced optimizations for maximum stability
+    enable_lockfree_model_access: bool = False  # CRITICAL: Disable to prevent race conditions
+    enable_ultra_fast_mode_bypass: bool = False  # CRITICAL: Keep validation enabled
+    enable_memory_pooling: bool = False  # CRITICAL: Disable to prevent memory issues
+    enable_chunked_long_audio: bool = False  # CRITICAL: Disable chunking for stability
 
     # Adaptive Model Access Configuration (Phase 1 Optimization)
     max_concurrent_transcription_jobs: int = 1  # Start conservative, auto-detect concurrency
@@ -81,19 +81,19 @@ class Config:
     chunk_overlap_seconds: float = 0.2  # Overlap between chunks to prevent word cuts
     enable_chunk_prioritization: bool = True  # Prioritize recent chunks
 
-    # ULTRA-AGGRESSIVE performance settings
-    ultra_fast_mode: bool = True  # Enable most aggressive optimizations
-    preload_model_on_startup: bool = True  # Load model immediately to eliminate first-sentence delay
+    # STABILITY-FIRST settings (disable aggressive optimizations)
+    ultra_fast_mode: bool = False  # CRITICAL: Disable for stability
+    preload_model_on_startup: bool = False  # CRITICAL: Disable to prevent startup issues
 
     # Long sentence optimizations (for 3+ second recordings)
     chunk_size_seconds: float = 5.0  # Process in 5-second chunks for long audio
     parallel_processing: bool = False  # Can't parallelize Whisper on same model
     aggressive_segment_merge: bool = True  # Merge segments aggressively to reduce overhead
 
-    # Performance-first optimizations (SAFE DEFAULTS)
-    max_transcriptions_before_reload: int = 100  # Reduce model reloads from 20 to 100
-    disable_detailed_logging: bool = True  # Skip expensive logging in hot paths
-    enable_model_caching: bool = True  # Cache model in memory between sessions
+    # CRITICAL: Aggressive stability settings based on GitHub research
+    max_transcriptions_before_reload: int = 2  # CRITICAL: Force reload every 2 transcriptions for CPU stability
+    disable_detailed_logging: bool = False  # Enable detailed logging for debugging stuck transcriptions
+    enable_model_caching: bool = False  # CRITICAL: Disable caching to prevent memory accumulation
 
     # BALANCED audio validation optimizations (SAFE + FAST)
     enable_optimized_audio_validation: bool = True  # Enable smart audio validation system
