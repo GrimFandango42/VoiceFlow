@@ -1,15 +1,47 @@
 #!/usr/bin/env python3
 """
-Enhanced Tray Controller with Visual Indicators
-===============================================
-Improved system tray with dynamic status icons and visual feedback integration
+Enhanced Tray Controller with Visual Indicators and ITrayManager Implementation
+==============================================================================
+Improved system tray with dynamic status icons, visual feedback integration,
+and constitutional compliance monitoring.
 """
 
 from __future__ import annotations
 
 import threading
-from typing import Optional
 import time
+from typing import Optional, List, Callable, Dict, Any
+from datetime import datetime
+
+# Import our models and interfaces
+try:
+    from src.voiceflow.models.tray_state import TrayState, TrayStatus, TrayMenuItem, Notification
+    from src.voiceflow.models.system_performance import SystemPerformance
+except ImportError:
+    # Fallback for existing code compatibility
+    TrayState = None
+    TrayStatus = None
+    TrayMenuItem = None
+    Notification = None
+    SystemPerformance = None
+
+# Import contract interfaces
+try:
+    import sys
+    from pathlib import Path
+    spec_contracts_path = Path(__file__).parent.parent.parent.parent / "specs" / "clean-tray-tests-installer-enh" / "contracts"
+    if spec_contracts_path.exists():
+        sys.path.insert(0, str(spec_contracts_path))
+        from tray_interface import ITrayManager, ITrayStatusProvider
+        CONTRACT_INTERFACES_AVAILABLE = True
+    else:
+        ITrayManager = object
+        ITrayStatusProvider = object
+        CONTRACT_INTERFACES_AVAILABLE = False
+except ImportError:
+    ITrayManager = object
+    ITrayStatusProvider = object
+    CONTRACT_INTERFACES_AVAILABLE = False
 
 try:
     import pystray
@@ -76,8 +108,8 @@ def _make_status_icon(size: int = 16, status: str = "idle", recording: bool = Fa
     
     return img
 
-class EnhancedTrayController:
-    """Enhanced system tray controller with visual status indicators"""
+class EnhancedTrayController(ITrayManager):
+    """Enhanced system tray controller implementing ITrayManager interface with visual status indicators"""
     
     def __init__(self, app):
         self.app = app
@@ -89,6 +121,9 @@ class EnhancedTrayController:
         
         # Status update callbacks
         self.status_callbacks = []
+
+        # Auto-reset timer for "complete" and "error" states
+        self._reset_timer: Optional[threading.Timer] = None
         
     def add_status_callback(self, callback):
         """Add a callback for status updates"""
@@ -105,21 +140,55 @@ class EnhancedTrayController:
     def update_status(self, status: str, recording: bool = False, message: str = None):
         """Update tray icon and visual indicators based on status"""
         with self.status_lock:
+            # Cancel any existing reset timer
+            if self._reset_timer:
+                self._reset_timer.cancel()
+                self._reset_timer = None
+
             self.current_status = status
             self.is_recording = recording
-            
+
             # Update tray icon
             if self._icon and TRAY_AVAILABLE:
                 new_icon = _make_status_icon(16, status, recording)
                 if new_icon:
                     self._icon.icon = new_icon
-            
+
             # Update visual indicators
             if VISUAL_INDICATORS_AVAILABLE:
                 self._update_visual_indicator(status, recording, message)
-            
+
             # Notify callbacks
             self._notify_status_change(status, recording)
+
+            # CRITICAL: Auto-reset timer for "complete" and "error" states
+            if status in ["complete", "error"]:
+                def reset_to_idle():
+                    try:
+                        with self.status_lock:
+                            if self.current_status in ["complete", "error"]:  # Only reset if still in completion state
+                                self.current_status = "idle"
+                                self.is_recording = False
+
+                                # Update tray icon to idle
+                                if self._icon and TRAY_AVAILABLE:
+                                    idle_icon = _make_status_icon(16, "idle", False)
+                                    if idle_icon:
+                                        self._icon.icon = idle_icon
+
+                                # Hide visual indicators
+                                if VISUAL_INDICATORS_AVAILABLE:
+                                    from voiceflow.ui.visual_indicators import hide_status
+                                    hide_status()
+
+                                # Notify callbacks of reset
+                                self._notify_status_change("idle", False)
+                    except Exception as e:
+                        print(f"[EnhancedTray] Auto-reset error: {e}")
+
+                # Start 2-second timer to reset to idle
+                self._reset_timer = threading.Timer(2.0, reset_to_idle)
+                self._reset_timer.start()
     
     def _update_visual_indicator(self, status: str, recording: bool, message: str = None):
         """Update the bottom-screen visual indicator"""
@@ -339,11 +408,160 @@ class EnhancedTrayController:
                 if VISUAL_INDICATORS_AVAILABLE:
                     from voiceflow.ui.visual_indicators import cleanup_indicators
                     cleanup_indicators()
-                    
+
                 self._icon.stop()
             finally:
                 self._icon = None
                 self._thread = None
+
+    # ITrayManager interface implementation
+    def initialize(self) -> bool:
+        """
+        Initialize the system tray
+        Returns: True if successful, False otherwise
+        """
+        try:
+            self.start()
+            return self._icon is not None
+        except Exception as e:
+            print(f"[EnhancedTray] Initialization failed: {e}")
+            return False
+
+    def update_status(self, status, recording: bool = False, message: str = None) -> None:
+        """
+        Update tray status and icon - enhanced to support both interface and original signatures
+        Args:
+            status: TrayStatus enum or string
+            recording: Whether recording is active (for backward compatibility)
+            message: Optional status message for tooltip
+        """
+        # Convert enum to string if needed
+        status_str = status.value if hasattr(status, 'value') else str(status)
+
+        with self.status_lock:
+            # Cancel any existing reset timer
+            if self._reset_timer:
+                self._reset_timer.cancel()
+                self._reset_timer = None
+
+            self.current_status = status_str
+            self.is_recording = recording
+
+            # Update tray icon
+            if self._icon and TRAY_AVAILABLE:
+                new_icon = _make_status_icon(16, status_str, recording)
+                if new_icon:
+                    self._icon.icon = new_icon
+
+            # Update visual indicators
+            if VISUAL_INDICATORS_AVAILABLE:
+                self._update_visual_indicator(status_str, recording, message)
+
+            # Notify callbacks
+            self._notify_status_change(status_str, recording)
+
+            # CRITICAL: Auto-reset timer for "complete" and "error" states
+            if status_str in ["complete", "error"]:
+                def reset_to_idle():
+                    try:
+                        with self.status_lock:
+                            if self.current_status in ["complete", "error"]:  # Only reset if still in completion state
+                                self.current_status = "idle"
+                                self.is_recording = False
+
+                                # Update tray icon to idle
+                                if self._icon and TRAY_AVAILABLE:
+                                    idle_icon = _make_status_icon(16, "idle", False)
+                                    if idle_icon:
+                                        self._icon.icon = idle_icon
+
+                                # Hide visual indicators
+                                if VISUAL_INDICATORS_AVAILABLE:
+                                    from voiceflow.ui.visual_indicators import hide_status
+                                    hide_status()
+
+                                # Notify callbacks of reset
+                                self._notify_status_change("idle", False)
+                    except Exception as e:
+                        print(f"[EnhancedTray] Auto-reset error: {e}")
+
+                # Start 2-second timer to reset to idle
+                self._reset_timer = threading.Timer(2.0, reset_to_idle)
+                self._reset_timer.start()
+
+    def update_menu(self, items) -> None:
+        """
+        Update tray context menu
+        Args:
+            items: List of TrayMenuItem objects to display
+        """
+        # This would require rebuilding the tray icon with new menu
+        # For now, we'll log the request as the current implementation uses a static menu
+        print(f"[EnhancedTray] Menu update requested with {len(items)} items")
+
+    def show_notification(self, title: str, message: str, duration: int = 3000) -> None:
+        """
+        Show system notification
+        Args:
+            title: Notification title
+            message: Notification message
+            duration: Display duration in milliseconds (currently not used)
+        """
+        self._notify(title, message)
+
+    def set_tooltip(self, text: str) -> None:
+        """
+        Set tray icon tooltip
+        Args:
+            text: Tooltip text (max 64 chars for Windows)
+        """
+        # Truncate to Windows 64-character limit
+        if len(text) > 64:
+            text = text[:61] + "..."
+
+        if self._icon and hasattr(self._icon, 'title'):
+            self._icon.title = text
+
+    def get_current_status(self):
+        """
+        Get current tray status
+        Returns: Current status as TrayStatus enum or string
+        """
+        # Import TrayStatus if available
+        if TrayStatus:
+            status_map = {
+                "idle": TrayStatus.IDLE,
+                "listening": TrayStatus.RECORDING,  # Map listening to recording
+                "processing": TrayStatus.PROCESSING,
+                "error": TrayStatus.ERROR
+            }
+            return status_map.get(self.current_status, TrayStatus.IDLE)
+        return self.current_status
+
+    def register_status_callback(self, callback) -> None:
+        """
+        Register callback for status changes
+        Args:
+            callback: Function to call when status changes
+        """
+        # Wrap callback to match our existing callback format
+        def wrapped_callback(status: str, recording: bool = False):
+            if TrayStatus:
+                status_map = {
+                    "idle": TrayStatus.IDLE,
+                    "listening": TrayStatus.RECORDING,
+                    "processing": TrayStatus.PROCESSING,
+                    "error": TrayStatus.ERROR
+                }
+                callback(status_map.get(status, TrayStatus.IDLE))
+            else:
+                callback(status)
+
+        self.add_status_callback(wrapped_callback)
+
+    def shutdown(self) -> None:
+        """Cleanup tray resources (alias for stop)"""
+        self.stop()
 
 # Convenience functions for status updates
 def update_tray_status(tray_controller, status: str, recording: bool = False, message: str = None):

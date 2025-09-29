@@ -1,0 +1,15 @@
+{
+  "test_config": {
+    "duration_hours": 0.05,
+    "monitoring_interval": 10.0,
+    "stress_test_interval": 300.0
+  },
+  "test_execution": {
+    "start_time": "2025-09-22T20:36:28.456308",
+    "end_time": "2025-09-22T20:36:33.460837",
+    "passed": false,
+    "failure_reason": "Failed to start VoiceFlow: VoiceFlow process failed to start (exit code: 1)"
+  },
+  "metrics": [],
+  "errors": []
+}

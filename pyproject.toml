@@ -170,9 +170,15 @@ addopts = [
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "integration: marks tests as integration tests",
-    "e2e: marks tests as end-to-end tests",
     "unit: marks tests as unit tests",
+    "integration: marks tests as integration tests",
+    "contract: marks tests as contract tests",
+    "stability: marks tests as stability tests",
+    "performance: marks tests as performance tests",
+    "e2e: marks tests as end-to-end tests",
+    "windows: marks tests as windows-specific",
+    "audio: marks tests requiring audio devices",
+    "gui: marks tests requiring GUI components",
 ]
 
 # Coverage configuration

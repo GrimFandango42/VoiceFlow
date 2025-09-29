@@ -30,6 +30,12 @@ class BufferOverflowProtection:
 
         # Whisper hallucination patterns
         self.hallucination_patterns = [
+            # CRITICAL: "okay okay okay" spam patterns (your exact issue)
+            (r'(?i)^(?:okay[.!]?\s*){2,}$', ''),  # "okay. okay. okay..."
+            (r'(?i)^(?:ok[.!]?\s*){2,}$', ''),    # "ok. ok. ok..."
+            (r'(?i)^(?:o\.?k\.?[.!]?\s*){2,}$', ''),  # "o.k. o.k. o.k..."
+
+            # Other common hallucinations
             (r'(?i)^(?:thank you for watching[.!]?\s*){2,}', ''),
             (r'(?i)^(?:please subscribe and like[.!]?\s*){2,}', ''),
             (r'(?i)^(?:thanks for listening[.!]?\s*){2,}', ''),
@@ -212,6 +218,24 @@ class BufferOverflowProtection:
                 # Remove the last sentence
                 return '.'.join(sentences[:-1]).strip() + '.'
 
+        # CRITICAL: Special check for trailing "okay" repetitions
+        # This catches cases like "okay okay okay" at the end of transcription
+        normalized_last = last_sentence.lower().strip()
+        # Remove punctuation for checking
+        import string
+        normalized_last_no_punct = normalized_last.translate(str.maketrans('', '', string.punctuation))
+        words_normalized = normalized_last_no_punct.split()
+
+        if len(words_normalized) >= 2:
+            okay_variations = ['okay', 'ok', 'o k']
+            okay_count = sum(1 for word in words_normalized if word in okay_variations)
+
+            # If last sentence is mostly "okay" variations, remove it
+            if okay_count >= 2 and okay_count >= len(words_normalized) * 0.5:
+                logger.warning(f"Removing trailing 'okay' repetition: {last_sentence[:50]}...")
+                cleaned = '.'.join(sentences[:-1]).strip()
+                return cleaned + '.' if cleaned else ''
+
         # Check for common garbage endings
         garbage_endings = [
             r'thank you for watching',
@@ -229,6 +253,55 @@ class BufferOverflowProtection:
                 return '.'.join(sentences[:-1]).strip() + '.'
 
         return text
+
+    def detect_okay_hallucination(self, text: str) -> bool:
+        """
+        Detect the specific 'okay okay okay' Whisper hallucination pattern
+
+        This is the exact pattern the user reported: "okay. okay. okay. okay..."
+        Happens when Whisper gets background noise and condition_on_previous_text
+        creates a repetition loop.
+
+        Returns:
+            True if text appears to be the hallucination pattern
+        """
+        if not text or len(text) < 10:
+            return False
+
+        # Normalize text for analysis
+        normalized = text.lower().strip()
+
+        # Remove punctuation and extra spaces
+        import string
+        normalized = normalized.translate(str.maketrans('', '', string.punctuation))
+        normalized = ' '.join(normalized.split())
+
+        # Check for repetitive "okay" patterns
+        words = normalized.split()
+        if len(words) < 3:
+            return False
+
+        # Count "okay" and related variations
+        okay_count = 0
+        total_words = len(words)
+
+        for word in words:
+            if word in ['okay', 'ok', 'o k']:
+                okay_count += 1
+
+        # If more than 50% of words are "okay" variations, it's likely hallucination
+        okay_ratio = okay_count / total_words
+
+        if okay_ratio > 0.5 and okay_count >= 3:
+            logger.warning(f"Detected 'okay' hallucination pattern: {okay_count}/{total_words} words are 'okay' variants")
+            return True
+
+        # Additional check for exact repetition patterns
+        if len(set(words)) <= 2 and okay_count >= 3:
+            logger.warning(f"Detected exact repetition hallucination: {normalized[:50]}...")
+            return True
+
+        return False
 
 
 # Global instance for easy access

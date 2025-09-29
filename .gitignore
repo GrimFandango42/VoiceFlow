@@ -106,3 +106,9 @@ tests/temp_audio/
 
 # Windows reserved name (can appear accidentally)
 nul
+
+# agent files
+# Tokens and sensitive files
+*.token
+*.key
+*_pat_*

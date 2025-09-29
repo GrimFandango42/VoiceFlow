@@ -331,12 +331,28 @@ class BottomScreenIndicator:
             print(f"[VisualIndicator] Failed to queue hide command: {e}")
 
     def _hide_window(self):
-        """Hide window on GUI thread"""
+        """Hide window on GUI thread and reset all state"""
         try:
+            # CRITICAL: Cancel any pending auto-hide timer
+            if self.auto_hide_timer:
+                self.auto_hide_timer.cancel()
+                self.auto_hide_timer = None
+
+            # Reset status to idle to prevent persistence
+            self.current_status = TranscriptionStatus.IDLE
+
+            # Hide the window
             if self.window:
                 self.window.withdraw()
+
+            # Stop any progress animations
             if hasattr(self, 'progress_bar'):
                 self.progress_bar.stop()
+
+            # Clear status text to ensure nothing persists
+            if self.status_var:
+                self.status_var.set("")
+
         except Exception as e:
             print(f"[VisualIndicator] Hide error: {e}")
     
@@ -401,6 +417,32 @@ def cleanup_indicators():
         if _indicator:
             _indicator.destroy()
             _indicator = None
+
+def force_cleanup_all():
+    """Force cleanup of all persistent visual state - EMERGENCY CLEANUP"""
+    try:
+        # Force hide any visible indicators
+        hide_status()
+
+        # Wait a moment for GUI thread to process
+        time.sleep(0.1)
+
+        # Destroy everything
+        cleanup_indicators()
+
+        print("[VisualIndicator] Force cleanup completed")
+    except Exception as e:
+        print(f"[VisualIndicator] Force cleanup error: {e}")
+
+def ensure_clean_startup():
+    """Ensure clean startup by clearing any persistent state"""
+    try:
+        force_cleanup_all()
+        # Small delay to let any GUI threads settle
+        time.sleep(0.2)
+        print("[VisualIndicator] Clean startup ensured")
+    except Exception as e:
+        print(f"[VisualIndicator] Startup cleanup error: {e}")
 
 # Convenience functions for common status updates
 def show_listening():
