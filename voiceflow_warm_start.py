@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-VoiceFlow Intelligent - Enhanced with Self-Correcting ASR
-========================================================
-Features intelligent transcription correction and continuous learning.
+VoiceFlow Warm Start - Enhanced with Pre-loaded Models
+=====================================================
+Fixes first transcription issues by pre-loading models and ensuring proper audio capture.
 
-New Features:
-- Self-correcting transcription with quality analysis
-- Real-time learning from user patterns
-- Context-aware error detection and correction
-- Quality monitoring and improvement suggestions
+Key Improvements:
+- Pre-loads ASR models during startup (warm start)
+- Enhanced audio buffering to prevent cutoffs
+- First transcription readiness validation
+- Smooth user experience from first use
 """
 
 import sys
@@ -44,9 +44,9 @@ try:
 except ImportError:
     VISUAL_INDICATORS_AVAILABLE = False
 
-class IntelligentVoiceFlowApp:
+class WarmStartVoiceFlowApp:
     """
-    Intelligent VoiceFlow app with self-correcting ASR and quality monitoring.
+    VoiceFlow app with warm start capabilities for optimal first transcription.
     """
 
     def __init__(self, cfg: Config):
@@ -60,16 +60,15 @@ class IntelligentVoiceFlowApp:
         self.injector = ClipboardInjector(cfg)
 
         self.code_mode = getattr(cfg, 'code_mode_default', False)
-        self._log = logging.getLogger("voiceflow_intelligent")
+        self._log = logging.getLogger("voiceflow_warm_start")
 
-        # State tracking with quality monitoring
-        self.current_state = "idle"
+        # Enhanced state tracking
+        self.current_state = "initializing"
         self.state_lock = False
         self.models_loaded = False
         self.first_transcription = True
         self.transcription_count = 0
         self.quality_scores = []
-        self.improvement_suggestions = []
 
         # Visual indicators integration
         self.tray_controller = None
@@ -79,11 +78,11 @@ class IntelligentVoiceFlowApp:
         self.last_activity = time.time()
         self.start_time = time.time()
 
-        print(f"[IntelligentApp] Initialized with self-correcting ASR and quality monitoring")
+        print(f"[WarmStartApp] Initialized with pre-loading capabilities")
 
     def _set_state(self, new_state: str, details: str = ""):
-        """Enhanced state management with quality tracking"""
-        if self.state_lock:
+        """Enhanced state management with model readiness tracking"""
+        if self.state_lock and new_state not in ["error", "idle"]:
             print(f"[STATE] State locked, skipping change to {new_state}")
             return
 
@@ -94,14 +93,14 @@ class IntelligentVoiceFlowApp:
         # Update visual indicators
         try:
             if self.visual_indicators_enabled:
-                if new_state == "listening":
+                if new_state == "initializing":
+                    update_tray_status(self.tray_controller, "initializing", False, "Loading models...")
+                elif new_state == "ready":
+                    update_tray_status(self.tray_controller, "idle", False, "Ready for transcription")
+                elif new_state == "listening":
                     update_tray_status(self.tray_controller, "listening", True)
                     if VISUAL_INDICATORS_AVAILABLE:
                         show_listening()
-                elif new_state == "processing":
-                    update_tray_status(self.tray_controller, "processing", False)
-                    if VISUAL_INDICATORS_AVAILABLE:
-                        show_processing()
                 elif new_state == "transcribing":
                     update_tray_status(self.tray_controller, "transcribing", False)
                     if VISUAL_INDICATORS_AVAILABLE:
@@ -117,59 +116,83 @@ class IntelligentVoiceFlowApp:
         except Exception as e:
             print(f"[STATE] Visual indicator update error: {e}")
 
-    def _reset_to_idle(self):
-        """Force reset to idle state with full cleanup"""
-        print("[RESET] Forcing reset to idle state...")
+    def warm_start_models(self):
+        """Pre-load all models for instant first transcription"""
+        print("[WARM-START] Pre-loading ASR models for optimal performance...")
+        start_time = time.time()
 
         try:
-            if self.rec.is_recording():
-                self.rec.stop()
-        except Exception as e:
-            print(f"[RESET] Error stopping recording: {e}")
+            self._set_state("initializing", "loading models")
 
-        try:
-            if VISUAL_INDICATORS_AVAILABLE:
-                hide_status()
-        except Exception as e:
-            print(f"[RESET] Error clearing visual indicators: {e}")
+            # Load base ASR models
+            print("[WARM-START] Loading production ASR models...")
+            self.asr.base_asr.load()
 
-        self.current_state = "idle"
-        self.state_lock = False
+            # Warm up the model with a tiny test
+            print("[WARM-START] Warming up transcription pipeline...")
+            import numpy as np
+
+            # Create 0.5 seconds of silence for warm-up
+            warmup_audio = np.zeros(int(0.5 * self.cfg.sample_rate), dtype=np.float32)
+
+            # Run warm-up transcription (should be very fast)
+            warmup_start = time.perf_counter()
+            try:
+                warmup_result = self.asr.base_asr.transcribe(warmup_audio)
+                warmup_time = time.perf_counter() - warmup_start
+                print(f"[WARM-START] Pipeline warm-up completed in {warmup_time:.3f}s")
+            except Exception as e:
+                print(f"[WARM-START] Warm-up transcription failed (non-critical): {e}")
+
+            load_time = time.time() - start_time
+            self.models_loaded = True
+
+            print(f"[WARM-START] ✅ Models loaded and warmed up in {load_time:.2f}s")
+            print("[WARM-START] System ready for instant transcription!")
+
+            self._set_state("ready", f"models loaded in {load_time:.1f}s")
+            return True
+
+        except Exception as e:
+            print(f"[WARM-START] ❌ Model loading failed: {e}")
+            self._log.exception("warm_start_error: %s", e)
+            self._set_state("error", f"Model loading failed: {e}")
+            return False
 
     def start_recording(self):
-        """Enhanced recording start with intelligent monitoring and first transcription optimization"""
+        """Enhanced recording start with model readiness check"""
         try:
-            if self.current_state != "idle":
-                print(f"[MIC] Already in {self.current_state} state, ignoring start request")
-                return
+            if self.current_state not in ["ready", "idle"]:
+                if self.current_state == "initializing":
+                    print("[MIC] Models still loading, please wait...")
+                    return
+                else:
+                    print(f"[MIC] System in {self.current_state} state, ignoring start request")
+                    return
 
-            # Ensure models are loaded for first transcription
+            # Ensure models are loaded
             if not self.models_loaded:
-                print("[MIC] Models not yet loaded - ensuring readiness...")
-                if not hasattr(self.asr.base_asr, '_model') or self.asr.base_asr._model is None:
-                    print("[MIC] Loading models for first use...")
-                    self.asr.base_asr.load()
-                self.models_loaded = True
+                print("[MIC] Models not ready, attempting quick load...")
+                if not self.warm_start_models():
+                    print("[MIC] Failed to load models, cannot start recording")
+                    return
 
             self.state_lock = True
-            print("[MIC] Starting intelligent recording...")
+            print("[MIC] Starting recording (models ready)...")
             self.last_activity = time.time()
 
-            # Enhanced handling for first transcription
+            # For first transcription, add extra audio buffering
             if self.first_transcription:
-                print("[MIC] First transcription - ensuring optimal audio capture...")
+                print("[MIC] First transcription - ensuring proper audio capture...")
                 # Start continuous pre-buffer to prevent audio loss
-                try:
-                    self.rec.start_continuous()
-                    time.sleep(0.05)  # Brief delay to ensure pre-buffer is active
-                except Exception as e:
-                    print(f"[MIC] Pre-buffer start warning: {e}")
+                self.rec.start_continuous()
+                time.sleep(0.1)  # Small delay to ensure pre-buffer is active
 
-            self._set_state("listening", "intelligent recording started")
+            self._set_state("listening", "recording with warm models")
             self.rec.start()
             self.state_lock = False
 
-            print("[MIC] Intelligent recording started successfully")
+            print("[MIC] Recording started successfully (warm start)")
 
         except Exception as e:
             print(f"[MIC] Audio start error: {e}")
@@ -177,23 +200,15 @@ class IntelligentVoiceFlowApp:
             self._reset_to_idle()
             self._set_state("error", f"Start error: {e}")
 
-            # Auto-recovery
-            def auto_recover():
-                time.sleep(2)
-                self._reset_to_idle()
-
-            import threading
-            threading.Thread(target=auto_recover, daemon=True).start()
-
     def stop_recording(self):
-        """Enhanced recording stop with intelligent transcription"""
+        """Enhanced recording stop with first transcription optimization"""
         try:
             if self.current_state != "listening":
                 print(f"[MIC] Not in listening state (current: {self.current_state}), ignoring stop")
                 return
 
             self.state_lock = True
-            print("[MIC] Stopping intelligent recording...")
+            print("[MIC] Stopping recording...")
 
             audio = self.rec.stop()
             audio_duration = len(audio) / self.cfg.sample_rate if len(audio) > 0 else 0
@@ -206,11 +221,15 @@ class IntelligentVoiceFlowApp:
 
             print(f"[MIC] Captured {audio_duration:.2f}s of audio")
 
-            # Enhanced transcription with self-correction
+            # Enhanced transcription with first-time optimization
             self._set_state("transcribing", f"{audio_duration:.1f}s audio")
             self.state_lock = False
 
-            # Intelligent transcription with quality analysis
+            # Special handling for first transcription
+            if self.first_transcription:
+                print("[FIRST-TRANSCRIPTION] Processing first transcription with enhanced handling...")
+
+            # Intelligent transcription
             result = self._intelligent_transcribe(audio)
 
             if result and result.segments:
@@ -230,28 +249,28 @@ class IntelligentVoiceFlowApp:
                         self.first_transcription = False
                         print("[FIRST-TRANSCRIPTION] ✅ First transcription completed successfully!")
 
-                    # Track quality and generate suggestions
+                    # Track quality and inject text
                     self._track_transcription_quality(result, text)
-
-                    # Inject text
                     self.injector.inject(text)
                     self.transcription_count += 1
 
-                    # Show completion with quality info
-                    quality_score = getattr(result, 'quality_score', 0.9)
+                    # Show completion
                     self._set_state("idle")
-
                     if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
                         show_complete()
 
-                    # Display quality insights
+                    # Display insights
                     self._display_quality_insights(result, text)
 
                 else:
                     print("[TRANSCRIPTION] No meaningful text detected")
+                    if self.first_transcription:
+                        print("[FIRST-TRANSCRIPTION] First attempt had no text - models may need more warm-up")
                     self._reset_to_idle()
             else:
                 print("[TRANSCRIPTION] Transcription failed")
+                if self.first_transcription:
+                    print("[FIRST-TRANSCRIPTION] First transcription failed - checking model status")
                 self._reset_to_idle()
 
         except Exception as e:
@@ -262,7 +281,7 @@ class IntelligentVoiceFlowApp:
             self._set_state("error", f"Stop error: {e}")
 
     def _intelligent_transcribe(self, audio_data):
-        """Intelligent transcription with self-correction and first transcription optimization"""
+        """Enhanced transcription with first-time optimization"""
         try:
             import threading
             import queue
@@ -271,9 +290,9 @@ class IntelligentVoiceFlowApp:
 
             def transcribe_thread():
                 try:
-                    # For first transcription, use base ASR directly for speed
+                    # For first transcription, use base ASR directly to avoid learning overhead
                     if self.first_transcription:
-                        print("[FIRST-TRANSCRIPTION] Using direct ASR for optimal first experience...")
+                        print("[FIRST-TRANSCRIPTION] Using direct ASR for fastest processing...")
                         result = self.asr.base_asr.transcribe(audio_data)
                     else:
                         # Use self-correcting ASR for subsequent transcriptions
@@ -288,8 +307,8 @@ class IntelligentVoiceFlowApp:
             thread.daemon = True
             thread.start()
 
-            # Enhanced timeout for first transcription
-            timeout = 45 if self.first_transcription else 30
+            # Wait with appropriate timeout
+            timeout = 45 if self.first_transcription else 30  # Longer timeout for first transcription
 
             try:
                 result_type, result = result_queue.get(timeout=timeout)
@@ -299,10 +318,9 @@ class IntelligentVoiceFlowApp:
                     print(f"[TRANSCRIPTION] Error: {result}")
                     return None
             except queue.Empty:
+                print(f"[TRANSCRIPTION] Timeout after {timeout} seconds")
                 if self.first_transcription:
-                    print(f"[FIRST-TRANSCRIPTION] Timeout after {timeout} seconds - models may need restart")
-                else:
-                    print(f"[TRANSCRIPTION] Timeout after {timeout} seconds")
+                    print("[FIRST-TRANSCRIPTION] Timeout on first transcription - models may need restart")
                 return None
 
         except Exception as e:
@@ -310,77 +328,74 @@ class IntelligentVoiceFlowApp:
             return None
 
     def _track_transcription_quality(self, result, text):
-        """Track transcription quality and learn from patterns"""
+        """Track transcription quality with first-time analysis"""
         try:
+            # Enhanced tracking for first transcription
+            if self.first_transcription:
+                print(f"[FIRST-TRANSCRIPTION] Quality analysis - Length: {len(text)} chars, Confidence: {getattr(result, 'confidence', 'unknown')}")
+
             # Get quality analysis from self-correcting ASR
-            quality_report = self.asr.get_quality_report()
+            if hasattr(self.asr, 'get_quality_report'):
+                quality_report = self.asr.get_quality_report()
+                suggestions = self.asr.get_suggestions(text)
 
-            # Get improvement suggestions
-            suggestions = self.asr.get_suggestions(text)
-
-            if suggestions:
-                print(f"[QUALITY] Found {len(suggestions)} improvement suggestions")
-                for suggestion in suggestions[:3]:  # Show top 3
-                    print(f"  • {suggestion.original_text} → {suggestion.suggested_text} ({suggestion.reason})")
+                if suggestions:
+                    print(f"[QUALITY] Found {len(suggestions)} improvement suggestions")
 
             # Store quality data
             self.quality_scores.append({
                 'timestamp': time.time(),
                 'text': text,
                 'confidence': getattr(result, 'confidence', 0.9),
-                'suggestions': len(suggestions),
-                'quality_report': quality_report
+                'is_first': self.first_transcription,
+                'transcription_count': self.transcription_count
             })
-
-            # Keep only recent quality data
-            if len(self.quality_scores) > 100:
-                self.quality_scores.pop(0)
 
         except Exception as e:
             print(f"[QUALITY] Error tracking quality: {e}")
 
     def _display_quality_insights(self, result, text):
-        """Display quality insights to user"""
+        """Display quality insights with first-transcription focus"""
         try:
-            # Calculate session statistics
-            if len(self.quality_scores) >= 5:
-                recent_scores = [q['confidence'] for q in self.quality_scores[-5:]]
-                avg_confidence = sum(recent_scores) / len(recent_scores)
+            if self.first_transcription:
+                print("[FIRST-TRANSCRIPTION] System ready for optimal performance on subsequent transcriptions!")
 
-                if avg_confidence < 0.8:
-                    print(f"[INSIGHT] Recent transcription confidence is low ({avg_confidence:.1%})")
-                    print("[INSIGHT] Consider speaking more clearly or reducing background noise")
-
-                # Check for learning progress
-                if len(self.quality_scores) >= 20:
-                    older_scores = [q['confidence'] for q in self.quality_scores[-20:-10]]
-                    newer_scores = [q['confidence'] for q in self.quality_scores[-10:]]
-
-                    if sum(newer_scores) / len(newer_scores) > sum(older_scores) / len(older_scores):
-                        print("[INSIGHT] ✓ Transcription quality is improving over time!")
-
-            # Show vocabulary learning
-            vocab_size = len(getattr(self.asr.user_patterns, 'domain_vocabulary', {}))
-            if vocab_size > 0:
-                print(f"[LEARNING] Learned {vocab_size} domain-specific terms")
+            # Show session progress
+            if self.transcription_count > 0 and self.transcription_count % 5 == 0:
+                avg_confidence = sum(q['confidence'] for q in self.quality_scores[-5:]) / 5
+                print(f"[QUALITY] Recent 5 transcriptions avg confidence: {avg_confidence:.1%}")
 
         except Exception as e:
             print(f"[INSIGHTS] Error displaying insights: {e}")
 
-    def get_quality_summary(self):
-        """Get quality summary for current session"""
-        if not self.quality_scores:
-            return "No transcriptions in current session"
+    def _reset_to_idle(self):
+        """Reset to ready state (not initializing)"""
+        print("[RESET] Resetting to ready state...")
 
-        avg_confidence = sum(q['confidence'] for q in self.quality_scores) / len(self.quality_scores)
-        total_suggestions = sum(q['suggestions'] for q in self.quality_scores)
+        try:
+            if self.rec.is_recording():
+                self.rec.stop()
+        except Exception as e:
+            print(f"[RESET] Error stopping recording: {e}")
 
+        try:
+            if VISUAL_INDICATORS_AVAILABLE:
+                hide_status()
+        except Exception as e:
+            print(f"[RESET] Error clearing visual indicators: {e}")
+
+        # Reset to ready state if models are loaded, otherwise idle
+        self.current_state = "ready" if self.models_loaded else "idle"
+        self.state_lock = False
+
+    def get_readiness_status(self):
+        """Get detailed readiness status"""
         return {
-            'session_duration': time.time() - self.start_time,
-            'transcription_count': len(self.quality_scores),
-            'average_confidence': avg_confidence,
-            'total_suggestions': total_suggestions,
-            'learning_progress': self.asr.get_quality_report()
+            'models_loaded': self.models_loaded,
+            'current_state': self.current_state,
+            'first_transcription': self.first_transcription,
+            'transcription_count': self.transcription_count,
+            'ready_for_use': self.models_loaded and self.current_state in ['ready', 'idle']
         }
 
     def shutdown(self):
@@ -391,10 +406,8 @@ class IntelligentVoiceFlowApp:
             self.asr.shutdown()
 
             # Display session summary
-            summary = self.get_quality_summary()
-            print(f"[SESSION] Transcriptions: {summary.get('transcription_count', 0)}")
-            print(f"[SESSION] Avg Confidence: {summary.get('average_confidence', 0):.1%}")
-            print(f"[SESSION] Suggestions Generated: {summary.get('total_suggestions', 0)}")
+            print(f"[SESSION] Transcriptions completed: {self.transcription_count}")
+            print(f"[SESSION] First transcription completed: {'Yes' if not self.first_transcription else 'No'}")
 
             # Clean up visual indicators
             self._reset_to_idle()
@@ -410,7 +423,7 @@ def signal_handler(signum, frame):
     sys.exit(0)
 
 def main():
-    """Main function with intelligent transcription"""
+    """Main function with warm start"""
 
     signal.signal(signal.SIGINT, signal_handler)
 
@@ -422,18 +435,20 @@ def main():
         # Load configuration
         cfg = Config()
 
-        # Create intelligent app
-        app = IntelligentVoiceFlowApp(cfg)
+        # Create warm start app
+        app = WarmStartVoiceFlowApp(cfg)
 
-        # Pre-load ASR models for optimal first transcription
-        print("[MAIN] Pre-loading intelligent ASR models for optimal first transcription...")
-        start_time = time.time()
-        app.asr.base_asr.load()
-        app.models_loaded = True
-        load_time = time.time() - start_time
-        print(f"[MAIN] ✅ Models loaded in {load_time:.2f}s - ready for instant transcription!")
+        print("\n" + "="*70)
+        print("VoiceFlow Warm Start - Optimized First Transcription")
+        print("="*70)
+        print("Initializing with model pre-loading for instant response...")
 
-        # Create hotkey listener
+        # Pre-load models for optimal first transcription
+        if not app.warm_start_models():
+            print("❌ Failed to load models - exiting")
+            return 1
+
+        # Create hotkey listener after models are ready
         listener = EnhancedPTTHotkeyListener(
             cfg,
             app.start_recording,
@@ -442,20 +457,18 @@ def main():
 
         # Start listener
         listener.start()
-        print("\n" + "="*70)
-        print("VoiceFlow Intelligent - Self-Correcting ASR")
+
         print("="*70)
         print(f"Hotkey: {'Ctrl+' if cfg.hotkey_ctrl else ''}"
               f"{'Shift+' if cfg.hotkey_shift else ''}"
               f"{'Alt+' if cfg.hotkey_alt else ''}"
               f"{cfg.hotkey_key.upper() if cfg.hotkey_key else '[Modifiers Only]'}")
+        print("Warm Start: ✅ Models pre-loaded for instant first transcription")
         print("Intelligence: Self-correcting transcription with continuous learning")
-        print("Quality: Real-time quality monitoring and improvement suggestions")
-        print("Learning: Adapts to your vocabulary and speaking patterns")
         print("Performance: 70x realtime with professional accuracy")
+        print("First Use: Optimized audio capture prevents sentence cutoffs")
         print("="*70)
-        print("Ready for intelligent operation. Press Ctrl+C to exit.")
-        print("Tip: Launch quality_monitor.py for real-time quality insights!")
+        print("Ready for optimal operation. Press Ctrl+C to exit.")
 
         # Run forever
         try:
@@ -471,7 +484,7 @@ def main():
     finally:
         # Graceful cleanup
         try:
-            print("[MAIN] Shutting down intelligent systems...")
+            print("[MAIN] Shutting down warm start systems...")
             if 'listener' in locals():
                 listener.stop()
             if 'app' in locals():
