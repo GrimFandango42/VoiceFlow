@@ -94,6 +94,8 @@ class BottomScreenIndicator:
         self._color_phase = random.random() * (math.pi * 2.0)
         self._speech_active = False
         self._burst_energy = 0.0
+        self._speech_level = 0.0
+        self._silence_floor_est = 0.0
         self.audio_level = 0.0
         self.audio_level_target = 0.0
         self.audio_level_smoothed = 0.0
@@ -417,6 +419,8 @@ class BottomScreenIndicator:
         self.wave_right = right
         base = self.wave_h // 2
         self.wave_energy_history = deque([0.0] * self.wave_energy_history.maxlen, maxlen=self.wave_energy_history.maxlen)
+        self._speech_level = 0.0
+        self._silence_floor_est = 0.0
 
         self.wave_baseline = self.wave_canvas.create_line(left, base, right, base, fill="#1F2937", width=1)
         self.wave_line = None
@@ -451,6 +455,8 @@ class BottomScreenIndicator:
         self.space_glow = None
         self.space_ring = None
         self.space_arcs = []
+        self.wave_pulse_rings = []
+        self.wave_spark_meta = []
         self.wave_bars = []
 
         bar_count = 56
@@ -469,13 +475,49 @@ class BottomScreenIndicator:
             self.wave_bars.append(bar)
             x += bar_w + gap
 
+        # Pulse rings around the orb for stronger speech-reactive feel.
+        for _ in range(3):
+            ring = self.wave_canvas.create_oval(
+                left - 2,
+                base - 2,
+                left + 2,
+                base + 2,
+                outline="#334155",
+                width=1,
+            )
+            self.wave_pulse_rings.append(ring)
+
+        # Spark particles riding the waveform.
+        self.wave_sparks = []
+        self.wave_spark_meta = []
+        spark_count = 12
+        span = max(1.0, float(right - left))
+        for i in range(spark_count):
+            px = left + ((i + 1) / (spark_count + 1)) * span
+            py = base + random.uniform(-6.0, 6.0)
+            spark = self.wave_canvas.create_oval(px - 2, py - 2, px + 2, py + 2, fill="#38BDF8", outline="")
+            self.wave_sparks.append(spark)
+            self.wave_spark_meta.append(
+                {
+                    "x": px,
+                    "y": py,
+                    "vx": random.uniform(-0.2, 0.2),
+                    "phase": random.uniform(0.0, math.pi * 2.0),
+                    "amp": random.uniform(6.0, 18.0),
+                }
+            )
+
         # Layer order for "space HUD" look.
         if self.wave_trail_glow:
             self.wave_canvas.tag_raise(self.wave_trail_glow)
         if self.wave_trail_line:
             self.wave_canvas.tag_raise(self.wave_trail_line)
+        for ring in self.wave_pulse_rings:
+            self.wave_canvas.tag_raise(ring)
         for bar in self.wave_bars:
             self.wave_canvas.tag_raise(bar)
+        for spark in self.wave_sparks:
+            self.wave_canvas.tag_raise(spark)
         if self.wave_baseline:
             self.wave_canvas.tag_raise(self.wave_baseline)
         if self.wave_orb_glow:
@@ -493,7 +535,7 @@ class BottomScreenIndicator:
         alpha = 0.72 if delta > 0 else 0.26
         self.audio_level_smoothed += alpha * delta
         if target <= 0.001 and self.audio_level_smoothed < 0.08:
-            self.audio_level_smoothed *= 0.58
+            self.audio_level_smoothed *= 0.56
         lvl = self.audio_level_smoothed
 
         # Smooth frequency-profile features.
@@ -509,10 +551,10 @@ class BottomScreenIndicator:
         centroid = float(self.audio_features_smoothed["centroid"])
 
         if mode == "idle":
-            lvl *= 0.20
+            lvl *= 0.15
 
         # Recorder/radio style bars.
-        self.wave_phase += 0.22 + 1.1 * lvl
+        self.wave_phase += 0.20 + 1.35 * lvl
         base = self.wave_h // 2
         max_h = max(18, (self.wave_h // 2) - 10)
 
@@ -521,20 +563,30 @@ class BottomScreenIndicator:
         self._visual_agc = (self._visual_agc * 0.94) + (target_agc * 0.06)
         agc_scale = 0.85 + (0.95 / max(0.08, self._visual_agc))
         agc_scale = max(0.95, min(2.35, agc_scale))
-        voiced = min(1.0, lvl * agc_scale)
+        voiced_raw = min(1.0, lvl * agc_scale)
 
-        speech_now = voiced > 0.16
+        # Dynamic silence-floor estimation makes idle state visibly calmer.
+        if voiced_raw < 0.18:
+            self._silence_floor_est = (self._silence_floor_est * 0.97) + (voiced_raw * 0.03)
+        floor = max(0.012, min(0.18, self._silence_floor_est))
+        voiced = max(0.0, min(1.0, (voiced_raw - floor) / max(0.12, 1.0 - floor)))
+
+        # Additional smoothing to avoid jitter while preserving speech swings.
+        self._speech_level = (self._speech_level * 0.78) + (voiced * 0.22)
+        voiced = self._speech_level
+
+        speech_now = voiced > 0.12
         if speech_now and not self._speech_active:
             self._burst_energy = 1.0
         self._speech_active = speech_now
-        self._burst_energy = max(0.0, (self._burst_energy * 0.93) - 0.010)
+        self._burst_energy = max(0.0, (self._burst_energy * 0.91) - 0.010)
 
         # Reactive spectral trail to make the overlay feel alive and speech-driven.
         self.wave_energy_history.append(voiced)
         hist = list(self.wave_energy_history)
-        accent_r = int(max(26, min(210, 44 + (98 * high) + (16 * centroid) + (12 * self._burst_energy))))
-        accent_g = int(max(74, min(225, 106 + (82 * mid) + (34 * voiced))))
-        accent_b = int(max(108, min(245, 140 + (72 * low) + (16 * (1.0 - centroid)))))
+        accent_r = int(max(26, min(220, 40 + (110 * high) + (22 * centroid) + (22 * self._burst_energy))))
+        accent_g = int(max(74, min(230, 100 + (90 * mid) + (42 * voiced))))
+        accent_b = int(max(108, min(250, 136 + (80 * low) + (20 * (1.0 - centroid)))))
         trail_color = "#{:02X}{:02X}{:02X}".format(accent_r, accent_g, accent_b)
         glow_color = "#{:02X}{:02X}{:02X}".format(
             min(255, accent_r + 18),
@@ -553,15 +605,16 @@ class BottomScreenIndicator:
                 points.extend((x, y))
             self.wave_canvas.coords(self.wave_trail_line, *points)
             self.wave_canvas.coords(self.wave_trail_glow, *points)
-            self.wave_canvas.itemconfig(self.wave_trail_line, fill=trail_color, width=(1 + (1.2 * voiced)))
+            self.wave_canvas.itemconfig(self.wave_trail_line, fill=trail_color, width=(1 + (1.8 * voiced)))
             self.wave_canvas.itemconfig(
                 self.wave_trail_glow,
                 fill=glow_color,
-                width=(4 + (3.0 * voiced) + (2.0 * self._burst_energy)),
+                width=(4 + (4.2 * voiced) + (2.4 * self._burst_energy)),
             )
 
         n = len(self.wave_bars)
         center = (n - 1) / 2.0
+        wave_front = (0.5 + 0.5 * math.sin(self.wave_phase * 0.56))  # 0..1 traveling emphasis
         for i, bar in enumerate(self.wave_bars):
             p = i / max(1.0, n - 1.0)  # 0..1 (left=low freq, right=high freq)
 
@@ -574,11 +627,13 @@ class BottomScreenIndicator:
 
             falloff = 1.0 - min(1.0, abs(i - center) / (center + 0.001))
             osc = 0.66 + 0.34 * math.sin((self.wave_phase * (1.1 + centroid * 1.3)) + (i * 0.38))
-            combined = (0.28 + 0.72 * falloff) * (0.20 + 0.80 * band_energy)
+            front_dist = abs(p - wave_front)
+            front_boost = max(0.0, 1.0 - (front_dist / 0.24))
+            combined = (0.26 + 0.74 * falloff) * (0.20 + 0.80 * band_energy) * (0.88 + 0.35 * front_boost)
             h = 2 + (max_h * voiced * combined * osc)
             x0, _, x1, _ = self.wave_canvas.coords(bar)
             top = base - h
-            bottom = base + (h * 0.62)
+            bottom = base + (h * (0.58 + 0.08 * front_boost))
             self.wave_canvas.coords(bar, x0, top, x1, bottom)
             bar_r = int(max(24, min(200, 34 + (88 * band_energy) + (62 * voiced))))
             bar_g = int(max(82, min(220, 106 + (76 * mid) + (34 * falloff))))
@@ -607,6 +662,48 @@ class BottomScreenIndicator:
             self.wave_canvas.itemconfig(self.wave_orb, fill=trail_color)
             self.wave_canvas.itemconfig(self.wave_orb_glow, fill=glow_color)
 
+            # Orb pulse rings for stronger speech reactivity cues.
+            for idx, ring in enumerate(self.wave_pulse_rings):
+                phase = (self.wave_phase * (0.34 + (idx * 0.08))) + (idx * 1.7)
+                pulse = (0.5 + 0.5 * math.sin(phase))
+                ring_r = glow_r + 5 + (idx * 8) + (pulse * 7) + (voiced * 12)
+                self.wave_canvas.coords(
+                    ring,
+                    orb_x - ring_r,
+                    orb_y - ring_r,
+                    orb_x + ring_r,
+                    orb_y + ring_r,
+                )
+                rc_r = min(255, accent_r + 10 + (idx * 6))
+                rc_g = min(255, accent_g + 8 + (idx * 4))
+                rc_b = min(255, accent_b + 18 + (idx * 3))
+                ring_color = "#{:02X}{:02X}{:02X}".format(rc_r, rc_g, rc_b)
+                ring_w = max(1, int(1 + voiced + (0.4 * (2 - idx)) + (0.4 * self._burst_energy)))
+                self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
+
+        # Spark particles orbiting the waveform path.
+        if self.wave_sparks and self.wave_spark_meta:
+            span = max(1.0, float(self.wave_right - self.wave_left))
+            speed = 0.25 + (0.95 * voiced)
+            spark_base = 1.8 + (2.8 * voiced) + (1.4 * self._burst_energy)
+            for idx, spark in enumerate(self.wave_sparks):
+                meta = self.wave_spark_meta[idx]
+                meta["phase"] += 0.08 + (0.03 * idx) + (0.05 * speed)
+                meta["x"] += (meta["vx"] * speed) + (0.12 * math.sin(meta["phase"] * 0.7))
+                if meta["x"] < self.wave_left:
+                    meta["x"] = self.wave_right
+                elif meta["x"] > self.wave_right:
+                    meta["x"] = self.wave_left
+                y_wave = base - (voiced * max_h * 0.44 * math.sin((meta["x"] / span) * 8.6 + self.wave_phase))
+                meta["y"] = y_wave + (meta["amp"] * 0.08 * math.sin(meta["phase"] * 1.5))
+                r = spark_base * (0.72 + 0.28 * math.sin(meta["phase"] + (idx * 0.21)))
+                self.wave_canvas.coords(spark, meta["x"] - r, meta["y"] - r, meta["x"] + r, meta["y"] + r)
+                s_r = min(255, accent_r + 18 + (idx % 3) * 10)
+                s_g = min(255, accent_g + 24)
+                s_b = min(255, accent_b + 30)
+                spark_color = "#{:02X}{:02X}{:02X}".format(s_r, s_g, s_b)
+                self.wave_canvas.itemconfig(spark, fill=spark_color)
+
     def update_audio_level(self, level: float):
         """Thread-safe live amplitude input from recorder loop."""
         if not self.gui_ready or not self.command_queue:
@@ -619,8 +716,8 @@ class BottomScreenIndicator:
     def _update_audio_level_ui(self, level: float):
         try:
             val = max(0.0, min(1.0, float(level)))
-            # Slightly aggressive mapping so speech pops visually without extra randomness.
-            boosted = min(1.0, (val ** 0.72) * 1.65)
+            # Stronger mapping for clearer quiet-vs-speaking contrast.
+            boosted = min(1.0, (val ** 0.66) * 1.95)
             self.audio_level_target = 0.0 if boosted < 0.004 else boosted
             self.audio_level = self.audio_level_target
         except Exception:
