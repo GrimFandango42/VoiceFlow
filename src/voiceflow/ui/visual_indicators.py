@@ -77,13 +77,8 @@ class BottomScreenIndicator:
         self.wave_scan = None
         self.wave_trail_line = None
         self.wave_trail_glow = None
-        self.wave_scanline = None
         self.wave_orb = None
         self.wave_orb_glow = None
-        self.wave_ring_outer = None
-        self.wave_ring_inner = None
-        self.wave_particles = []
-        self.wave_particle_meta = []
         self.wave_left = 8
         self.wave_right = 452
         self.space_star_ids = []
@@ -442,55 +437,8 @@ class BottomScreenIndicator:
             width=8,
             fill="#0EA5E9",
         )
-        self.wave_scanline = self.wave_canvas.create_line(left, 6, left, self.wave_h - 6, fill="#334155", width=1)
         self.wave_orb_glow = self.wave_canvas.create_oval(left - 6, base - 6, left + 6, base + 6, fill="#0EA5E9", outline="")
         self.wave_orb = self.wave_canvas.create_oval(left - 3, base - 3, left + 3, base + 3, fill="#38BDF8", outline="")
-        ring_center_x = left + ((right - left) * 0.54)
-        ring_center_y = base
-        self.wave_ring_outer = self.wave_canvas.create_arc(
-            ring_center_x - 32,
-            ring_center_y - 32,
-            ring_center_x + 32,
-            ring_center_y + 32,
-            start=28,
-            extent=120,
-            style=tk.ARC,
-            outline="#2B3B53",
-            width=2,
-        )
-        self.wave_ring_inner = self.wave_canvas.create_arc(
-            ring_center_x - 18,
-            ring_center_y - 18,
-            ring_center_x + 18,
-            ring_center_y + 18,
-            start=210,
-            extent=112,
-            style=tk.ARC,
-            outline="#32455F",
-            width=2,
-        )
-        self.wave_particles = []
-        self.wave_particle_meta = []
-        rng = random.Random((self.geo_seed ^ 0xA53C) & 0xFFFF)
-        particle_count = 10
-        for _ in range(particle_count):
-            size = rng.uniform(1.0, 2.6)
-            x = rng.uniform(left, right)
-            y = rng.uniform(10, self.wave_h - 10)
-            particle = self.wave_canvas.create_oval(x - size, y - size, x + size, y + size, fill="#2A3646", outline="")
-            self.wave_particles.append(particle)
-            self.wave_particle_meta.append(
-                {
-                    "x": x,
-                    "base_y": y,
-                    "vx": rng.uniform(0.45, 1.25),
-                    "amp": rng.uniform(2.2, 7.2),
-                    "phase": rng.uniform(0.0, math.pi * 2),
-                    "size": size,
-                    "bias": rng.uniform(-1.0, 1.0),
-                    "seed": rng.randint(3, 997),
-                }
-            )
         self.space_star_ids = []
         self.space_star_meta = []
         self.space_core = None
@@ -524,16 +472,10 @@ class BottomScreenIndicator:
             self.wave_canvas.tag_raise(bar)
         if self.wave_baseline:
             self.wave_canvas.tag_raise(self.wave_baseline)
-        if self.wave_ring_outer:
-            self.wave_canvas.tag_raise(self.wave_ring_outer)
-        if self.wave_ring_inner:
-            self.wave_canvas.tag_raise(self.wave_ring_inner)
         if self.wave_orb_glow:
             self.wave_canvas.tag_raise(self.wave_orb_glow)
         if self.wave_orb:
             self.wave_canvas.tag_raise(self.wave_orb)
-        if self.wave_scanline:
-            self.wave_canvas.tag_raise(self.wave_scanline)
 
     def _animate_waveform(self, mode: str = "listening"):
         if not self.wave_canvas or not self.wave_bars:
@@ -542,7 +484,7 @@ class BottomScreenIndicator:
         # Envelope smoothing: quick attack, slower release for natural feel.
         target = max(0.0, min(1.0, float(self.audio_level_target)))
         delta = target - self.audio_level_smoothed
-        alpha = 0.55 if delta > 0 else 0.30
+        alpha = 0.72 if delta > 0 else 0.26
         self.audio_level_smoothed += alpha * delta
         if target <= 0.001 and self.audio_level_smoothed < 0.08:
             self.audio_level_smoothed *= 0.58
@@ -565,7 +507,6 @@ class BottomScreenIndicator:
 
         # Recorder/radio style bars.
         self.wave_phase += 0.22 + 1.1 * lvl
-        self._color_phase += 0.015 + (0.015 * lvl)
         base = self.wave_h // 2
         max_h = max(18, (self.wave_h // 2) - 10)
 
@@ -573,7 +514,7 @@ class BottomScreenIndicator:
         target_agc = max(0.04, min(1.0, lvl))
         self._visual_agc = (self._visual_agc * 0.94) + (target_agc * 0.06)
         agc_scale = 0.85 + (0.95 / max(0.08, self._visual_agc))
-        agc_scale = max(0.9, min(2.0, agc_scale))
+        agc_scale = max(0.95, min(2.35, agc_scale))
         voiced = min(1.0, lvl * agc_scale)
 
         speech_now = voiced > 0.16
@@ -643,51 +584,6 @@ class BottomScreenIndicator:
             base_color = "#1F2937" if voiced < 0.08 else "#334155"
             self.wave_canvas.itemconfig(self.wave_baseline, fill=base_color, width=(1 if voiced < 0.2 else 2))
 
-        if self.wave_scanline:
-            sweep = (math.sin((self.wave_phase * 0.42) + (self._color_phase * 0.6)) + 1.0) * 0.5
-            x_scan = self.wave_left + (sweep * (self.wave_right - self.wave_left))
-            self.wave_canvas.coords(self.wave_scanline, x_scan, 6, x_scan, self.wave_h - 6)
-            scan_color = "#334155" if voiced < 0.08 else glow_color
-            self.wave_canvas.itemconfig(self.wave_scanline, fill=scan_color, width=(1 if voiced < 0.15 else 2))
-
-        if self.wave_ring_outer and self.wave_ring_inner:
-            span = max(1.0, float(self.wave_right - self.wave_left))
-            ring_x = self.wave_left + ((0.50 + ((centroid - 0.5) * 0.24)) * span)
-            ring_y = base + (math.sin(self.wave_phase * 0.45) * (1.8 + (4.8 * voiced)))
-            outer_r = 18 + (18 * voiced) + (6 * self._burst_energy)
-            inner_r = outer_r * 0.56
-            ring_start = (self.wave_phase * 55.0) % 360.0
-            ring_extent = 92 + (84 * voiced)
-
-            self.wave_canvas.coords(
-                self.wave_ring_outer,
-                ring_x - outer_r,
-                ring_y - outer_r,
-                ring_x + outer_r,
-                ring_y + outer_r,
-            )
-            self.wave_canvas.coords(
-                self.wave_ring_inner,
-                ring_x - inner_r,
-                ring_y - inner_r,
-                ring_x + inner_r,
-                ring_y + inner_r,
-            )
-            self.wave_canvas.itemconfig(
-                self.wave_ring_outer,
-                start=ring_start,
-                extent=ring_extent,
-                outline=glow_color,
-                width=(1 if voiced < 0.14 else 2),
-            )
-            self.wave_canvas.itemconfig(
-                self.wave_ring_inner,
-                start=(ring_start + 180.0),
-                extent=(70 + (50 * voiced)),
-                outline=trail_color,
-                width=(1 if voiced < 0.18 else 2),
-            )
-
         if self.wave_orb and self.wave_orb_glow:
             span = max(1.0, float(self.wave_right - self.wave_left))
             orb_x = self.wave_left + ((0.20 + (0.64 * centroid) + (0.06 * math.sin(self.wave_phase * 0.72))) * span)
@@ -705,38 +601,6 @@ class BottomScreenIndicator:
             self.wave_canvas.itemconfig(self.wave_orb, fill=trail_color)
             self.wave_canvas.itemconfig(self.wave_orb_glow, fill=glow_color)
 
-        if self.wave_particles and self.wave_particle_meta:
-            for particle, meta in zip(self.wave_particles, self.wave_particle_meta):
-                meta["x"] += meta["vx"] * (0.28 + (1.5 * voiced))
-                meta["phase"] += 0.05 + (0.06 * (0.4 + voiced))
-                sway = math.sin((self.wave_phase * 0.55) + meta["phase"]) * meta["amp"] * (0.18 + (0.66 * voiced))
-                y = meta["base_y"] + sway + ((centroid - 0.5) * 9.0 * meta["bias"])
-                if meta["x"] > self.wave_right + 8:
-                    meta["x"] = self.wave_left - (4 + (meta["size"] * 2))
-                    meta["base_y"] = 8 + (meta["seed"] % max(2, self.wave_h - 16))
-                    meta["amp"] = 3.0 + ((meta["seed"] * 7) % 24) / 4.0
-                size = meta["size"] * (0.88 + (1.05 * voiced) + (0.38 * self._burst_energy))
-                self.wave_canvas.coords(
-                    particle,
-                    meta["x"] - size,
-                    y - size,
-                    meta["x"] + size,
-                    y + size,
-                )
-                twinkle = 0.5 + (0.5 * math.sin(meta["phase"] + (self.wave_phase * 0.8)))
-                if voiced < 0.07:
-                    b = int(62 + (26 * twinkle))
-                    particle_color = "#{:02X}{:02X}{:02X}".format(42, 54, b)
-                elif voiced < 0.24:
-                    g = int(128 + (40 * twinkle))
-                    b = int(188 + (30 * twinkle))
-                    particle_color = "#{:02X}{:02X}{:02X}".format(75, g, b)
-                else:
-                    g = int(194 + (36 * twinkle))
-                    b = int(220 + (28 * twinkle))
-                    particle_color = "#{:02X}{:02X}{:02X}".format(122, g, b)
-                self.wave_canvas.itemconfig(particle, fill=particle_color)
-
     def update_audio_level(self, level: float):
         """Thread-safe live amplitude input from recorder loop."""
         if not self.gui_ready or not self.command_queue:
@@ -749,8 +613,9 @@ class BottomScreenIndicator:
     def _update_audio_level_ui(self, level: float):
         try:
             val = max(0.0, min(1.0, float(level)))
-            boosted = min(1.0, (val ** 0.85) * 1.35)
-            self.audio_level_target = 0.0 if boosted < 0.006 else boosted
+            # Slightly aggressive mapping so speech pops visually without extra randomness.
+            boosted = min(1.0, (val ** 0.72) * 1.65)
+            self.audio_level_target = 0.0 if boosted < 0.004 else boosted
             self.audio_level = self.audio_level_target
         except Exception:
             self.audio_level = 0.0

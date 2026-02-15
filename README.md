@@ -147,14 +147,22 @@ Production performance on modern hardware:
 - **Reliability**: Enhanced error handling with auto-recovery from failures
 - Works with or without GPU acceleration
 
+### Recent Tuning (2026)
+
+- Improved medium/long dictation latency by tightening pause-compaction defaults.
+- Added safe config migration to prefer `cuda` + `float16` when CUDA runtime is healthy.
+- Reduced preview-stream shutdown overhead on key release.
+- Stabilized long dictation behavior while preserving output quality.
+- Kept overlay animation isolated from ASR path to avoid transcription slowdowns.
+
 ## Recent Improvements (Latest)
 
-✅ **Fixed hanging transcription issue** - Enhanced state management prevents stuck "listening" state
-✅ **Production ASR integration** - WhisperX with 70x realtime performance
-✅ **Enhanced error handling** - Automatic recovery from audio/transcription failures
-✅ **Visual indicator cleanup** - Proper cleanup of persistent notifications
-✅ **Smart text formatting** - Intelligent formatting with pause detection and context awareness
-✅ **Diagnostic tools** - Comprehensive troubleshooting and testing utilities
+- Fixed hanging transcription issue with stronger state management.
+- Production ASR integration with high realtime performance.
+- Enhanced error handling for audio/transcription failures.
+- Visual indicator cleanup for persistent notification edge cases.
+- Smart text formatting with pause detection and context awareness.
+- Diagnostic tools for troubleshooting and testing.
 
 ## Troubleshooting
 
