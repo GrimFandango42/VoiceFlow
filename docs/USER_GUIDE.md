@@ -30,6 +30,16 @@ Primary toggles:
 - Recent history panel
 - Push-to-talk preset selector
 
+## Recent History Recovery
+
+Use `Recent History` from the dock or tray to review the latest transcriptions.
+
+For each item you can:
+- `Show more` to expand to the full transcript text
+- `Copy` to copy the full transcript
+
+This is useful when audio was successfully transcribed but injection into the target app did not complete.
+
 ## Hotkeys
 
 Default push-to-talk:

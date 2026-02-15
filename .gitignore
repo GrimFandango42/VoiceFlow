@@ -107,6 +107,12 @@ test_results/
 tests/reports/
 tests/temp_audio/
 installation_report.json
+.coverage
+.coverage.*
+scripts/setup/installation_report.json
+scripts/testing/transcription_test_report.json
+scripts/testing/stability_test_results_*.json
+scripts/testing/stability_test_results/
 
 # Windows reserved name (can appear accidentally)
 nul

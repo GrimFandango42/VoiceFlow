@@ -45,7 +45,10 @@ class BottomScreenIndicator:
         self.status_var: Optional[tk.StringVar] = None
         self.progress_var: Optional[tk.DoubleVar] = None
         self.dock_var: Optional[tk.StringVar] = None
-        self.history_text: Optional[tk.Text] = None
+        self.history_canvas: Optional[tk.Canvas] = None
+        self.history_items_frame: Optional[tk.Frame] = None
+        self.history_feedback_var: Optional[tk.StringVar] = None
+        self.history_feedback_job = None
         self.current_status = TranscriptionStatus.IDLE
         self.auto_hide_timer: Optional[threading.Timer] = None
         self.lock = threading.Lock()
@@ -98,6 +101,8 @@ class BottomScreenIndicator:
         self.audio_features_smoothed = {"low": 0.34, "mid": 0.33, "high": 0.33, "centroid": 0.5}
         self._visual_agc = 0.18
         self.recent_transcriptions = deque(maxlen=50)
+        self.history_item_expanded_ids = set()
+        self.history_event_seq = 0
         self.history_visible = False
         self.history_expanded = False
         self.history_geometry_compact = None
@@ -743,7 +748,7 @@ class BottomScreenIndicator:
 
         self.history_toggle_btn = tk.Button(
             actions,
-            text="More",
+            text="Expand",
             command=self._toggle_history_expanded,
             bg="#111827",
             fg="#D1D5DB",
@@ -771,17 +776,47 @@ class BottomScreenIndicator:
         )
         close_btn.pack(side=tk.RIGHT)
 
-        self.history_text = tk.Text(
+        self.history_feedback_var = tk.StringVar(value="")
+        feedback_label = tk.Label(
             frame,
-            bg="#0F172A",
-            fg="#D1D5DB",
-            font=("Consolas", 9),
-            relief=tk.FLAT,
-            wrap=tk.WORD,
-            height=10,
+            textvariable=self.history_feedback_var,
+            bg="#0B1220",
+            fg="#93C5FD",
+            font=("Segoe UI", 8),
+            anchor="w",
+            padx=10,
+            pady=2,
         )
-        self.history_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
-        self.history_text.configure(state=tk.DISABLED)
+        feedback_label.pack(fill=tk.X)
+
+        list_container = tk.Frame(frame, bg="#0F172A")
+        list_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        self.history_canvas = tk.Canvas(
+            list_container,
+            bg="#0F172A",
+            highlightthickness=0,
+            bd=0,
+        )
+        scrollbar = tk.Scrollbar(list_container, orient=tk.VERTICAL, command=self.history_canvas.yview)
+        self.history_canvas.configure(yscrollcommand=scrollbar.set)
+
+        self.history_items_frame = tk.Frame(self.history_canvas, bg="#0F172A")
+        history_window_id = self.history_canvas.create_window((0, 0), window=self.history_items_frame, anchor="nw")
+
+        def _on_items_configure(_event):
+            if self.history_canvas:
+                self.history_canvas.configure(scrollregion=self.history_canvas.bbox("all"))
+
+        def _on_canvas_configure(event):
+            if self.history_canvas:
+                self.history_canvas.itemconfigure(history_window_id, width=event.width)
+
+        self.history_items_frame.bind("<Configure>", _on_items_configure)
+        self.history_canvas.bind("<Configure>", _on_canvas_configure)
+
+        self.history_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.history_window.withdraw()
 
@@ -909,7 +944,7 @@ class BottomScreenIndicator:
                 self.history_window.geometry(self.history_geometry_compact)
             self.history_expanded = False
             if hasattr(self, "history_toggle_btn") and self.history_toggle_btn:
-                self.history_toggle_btn.configure(text="More")
+                self.history_toggle_btn.configure(text="Expand")
             self._render_history_panel()
             self.history_window.deiconify()
             self.history_window.lift()
@@ -925,37 +960,153 @@ class BottomScreenIndicator:
         elif self.history_geometry_compact:
             self.history_window.geometry(self.history_geometry_compact)
         if hasattr(self, "history_toggle_btn") and self.history_toggle_btn:
-            self.history_toggle_btn.configure(text=("Less" if self.history_expanded else "More"))
+            self.history_toggle_btn.configure(text=("Compact" if self.history_expanded else "Expand"))
         self._render_history_panel()
 
+    def _toggle_history_item_details(self, item_id: int):
+        if item_id in self.history_item_expanded_ids:
+            self.history_item_expanded_ids.discard(item_id)
+        else:
+            self.history_item_expanded_ids.add(item_id)
+        self._render_history_panel()
+
+    def _show_history_feedback(self, message: str, clear_after_ms: int = 1400):
+        if not self.history_feedback_var:
+            return
+        self.history_feedback_var.set(message)
+        if self.history_feedback_job and self.history_window:
+            try:
+                self.history_window.after_cancel(self.history_feedback_job)
+            except Exception:
+                pass
+        if self.history_window:
+            self.history_feedback_job = self.history_window.after(
+                max(500, int(clear_after_ms)),
+                lambda: self.history_feedback_var.set(""),
+            )
+
+    def _copy_history_item(self, text: str):
+        safe_text = (text or "").strip()
+        if not safe_text or not self.root:
+            self._show_history_feedback("Nothing to copy.")
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(safe_text)
+            self.root.update_idletasks()
+            self._show_history_feedback("Copied full transcript.")
+        except Exception:
+            self._show_history_feedback("Copy failed.")
+
     def _render_history_panel(self):
-        if not self.history_text:
+        if not self.history_items_frame:
             return
 
-        if not self.recent_transcriptions:
-            body = "No transcriptions yet in this session."
-        else:
-            lines = []
-            rows = list(self.recent_transcriptions)[::-1]
-            if not self.history_expanded:
-                rows = rows[:8]
-            for item in rows:
-                txt = item["full_text"] if self.history_expanded else item["preview"]
-                lines.append(
-                    "[{ts}] dur={dur:.1f}s proc={proc:.2f}s rtf={rtf:.2f}x\n{txt}\n".format(
-                        ts=item["ts"],
-                        dur=item["audio_duration"],
-                        proc=item["processing_time"],
-                        rtf=item["rtf"],
-                        txt=txt,
-                    )
-                )
-            body = "\n".join(lines)
+        for child in self.history_items_frame.winfo_children():
+            child.destroy()
 
-        self.history_text.configure(state=tk.NORMAL)
-        self.history_text.delete("1.0", tk.END)
-        self.history_text.insert(tk.END, body)
-        self.history_text.configure(state=tk.DISABLED)
+        if not self.recent_transcriptions:
+            empty = tk.Label(
+                self.history_items_frame,
+                text="No transcriptions yet in this session.",
+                bg="#0F172A",
+                fg="#9CA3AF",
+                font=("Segoe UI", 9),
+                anchor="w",
+                justify=tk.LEFT,
+                padx=10,
+                pady=8,
+            )
+            empty.pack(fill=tk.X)
+            return
+
+        rows = list(self.recent_transcriptions)[::-1]
+        if not self.history_expanded:
+            rows = rows[:8]
+
+        for item in rows:
+            item_id = int(item.get("id", 0))
+            full_text = str(item.get("full_text", "")).strip()
+            preview = str(item.get("preview", "")).strip()
+            show_full = item_id in self.history_item_expanded_ids
+            display_text = full_text if show_full else preview
+            can_expand = len(full_text) > len(preview)
+
+            card = tk.Frame(
+                self.history_items_frame,
+                bg="#111827",
+                highlightthickness=1,
+                highlightbackground="#1E293B",
+            )
+            card.pack(fill=tk.X, padx=0, pady=4)
+
+            meta = tk.Label(
+                card,
+                text="[{ts}] dur={dur:.1f}s proc={proc:.2f}s rtf={rtf:.2f}x".format(
+                    ts=item["ts"],
+                    dur=item["audio_duration"],
+                    proc=item["processing_time"],
+                    rtf=item["rtf"],
+                ),
+                bg="#111827",
+                fg="#93C5FD",
+                font=("Consolas", 8, "bold"),
+                anchor="w",
+                justify=tk.LEFT,
+                padx=8,
+                pady=6,
+            )
+            meta.pack(fill=tk.X)
+
+            message = tk.Label(
+                card,
+                text=display_text,
+                bg="#111827",
+                fg="#D1D5DB",
+                font=("Segoe UI", 9),
+                anchor="w",
+                justify=tk.LEFT,
+                wraplength=520,
+                padx=8,
+                pady=(0, 6),
+            )
+            message.pack(fill=tk.X)
+
+            actions = tk.Frame(card, bg="#111827")
+            actions.pack(fill=tk.X, padx=8, pady=(0, 6))
+
+            if can_expand:
+                expand_btn = tk.Button(
+                    actions,
+                    text=("Show less" if show_full else "Show more"),
+                    command=lambda i=item_id: self._toggle_history_item_details(i),
+                    bg="#1F2937",
+                    fg="#E5E7EB",
+                    activebackground="#334155",
+                    activeforeground="#FFFFFF",
+                    relief=tk.FLAT,
+                    padx=8,
+                    pady=2,
+                    font=("Segoe UI", 8, "bold"),
+                    cursor="hand2",
+                )
+                expand_btn.pack(side=tk.LEFT)
+
+            copy_btn = tk.Button(
+                actions,
+                text="Copy",
+                command=lambda txt=full_text: self._copy_history_item(txt),
+                bg="#1F2937",
+                fg="#E5E7EB",
+                activebackground="#334155",
+                activeforeground="#FFFFFF",
+                relief=tk.FLAT,
+                padx=8,
+                pady=2,
+                font=("Segoe UI", 8, "bold"),
+                cursor="hand2",
+            )
+            copy_btn.pack(side=tk.RIGHT)
 
     def record_transcription_event(self, text: str, audio_duration: float, processing_time: float):
         """Record summary for always-on dock/history panel."""
@@ -969,13 +1120,16 @@ class BottomScreenIndicator:
             logger.debug(f"Failed to queue transcription event: {e}")
 
     def _record_transcription_event_ui(self, text: str, audio_duration: float, processing_time: float):
-        safe_text = (text or "").strip().replace("\n", " ")
+        safe_text = (text or "").strip()
         if not safe_text:
             return
-        preview = safe_text[:140] + ("..." if len(safe_text) > 140 else "")
+        preview_source = safe_text.replace("\n", " ")
+        preview = preview_source[:140] + ("..." if len(preview_source) > 140 else "")
         proc = max(0.001, float(processing_time))
         rtf = float(audio_duration) / proc if audio_duration > 0 else 0.0
+        self.history_event_seq += 1
         item = {
+            "id": self.history_event_seq,
             "ts": datetime.now().strftime("%H:%M:%S"),
             "audio_duration": float(audio_duration),
             "processing_time": float(processing_time),
@@ -984,6 +1138,8 @@ class BottomScreenIndicator:
             "full_text": safe_text,
         }
         self.recent_transcriptions.append(item)
+        valid_ids = {int(entry.get("id", -1)) for entry in self.recent_transcriptions}
+        self.history_item_expanded_ids.intersection_update(valid_ids)
         self._refresh_dock_text(last_item=item)
 
         if self.history_visible:
@@ -1257,6 +1413,12 @@ class BottomScreenIndicator:
         with self.lock:
             if self.auto_hide_timer:
                 self.auto_hide_timer.cancel()
+            if self.history_feedback_job and self.history_window:
+                try:
+                    self.history_window.after_cancel(self.history_feedback_job)
+                except Exception:
+                    pass
+                self.history_feedback_job = None
             
             if self.window:
                 try:
