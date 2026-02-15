@@ -75,6 +75,15 @@ class BottomScreenIndicator:
         self.wave_sparks = []
         self.wave_bars = []
         self.wave_scan = None
+        self.wave_trail_line = None
+        self.wave_trail_glow = None
+        self.wave_scanline = None
+        self.wave_orb = None
+        self.wave_orb_glow = None
+        self.wave_particles = []
+        self.wave_particle_meta = []
+        self.wave_left = 8
+        self.wave_right = 452
         self.space_star_ids = []
         self.space_star_meta = []
         self.space_core = None
@@ -82,6 +91,9 @@ class BottomScreenIndicator:
         self.space_ring = None
         self.space_arcs = []
         self.wave_phase = 0.0
+        self._color_phase = random.random() * (math.pi * 2.0)
+        self._speech_active = False
+        self._burst_energy = 0.0
         self.audio_level = 0.0
         self.audio_level_target = 0.0
         self.audio_level_smoothed = 0.0
@@ -95,7 +107,7 @@ class BottomScreenIndicator:
         self.history_geometry_expanded = None
         self.dock_enabled = False
         self.noise_floor = 0.0
-        self.wave_energy_history = deque([0.0] * 42, maxlen=42)
+        self.wave_energy_history = deque([0.0] * 84, maxlen=84)
         self.icon_size = 0
         self.geo_w = 0
         self.geo_h = 0
@@ -380,15 +392,69 @@ class BottomScreenIndicator:
         if not self.wave_canvas:
             return
         self.wave_canvas.delete("all")
-        self.wave_h = int(max(96, self.wave_canvas.winfo_reqheight()))
+        self.wave_h = int(max(104, self.wave_canvas.winfo_reqheight()))
         left = 8
         right = self.wave_w - 8
+        self.wave_left = left
+        self.wave_right = right
         base = self.wave_h // 2
+        self.wave_energy_history = deque([0.0] * self.wave_energy_history.maxlen, maxlen=self.wave_energy_history.maxlen)
+
+        # Spacey layered backdrop that stays lightweight (static rectangles).
+        self.wave_canvas.create_rectangle(left, 6, right, int(base * 0.88), fill="#08111F", outline="")
+        self.wave_canvas.create_rectangle(left, int(base * 0.88), right, int(base * 1.12), fill="#0A1628", outline="")
+        self.wave_canvas.create_rectangle(left, int(base * 1.12), right, self.wave_h - 6, fill="#08111A", outline="")
+
         self.wave_baseline = self.wave_canvas.create_line(left, base, right, base, fill="#1F2937", width=1)
         self.wave_line = None
         self.wave_line_glow = None
         self.wave_fill = None
         self.wave_scan = None
+        self.wave_trail_line = self.wave_canvas.create_line(
+            left,
+            base,
+            right,
+            base,
+            smooth=True,
+            splinesteps=22,
+            width=2,
+            fill="#67E8F9",
+        )
+        self.wave_trail_glow = self.wave_canvas.create_line(
+            left,
+            base,
+            right,
+            base,
+            smooth=True,
+            splinesteps=22,
+            width=8,
+            fill="#0EA5E9",
+        )
+        self.wave_scanline = self.wave_canvas.create_line(left, 6, left, self.wave_h - 6, fill="#334155", width=1)
+        self.wave_orb_glow = self.wave_canvas.create_oval(left - 6, base - 6, left + 6, base + 6, fill="#0EA5E9", outline="")
+        self.wave_orb = self.wave_canvas.create_oval(left - 3, base - 3, left + 3, base + 3, fill="#38BDF8", outline="")
+        self.wave_particles = []
+        self.wave_particle_meta = []
+        rng = random.Random((self.geo_seed ^ 0xA53C) & 0xFFFF)
+        particle_count = 18
+        for _ in range(particle_count):
+            size = rng.uniform(1.0, 2.6)
+            x = rng.uniform(left, right)
+            y = rng.uniform(10, self.wave_h - 10)
+            particle = self.wave_canvas.create_oval(x - size, y - size, x + size, y + size, fill="#243244", outline="")
+            self.wave_particles.append(particle)
+            self.wave_particle_meta.append(
+                {
+                    "x": x,
+                    "base_y": y,
+                    "vx": rng.uniform(0.6, 1.9),
+                    "amp": rng.uniform(3.0, 11.0),
+                    "phase": rng.uniform(0.0, math.pi * 2),
+                    "size": size,
+                    "bias": rng.uniform(-1.0, 1.0),
+                    "seed": rng.randint(3, 997),
+                }
+            )
         self.space_star_ids = []
         self.space_star_meta = []
         self.space_core = None
@@ -412,6 +478,22 @@ class BottomScreenIndicator:
             )
             self.wave_bars.append(bar)
             x += bar_w + gap
+
+        # Layer order for "space HUD" look.
+        if self.wave_trail_glow:
+            self.wave_canvas.tag_raise(self.wave_trail_glow)
+        if self.wave_trail_line:
+            self.wave_canvas.tag_raise(self.wave_trail_line)
+        for bar in self.wave_bars:
+            self.wave_canvas.tag_raise(bar)
+        if self.wave_baseline:
+            self.wave_canvas.tag_raise(self.wave_baseline)
+        if self.wave_orb_glow:
+            self.wave_canvas.tag_raise(self.wave_orb_glow)
+        if self.wave_orb:
+            self.wave_canvas.tag_raise(self.wave_orb)
+        if self.wave_scanline:
+            self.wave_canvas.tag_raise(self.wave_scanline)
 
     def _animate_waveform(self, mode: str = "listening"):
         if not self.wave_canvas or not self.wave_bars:
@@ -443,6 +525,7 @@ class BottomScreenIndicator:
 
         # Recorder/radio style bars.
         self.wave_phase += 0.22 + 1.1 * lvl
+        self._color_phase += 0.015 + (0.015 * lvl)
         base = self.wave_h // 2
         max_h = max(18, (self.wave_h // 2) - 10)
 
@@ -451,6 +534,44 @@ class BottomScreenIndicator:
         self._visual_agc = (self._visual_agc * 0.94) + (target_agc * 0.06)
         agc_scale = 0.85 + (0.95 / max(0.08, self._visual_agc))
         agc_scale = max(0.9, min(2.6, agc_scale))
+        voiced = min(1.0, lvl * agc_scale)
+
+        speech_now = voiced > 0.16
+        if speech_now and not self._speech_active:
+            self._burst_energy = 1.0
+        self._speech_active = speech_now
+        self._burst_energy = max(0.0, (self._burst_energy * 0.88) - 0.015)
+
+        # Reactive spectral trail to make the overlay feel alive and speech-driven.
+        self.wave_energy_history.append(voiced)
+        hist = list(self.wave_energy_history)
+        accent_r = int(max(24, min(255, 36 + (165 * high) + (42 * centroid) + (24 * self._burst_energy))))
+        accent_g = int(max(56, min(255, 98 + (118 * mid) + (58 * voiced))))
+        accent_b = int(max(88, min(255, 128 + (112 * low) + (24 * (1.0 - centroid)))))
+        trail_color = "#{:02X}{:02X}{:02X}".format(accent_r, accent_g, accent_b)
+        glow_color = "#{:02X}{:02X}{:02X}".format(
+            min(255, accent_r + 18),
+            min(255, accent_g + 28),
+            min(255, accent_b + 36),
+        )
+
+        if self.wave_trail_line and self.wave_trail_glow and len(hist) >= 4:
+            points = []
+            span = max(1.0, float(self.wave_right - self.wave_left))
+            total = len(hist) - 1
+            for idx, sample in enumerate(hist):
+                x = self.wave_left + (span * (idx / max(1, total)))
+                harmonic = 0.62 + (0.38 * math.sin((idx * 0.19) + (self.wave_phase * 0.95) + (centroid * 1.7)))
+                y = base - (sample * max_h * harmonic)
+                points.extend((x, y))
+            self.wave_canvas.coords(self.wave_trail_line, *points)
+            self.wave_canvas.coords(self.wave_trail_glow, *points)
+            self.wave_canvas.itemconfig(self.wave_trail_line, fill=trail_color, width=(2 + (1.6 * voiced)))
+            self.wave_canvas.itemconfig(
+                self.wave_trail_glow,
+                fill=glow_color,
+                width=(6 + (5.0 * voiced) + (3.0 * self._burst_energy)),
+            )
 
         n = len(self.wave_bars)
         center = (n - 1) / 2.0
@@ -467,14 +588,65 @@ class BottomScreenIndicator:
             falloff = 1.0 - min(1.0, abs(i - center) / (center + 0.001))
             osc = 0.66 + 0.34 * math.sin((self.wave_phase * (1.1 + centroid * 1.3)) + (i * 0.38))
             combined = (0.28 + 0.72 * falloff) * (0.20 + 0.80 * band_energy)
-            voiced = min(1.0, lvl * agc_scale)
             h = 2 + (max_h * voiced * combined * osc)
             x0, _, x1, _ = self.wave_canvas.coords(bar)
             top = base - h
             bottom = base + (h * 0.72)
             self.wave_canvas.coords(bar, x0, top, x1, bottom)
-            color = "#0891B2" if h < 10 else ("#06B6D4" if h < 22 else "#67E8F9")
+            bar_r = int(max(18, min(255, 20 + (120 * band_energy) + (95 * voiced))))
+            bar_g = int(max(72, min(255, 92 + (100 * mid) + (60 * falloff))))
+            bar_b = int(max(104, min(255, 122 + (120 * high) + (50 * low))))
+            color = "#{:02X}{:02X}{:02X}".format(bar_r, bar_g, bar_b)
             self.wave_canvas.itemconfig(bar, fill=color)
+
+        if self.wave_baseline:
+            base_color = "#1F2937" if voiced < 0.08 else "#334155"
+            self.wave_canvas.itemconfig(self.wave_baseline, fill=base_color, width=(1 if voiced < 0.2 else 2))
+
+        if self.wave_scanline:
+            sweep = (math.sin((self.wave_phase * 0.42) + (self._color_phase * 0.6)) + 1.0) * 0.5
+            x_scan = self.wave_left + (sweep * (self.wave_right - self.wave_left))
+            self.wave_canvas.coords(self.wave_scanline, x_scan, 6, x_scan, self.wave_h - 6)
+            scan_color = "#334155" if voiced < 0.08 else glow_color
+            self.wave_canvas.itemconfig(self.wave_scanline, fill=scan_color, width=(1 if voiced < 0.15 else 2))
+
+        if self.wave_orb and self.wave_orb_glow:
+            span = max(1.0, float(self.wave_right - self.wave_left))
+            orb_x = self.wave_left + ((0.20 + (0.64 * centroid) + (0.06 * math.sin(self.wave_phase * 0.72))) * span)
+            orb_y = base + (math.sin(self.wave_phase * 0.9) * (2 + (10 * voiced)))
+            core_r = 4 + (9 * voiced) + (6 * self._burst_energy)
+            glow_r = core_r + 8 + (11 * voiced)
+            self.wave_canvas.coords(self.wave_orb, orb_x - core_r, orb_y - core_r, orb_x + core_r, orb_y + core_r)
+            self.wave_canvas.coords(
+                self.wave_orb_glow,
+                orb_x - glow_r,
+                orb_y - glow_r,
+                orb_x + glow_r,
+                orb_y + glow_r,
+            )
+            self.wave_canvas.itemconfig(self.wave_orb, fill=trail_color)
+            self.wave_canvas.itemconfig(self.wave_orb_glow, fill=glow_color)
+
+        if self.wave_particles and self.wave_particle_meta:
+            for particle, meta in zip(self.wave_particles, self.wave_particle_meta):
+                meta["x"] += meta["vx"] * (0.35 + (2.2 * voiced))
+                meta["phase"] += 0.06 + (0.08 * (0.4 + voiced))
+                sway = math.sin((self.wave_phase * 0.55) + meta["phase"]) * meta["amp"] * (0.22 + voiced)
+                y = meta["base_y"] + sway + ((centroid - 0.5) * 9.0 * meta["bias"])
+                if meta["x"] > self.wave_right + 8:
+                    meta["x"] = self.wave_left - (4 + (meta["size"] * 2))
+                    meta["base_y"] = 8 + (meta["seed"] % max(2, self.wave_h - 16))
+                    meta["amp"] = 3.0 + ((meta["seed"] * 7) % 24) / 4.0
+                size = meta["size"] * (0.85 + (1.6 * voiced) + (0.7 * self._burst_energy))
+                self.wave_canvas.coords(
+                    particle,
+                    meta["x"] - size,
+                    y - size,
+                    meta["x"] + size,
+                    y + size,
+                )
+                particle_color = "#243244" if voiced < 0.07 else ("#3B82F6" if voiced < 0.24 else "#67E8F9")
+                self.wave_canvas.itemconfig(particle, fill=particle_color)
 
     def update_audio_level(self, level: float):
         """Thread-safe live amplitude input from recorder loop."""
@@ -758,15 +930,15 @@ class BottomScreenIndicator:
         if status == TranscriptionStatus.LISTENING:
             self._animate_geometric_strip(mode="listening")
             self._animate_waveform(mode="listening")
-            interval = 48
+            interval = 36
         elif status == TranscriptionStatus.PROCESSING:
             self._animate_geometric_strip(mode="processing")
             self._animate_waveform(mode="processing")
-            interval = 42
+            interval = 32
         elif status == TranscriptionStatus.TRANSCRIBING:
             self._animate_geometric_strip(mode="transcribing")
             self._animate_waveform(mode="transcribing")
-            interval = 36
+            interval = 30
         else:
             self._set_icon_idle()
             return
