@@ -130,9 +130,11 @@ class BottomScreenIndicator:
 
     def _update_visual_settings(self):
         """Update visual settings from configuration"""
-        self.width, self.height = self.config_manager.get_overlay_dimensions()
-        self.width = max(self.width, 500)
-        self.height = max(self.height, 300)
+        req_w, req_h = self.config_manager.get_overlay_dimensions()
+        # Compact overlay profile: small, centered, and visually lighter.
+        self.width = int(min(460, max(340, req_w)))
+        self.height = int(min(240, max(170, req_h)))
+        self.wave_w = max(280, self.width - 24)
         colors = self.config_manager.get_color_scheme()
 
         self.bg_color = colors['bg_color']
@@ -265,7 +267,24 @@ class BottomScreenIndicator:
             return
         x, y = self.config_manager.get_position_coordinates(screen_width, screen_height)
         reserved_bottom = 138 if self.dock_enabled else 86
-        y = min(y - 8, screen_height - self.height - reserved_bottom)
+
+        # Keep overlay centered to dock when dock is enabled and visible.
+        if self.dock_enabled and self.dock_window:
+            try:
+                geo = self.dock_window.geometry()  # e.g. 430x30+745+1008
+                size_part, x_part, y_part = geo.split("+", 2)
+                dock_w, dock_h = [int(v) for v in size_part.split("x", 1)]
+                dock_x = int(x_part)
+                dock_y = int(y_part)
+                dock_center_x = dock_x + (dock_w // 2)
+                x = int(dock_center_x - (self.width // 2))
+                y = int(dock_y - self.height - 10)
+            except Exception:
+                y = min(y - 8, screen_height - self.height - reserved_bottom)
+        else:
+            y = min(y - 8, screen_height - self.height - reserved_bottom)
+
+        x = max(8, min(screen_width - self.width - 8, x))
         y = max(10, y)
         self.window.geometry(f"{self.width}x{self.height}+{x}+{y}")
     
@@ -277,11 +296,11 @@ class BottomScreenIndicator:
         # Main frame
         main_frame = tk.Frame(
             self.window,
-            bg="#0B1220",
-            highlightthickness=1,
-            highlightbackground="#1E293B",
+            bg=self.transparent_key,
+            highlightthickness=0,
+            bd=0,
         )
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
         # Remove static icon/geometric strip; keep a single audio-reactive animation.
         self.status_icon_canvas = None
@@ -291,12 +310,12 @@ class BottomScreenIndicator:
         self.wave_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=126,
-            bg="#0B1220",
+            height=114,
+            bg=self.transparent_key,
             highlightthickness=0,
             bd=0,
         )
-        self.wave_canvas.pack(pady=(2, 6))
+        self.wave_canvas.pack(pady=(0, 4))
         self._init_waveform_strip()
 
         # Status text
@@ -316,22 +335,22 @@ class BottomScreenIndicator:
         self.preview_label = tk.Label(
             main_frame,
             textvariable=self.preview_var,
-            bg="#0B1220",
-            fg="#E2E8F0",
-            font=("Segoe UI", 24, "bold"),
+            bg=self.transparent_key,
+            fg="#E6F3FF",
+            font=("Segoe UI", 20, "bold"),
             wraplength=self.wave_w - 24,
             justify=tk.CENTER,
         )
-        self.preview_label.pack(pady=(0, 5))
+        self.preview_label.pack(pady=(0, 4))
         self.word_stream_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=52,
-            bg="#0B1220",
+            height=38,
+            bg=self.transparent_key,
             highlightthickness=0,
             bd=0,
         )
-        self.word_stream_canvas.pack(pady=(0, 4))
+        self.word_stream_canvas.pack(pady=(0, 2))
 
         # Disable progress bar (was perceived as non-audio green block movement).
         self.progress_var = tk.DoubleVar(value=0.0)
@@ -392,18 +411,13 @@ class BottomScreenIndicator:
         if not self.wave_canvas:
             return
         self.wave_canvas.delete("all")
-        self.wave_h = int(max(104, self.wave_canvas.winfo_reqheight()))
+        self.wave_h = int(max(92, self.wave_canvas.winfo_reqheight()))
         left = 8
         right = self.wave_w - 8
         self.wave_left = left
         self.wave_right = right
         base = self.wave_h // 2
         self.wave_energy_history = deque([0.0] * self.wave_energy_history.maxlen, maxlen=self.wave_energy_history.maxlen)
-
-        # Spacey layered backdrop that stays lightweight (static rectangles).
-        self.wave_canvas.create_rectangle(left, 6, right, int(base * 0.88), fill="#08111F", outline="")
-        self.wave_canvas.create_rectangle(left, int(base * 0.88), right, int(base * 1.12), fill="#0A1628", outline="")
-        self.wave_canvas.create_rectangle(left, int(base * 1.12), right, self.wave_h - 6, fill="#08111A", outline="")
 
         self.wave_baseline = self.wave_canvas.create_line(left, base, right, base, fill="#1F2937", width=1)
         self.wave_line = None
@@ -436,19 +450,19 @@ class BottomScreenIndicator:
         self.wave_particles = []
         self.wave_particle_meta = []
         rng = random.Random((self.geo_seed ^ 0xA53C) & 0xFFFF)
-        particle_count = 18
+        particle_count = 10
         for _ in range(particle_count):
             size = rng.uniform(1.0, 2.6)
             x = rng.uniform(left, right)
             y = rng.uniform(10, self.wave_h - 10)
-            particle = self.wave_canvas.create_oval(x - size, y - size, x + size, y + size, fill="#243244", outline="")
+            particle = self.wave_canvas.create_oval(x - size, y - size, x + size, y + size, fill="#2A3646", outline="")
             self.wave_particles.append(particle)
             self.wave_particle_meta.append(
                 {
                     "x": x,
                     "base_y": y,
-                    "vx": rng.uniform(0.6, 1.9),
-                    "amp": rng.uniform(3.0, 11.0),
+                    "vx": rng.uniform(0.45, 1.25),
+                    "amp": rng.uniform(2.2, 7.2),
                     "phase": rng.uniform(0.0, math.pi * 2),
                     "size": size,
                     "bias": rng.uniform(-1.0, 1.0),
@@ -463,9 +477,9 @@ class BottomScreenIndicator:
         self.space_arcs = []
         self.wave_bars = []
 
-        bar_count = 64
-        gap = 1
-        bar_w = max(4, int((right - left - ((bar_count - 1) * gap)) / bar_count))
+        bar_count = 56
+        gap = 2
+        bar_w = max(3, int((right - left - ((bar_count - 1) * gap)) / bar_count))
         x = left
         for _ in range(bar_count):
             bar = self.wave_canvas.create_rectangle(
@@ -533,21 +547,21 @@ class BottomScreenIndicator:
         target_agc = max(0.04, min(1.0, lvl))
         self._visual_agc = (self._visual_agc * 0.94) + (target_agc * 0.06)
         agc_scale = 0.85 + (0.95 / max(0.08, self._visual_agc))
-        agc_scale = max(0.9, min(2.6, agc_scale))
+        agc_scale = max(0.9, min(2.0, agc_scale))
         voiced = min(1.0, lvl * agc_scale)
 
         speech_now = voiced > 0.16
         if speech_now and not self._speech_active:
             self._burst_energy = 1.0
         self._speech_active = speech_now
-        self._burst_energy = max(0.0, (self._burst_energy * 0.88) - 0.015)
+        self._burst_energy = max(0.0, (self._burst_energy * 0.93) - 0.010)
 
         # Reactive spectral trail to make the overlay feel alive and speech-driven.
         self.wave_energy_history.append(voiced)
         hist = list(self.wave_energy_history)
-        accent_r = int(max(24, min(255, 36 + (165 * high) + (42 * centroid) + (24 * self._burst_energy))))
-        accent_g = int(max(56, min(255, 98 + (118 * mid) + (58 * voiced))))
-        accent_b = int(max(88, min(255, 128 + (112 * low) + (24 * (1.0 - centroid)))))
+        accent_r = int(max(26, min(210, 44 + (98 * high) + (16 * centroid) + (12 * self._burst_energy))))
+        accent_g = int(max(74, min(225, 106 + (82 * mid) + (34 * voiced))))
+        accent_b = int(max(108, min(245, 140 + (72 * low) + (16 * (1.0 - centroid)))))
         trail_color = "#{:02X}{:02X}{:02X}".format(accent_r, accent_g, accent_b)
         glow_color = "#{:02X}{:02X}{:02X}".format(
             min(255, accent_r + 18),
@@ -566,11 +580,11 @@ class BottomScreenIndicator:
                 points.extend((x, y))
             self.wave_canvas.coords(self.wave_trail_line, *points)
             self.wave_canvas.coords(self.wave_trail_glow, *points)
-            self.wave_canvas.itemconfig(self.wave_trail_line, fill=trail_color, width=(2 + (1.6 * voiced)))
+            self.wave_canvas.itemconfig(self.wave_trail_line, fill=trail_color, width=(1 + (1.2 * voiced)))
             self.wave_canvas.itemconfig(
                 self.wave_trail_glow,
                 fill=glow_color,
-                width=(6 + (5.0 * voiced) + (3.0 * self._burst_energy)),
+                width=(4 + (3.0 * voiced) + (2.0 * self._burst_energy)),
             )
 
         n = len(self.wave_bars)
@@ -591,11 +605,11 @@ class BottomScreenIndicator:
             h = 2 + (max_h * voiced * combined * osc)
             x0, _, x1, _ = self.wave_canvas.coords(bar)
             top = base - h
-            bottom = base + (h * 0.72)
+            bottom = base + (h * 0.62)
             self.wave_canvas.coords(bar, x0, top, x1, bottom)
-            bar_r = int(max(18, min(255, 20 + (120 * band_energy) + (95 * voiced))))
-            bar_g = int(max(72, min(255, 92 + (100 * mid) + (60 * falloff))))
-            bar_b = int(max(104, min(255, 122 + (120 * high) + (50 * low))))
+            bar_r = int(max(24, min(200, 34 + (88 * band_energy) + (62 * voiced))))
+            bar_g = int(max(82, min(220, 106 + (76 * mid) + (34 * falloff))))
+            bar_b = int(max(120, min(240, 146 + (76 * high) + (28 * low))))
             color = "#{:02X}{:02X}{:02X}".format(bar_r, bar_g, bar_b)
             self.wave_canvas.itemconfig(bar, fill=color)
 
@@ -614,8 +628,8 @@ class BottomScreenIndicator:
             span = max(1.0, float(self.wave_right - self.wave_left))
             orb_x = self.wave_left + ((0.20 + (0.64 * centroid) + (0.06 * math.sin(self.wave_phase * 0.72))) * span)
             orb_y = base + (math.sin(self.wave_phase * 0.9) * (2 + (10 * voiced)))
-            core_r = 4 + (9 * voiced) + (6 * self._burst_energy)
-            glow_r = core_r + 8 + (11 * voiced)
+            core_r = 3 + (6 * voiced) + (4 * self._burst_energy)
+            glow_r = core_r + 6 + (7 * voiced)
             self.wave_canvas.coords(self.wave_orb, orb_x - core_r, orb_y - core_r, orb_x + core_r, orb_y + core_r)
             self.wave_canvas.coords(
                 self.wave_orb_glow,
@@ -629,15 +643,15 @@ class BottomScreenIndicator:
 
         if self.wave_particles and self.wave_particle_meta:
             for particle, meta in zip(self.wave_particles, self.wave_particle_meta):
-                meta["x"] += meta["vx"] * (0.35 + (2.2 * voiced))
-                meta["phase"] += 0.06 + (0.08 * (0.4 + voiced))
-                sway = math.sin((self.wave_phase * 0.55) + meta["phase"]) * meta["amp"] * (0.22 + voiced)
+                meta["x"] += meta["vx"] * (0.28 + (1.5 * voiced))
+                meta["phase"] += 0.05 + (0.06 * (0.4 + voiced))
+                sway = math.sin((self.wave_phase * 0.55) + meta["phase"]) * meta["amp"] * (0.18 + (0.66 * voiced))
                 y = meta["base_y"] + sway + ((centroid - 0.5) * 9.0 * meta["bias"])
                 if meta["x"] > self.wave_right + 8:
                     meta["x"] = self.wave_left - (4 + (meta["size"] * 2))
                     meta["base_y"] = 8 + (meta["seed"] % max(2, self.wave_h - 16))
                     meta["amp"] = 3.0 + ((meta["seed"] * 7) % 24) / 4.0
-                size = meta["size"] * (0.85 + (1.6 * voiced) + (0.7 * self._burst_energy))
+                size = meta["size"] * (0.88 + (1.05 * voiced) + (0.38 * self._burst_energy))
                 self.wave_canvas.coords(
                     particle,
                     meta["x"] - size,
@@ -645,7 +659,7 @@ class BottomScreenIndicator:
                     meta["x"] + size,
                     y + size,
                 )
-                particle_color = "#243244" if voiced < 0.07 else ("#3B82F6" if voiced < 0.24 else "#67E8F9")
+                particle_color = "#2A3646" if voiced < 0.07 else ("#4B87C5" if voiced < 0.24 else "#7CCEE6")
                 self.wave_canvas.itemconfig(particle, fill=particle_color)
 
     def update_audio_level(self, level: float):
@@ -1104,48 +1118,36 @@ class BottomScreenIndicator:
             return
 
         try:
-            # Show window
-            self.window.deiconify()
-            self.window.lift()
-            
             # Update text
             self.status_var.set(message)
             self._refresh_dock_text(status=status)
-            
+
             # Update progress bar based on status
             pb = getattr(self, "progress_bar", None)
             if status == TranscriptionStatus.LISTENING:
+                # Show only while actively listening.
+                self.window.deiconify()
+                self.window.lift()
                 # Fresh motif each listening cycle for a "unique every time" feel.
                 self._init_geometric_motif(seed=(time.time_ns() & 0xFFFF))
                 if pb:
                     pb.configure(mode='indeterminate')
                     pb.start(10)  # Slow pulse
                 self._start_animation(status)
-            elif status == TranscriptionStatus.PROCESSING:
-                if pb:
-                    pb.configure(mode='indeterminate') 
-                    pb.start(5)   # Fast pulse
-                self._start_animation(status)
-            elif status == TranscriptionStatus.TRANSCRIBING:
-                if pb:
-                    pb.configure(mode='indeterminate')
-                    pb.start(3)   # Very fast pulse
-                self._start_animation(status)
             else:
+                # Hide overlay once listening stops; dock/tray already show processing/transcribing states.
+                self.window.withdraw()
                 self._stop_animation()
                 if pb:
                     pb.stop()
-                if status == TranscriptionStatus.COMPLETE:
-                    if pb:
-                        pb.configure(mode='determinate')
-                    self.progress_var.set(100)
-                    if self.status_icon_canvas:
-                        self.status_icon_canvas.itemconfig(self.status_icon_center, text="OK", fill="#16A34A")
-                else:
-                    self.progress_var.set(0)
-                    if status == TranscriptionStatus.ERROR and self.status_icon_canvas:
-                        self.status_icon_canvas.itemconfig(self.status_icon_center, text="!", fill=self.error_color)
-            
+                self.progress_var.set(0)
+                if self.preview_var:
+                    self.preview_var.set("")
+                self._bubble_tokens.clear()
+                self._last_stream_word_count = 0
+                if self.word_stream_canvas:
+                    self.word_stream_canvas.delete("all")
+             
             # Update colors based on status
             color = self.text_color
             if status == TranscriptionStatus.ERROR:
@@ -1270,22 +1272,22 @@ class BottomScreenIndicator:
             return
 
         x = self.wave_w - 8
-        y_mid = 26
+        y_mid = 18
         for i, token in enumerate(reversed(self._bubble_tokens)):
             age = i / max(1, len(self._bubble_tokens) - 1)
-            txt_color = "#E2E8F0" if age < 0.33 else ("#C7D2FE" if age < 0.66 else "#94A3B8")
-            bg_color = "#1E293B" if age < 0.5 else "#0F172A"
-            pad_x = 8
+            txt_color = "#EAF4FF" if age < 0.33 else ("#CFE3F7" if age < 0.66 else "#9DB8D2")
+            pad_x = 6
             # Width estimate avoids expensive font metrics and keeps updates cheap.
             width = (len(token) * 8) + (pad_x * 2)
             x0 = x - width
             x1 = x
             if x1 < 6:
                 break
-            y = y_mid - 10 if (i % 2 == 0) else y_mid + 10
-            c.create_rectangle(x0, y - 11, x1, y + 11, fill=bg_color, outline="#334155", width=1)
+            y = y_mid - 7 if (i % 2 == 0) else y_mid + 7
+            # Soft shadow + text only (no box) for a cleaner transparent look.
+            c.create_text((x0 + x1) / 2 + 1, y + 1, text=token, fill="#1E293B", font=("Segoe UI", 10, "bold"))
             c.create_text((x0 + x1) / 2, y, text=token, fill=txt_color, font=("Segoe UI", 10, "bold"))
-            x = x0 - 8
+            x = x0 - 10
 
     def clear_preview(self):
         """Clear the preview text - Thread-safe"""
