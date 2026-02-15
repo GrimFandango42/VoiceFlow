@@ -1,65 +1,50 @@
 @echo off
-cd /d %~dp0
+setlocal
+cd /d %~dp0\..\..
+
 echo ==========================================
-echo VoiceFlow - Smart Launch System
+echo VoiceFlow - Smart Launch
 echo ==========================================
 echo.
 
-REM Check if Python is available
-python --version >nul 2>&1
+set "PYTHON_EXE=python"
+if /I not "%VOICEFLOW_USE_GPU_VENV%"=="0" (
+    if exist ".venv-gpu\Scripts\python.exe" (
+        set "PYTHON_EXE=%cd%\.venv-gpu\Scripts\python.exe"
+    ) else if exist "venv\Scripts\python.exe" (
+        set "PYTHON_EXE=%cd%\venv\Scripts\python.exe"
+    )
+) else (
+    if exist "venv\Scripts\python.exe" (
+        set "PYTHON_EXE=%cd%\venv\Scripts\python.exe"
+    )
+)
+
+"%PYTHON_EXE%" --version >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Python not found! Please install Python 3.9+ first.
-    echo Download from: https://www.python.org/downloads/
+    echo [ERROR] Python not found. Install Python 3.9+ and retry.
     pause
     exit /b 1
 )
 
-echo [OK] Python detected
-echo.
-
-REM Check dependencies and offer to install if missing
-echo Checking system requirements...
-python setup_voiceflow.py --no-install
+echo [INFO] Running setup validation...
+"%PYTHON_EXE%" scripts\setup\setup_voiceflow.py --no-install
 if errorlevel 1 (
     echo.
-    echo [WARNING] Some dependencies are missing.
-    choice /C YN /M "Would you like to install missing dependencies now? (Y/N)"
-    if !errorlevel!==1 (
-        echo.
-        echo Installing dependencies...
-        python setup_voiceflow.py
+    echo [WARNING] Setup validation reported missing dependencies.
+    choice /C YN /M "Install missing dependencies now? (Y/N)"
+    if errorlevel 2 (
+        echo [WARNING] Continuing without installing missing dependencies.
+    ) else (
+        "%PYTHON_EXE%" scripts\setup\setup_voiceflow.py
         if errorlevel 1 (
-            echo.
-            echo [ERROR] Dependency installation failed!
+            echo [ERROR] Dependency installation failed.
             pause
             exit /b 1
         )
-    ) else (
-        echo.
-        echo [WARNING] Launching with missing dependencies - some features may not work.
-        timeout /t 3 /nobreak >nul
     )
 )
 
 echo.
-echo ==========================================
-echo Launching VoiceFlow (Visual Mode)
-echo ==========================================
-echo.
-echo Features:
-echo - System tray icon with status colors
-echo - Bottom-screen overlay (Wispr Flow-style)
-echo - Visual feedback for transcription states
-echo - Configurable overlay positioning
-echo - Background operation (can close terminal)
-echo.
-echo Press Ctrl+C to exit or close from tray menu
-echo.
-
-REM Launch VoiceFlow
-python -m localflow.cli_enhanced
-
-REM If we get here, the program exited
-echo.
-echo VoiceFlow has closed.
-pause
+echo [INFO] Launching VoiceFlow Quick...
+call VoiceFlow_Quick.bat

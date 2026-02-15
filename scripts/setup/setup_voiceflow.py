@@ -40,9 +40,10 @@ class VoiceFlowInstaller:
     """Smart installer with comprehensive environment validation"""
 
     def __init__(self):
-        self.project_root = Path(__file__).parent
-        self.requirements_file = self.project_root / "requirements_windows.txt"
-        self.config_file = self.project_root / "installer_config.json"
+        # Repository root (not scripts/setup directory)
+        self.project_root = Path(__file__).resolve().parents[2]
+        self.requirements_file = self.project_root / "scripts" / "setup" / "requirements_windows.txt"
+        self.config_file = self.project_root / "scripts" / "setup" / "installer_config.json"
 
         # Installation results tracking
         self.dependency_results: List[DependencyCheck] = []
@@ -193,11 +194,7 @@ class VoiceFlowInstaller:
 
         try:
             # Try to import the package - handle name mismatches
-            if package_name == 'RealtimeSTT':
-                # Special case for RealtimeSTT
-                import RealtimeSTT
-                version = getattr(RealtimeSTT, '__version__', 'unknown')
-            elif package_name == 'PIL' or package_name == 'Pillow':
+            if package_name == 'PIL' or package_name == 'Pillow':
                 # Pillow is imported as PIL
                 from PIL import Image
                 version = getattr(Image, 'VERSION', 'unknown')
@@ -400,7 +397,7 @@ class VoiceFlowInstaller:
         try:
             from voiceflow.core.config import Config
             from voiceflow.core.audio_enhanced import EnhancedAudioRecorder
-            from voiceflow.core.asr_buffer_safe import BufferSafeWhisperASR
+            from voiceflow.core.asr_engine import ASREngine
             return True, "Core modules import successfully"
         except ImportError as e:
             return False, f"Import failed: {str(e)[:50]}"
@@ -513,8 +510,8 @@ class VoiceFlowInstaller:
         if summary['issues_count'] == 0:
             print("\n[SUCCESS] VoiceFlow is ready to use!")
             print("\nNext steps:")
-            print("  - Run: python quick_smoke_test.py")
-            print("  - Launch: LAUNCH_TRAY.bat")
+            print("  - Run: python scripts\\dev\\quick_smoke_test.py")
+            print("  - Launch: VoiceFlow_Quick.bat")
         else:
             print(f"\n[ISSUES] {summary['issues_count']} problems found")
             print("\nIssues:")

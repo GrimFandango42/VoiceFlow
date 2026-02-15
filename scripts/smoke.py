@@ -1,8 +1,17 @@
 from __future__ import annotations
 
-from localflow.config import Config
-from localflow.inject import ClipboardInjector
-from localflow.textproc import apply_code_mode
+import sys
+from pathlib import Path
+
+# Allow direct script execution from repo root without editable install.
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from voiceflow.core.config import Config
+from voiceflow.integrations.inject import ClipboardInjector
+from voiceflow.core.textproc import apply_code_mode
 
 
 def main():

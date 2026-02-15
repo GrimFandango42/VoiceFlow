@@ -1,97 +1,75 @@
 #!/usr/bin/env python3
 """
-Quick verification that VoiceFlow visual system works
+Quick verification that VoiceFlow visual components are importable and responsive.
 """
 
-import sys
-import time
-import threading
+from __future__ import annotations
 
-def test_basic_functionality():
-    """Test basic imports and functionality"""
+import sys
+import threading
+import time
+from pathlib import Path
+
+
+def _prepare_path() -> None:
+    root = Path(__file__).resolve().parents[2]
+    src = root / "src"
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+
+
+def test_basic_functionality() -> bool:
     print("=== VoiceFlow Visual System Verification ===")
-    
-    # Test 1: Basic imports
+    _prepare_path()
+
     print("\n1. Testing imports...")
     try:
-        from localflow.visual_indicators import show_listening, show_complete, hide_status
-        print("   [OK] Visual indicators imported")
-    except Exception as e:
-        print(f"   [FAIL] Visual indicators failed: {e}")
+        from voiceflow.ui.visual_indicators import show_listening, show_complete, hide_status
+        from voiceflow.ui.enhanced_tray import EnhancedTrayController
+        from voiceflow.core.config import Config
+        print("   [OK] Visual indicator + tray imports succeeded")
+    except Exception as exc:
+        print(f"   [FAIL] Import check failed: {exc}")
         return False
-    
-    try:
-        from localflow.enhanced_tray import EnhancedTrayController
-        print("   [OK] Enhanced tray imported")
-    except Exception as e:
-        print(f"   [FAIL] Enhanced tray failed: {e}")
-        return False
-    
-    # Test 2: Basic tkinter
+
+    print("\n2. Testing tkinter availability...")
     try:
         import tkinter as tk
+
         root = tk.Tk()
-        root.withdraw()  # Hide immediately
+        root.withdraw()
         root.destroy()
         print("   [OK] tkinter functional")
-    except Exception as e:
-        print(f"   [FAIL] tkinter failed: {e}")
+    except Exception as exc:
+        print(f"   [FAIL] tkinter check failed: {exc}")
         return False
-    
-    # Test 3: CLI integration
-    print("\n2. Testing CLI integration...")
+
+    print("\n3. Testing lightweight visual sequence...")
     try:
-        from localflow.cli_enhanced import EnhancedApp
-        from localflow.config import Config
-        cfg = Config()
-        app = EnhancedApp(cfg)
-        print("   [OK] Enhanced CLI loads without errors")
-        
-        # Check if visual integration is present
-        if hasattr(app, 'visual_indicators_enabled'):
-            print("   [OK] Visual indicators integration present")
-        else:
-            print("   [FAIL] Visual indicators integration missing")
-            return False
-            
-    except Exception as e:
-        print(f"   [FAIL] CLI integration failed: {e}")
-        return False
-    
-    # Test 4: Quick visual display (non-blocking)
-    print("\n3. Testing visual display (5 second demo)...")
-    try:
-        def visual_test():
+        from voiceflow.ui.visual_indicators import show_listening, show_complete, hide_status
+
+        def visual_test() -> None:
             show_listening()
-            time.sleep(1)
-            show_complete("Test successful!")
-            time.sleep(2) 
+            time.sleep(0.8)
+            show_complete("Visual verification OK")
+            time.sleep(1.2)
             hide_status()
-        
-        # Run in background thread
-        thread = threading.Thread(target=visual_test, daemon=True)
-        thread.start()
-        thread.join(timeout=6)  # Wait max 6 seconds
-        print("   [OK] Visual display test completed")
-        
-    except Exception as e:
-        print(f"   [FAIL] Visual display failed: {e}")
+
+        worker = threading.Thread(target=visual_test, daemon=True)
+        worker.start()
+        worker.join(timeout=5.0)
+        print("   [OK] Visual sequence completed")
+    except Exception as exc:
+        print(f"   [FAIL] Visual sequence failed: {exc}")
         return False
-    
+
     print("\n=== VERIFICATION COMPLETE ===")
-    print("[OK] All visual components working correctly")
-    print("[OK] VoiceFlow visual system ready for use")
-    print("\nYou can now use:")
-    print("  - LAUNCH_VOICEFLOW_VISUAL.bat")
-    print("  - python voiceflow.py")
-    
+    print("[OK] Visual system basic checks passed")
+    print("[OK] Use VoiceFlow_Quick.bat for full runtime validation")
     return True
 
+
 if __name__ == "__main__":
-    success = test_basic_functionality()
-    if success:
-        print("\n[SUCCESS] Visual system is working!")
-        sys.exit(0)
-    else:
-        print("\n[FAILURE] Visual system has issues!")
-        sys.exit(1)
+    raise SystemExit(0 if test_basic_functionality() else 1)

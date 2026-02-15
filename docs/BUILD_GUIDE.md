@@ -28,6 +28,12 @@ pip install --upgrade pip
 pip install -r scripts\setup\requirements_windows.txt
 ```
 
+One-step option:
+
+```powershell
+.\Bootstrap_Windows.bat
+```
+
 Optional installer script:
 
 ```powershell

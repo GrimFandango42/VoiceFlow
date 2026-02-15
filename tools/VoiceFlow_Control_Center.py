@@ -202,12 +202,13 @@ class VoiceFlowControlCenter:
             self.update_status("✅ Ready")
 
     def run_command_async(self, command: List[str], description: str,
-                         callback: Optional[Callable] = None):
+                         callback: Optional[Callable[[bool], None]] = None):
         """Run command asynchronously and log output"""
         def run_in_thread():
             self.log(f"Starting: {description}")
             self.start_progress()
             self.update_status(f"Running: {description}")
+            success = False
 
             try:
                 # Start process
@@ -238,6 +239,7 @@ class VoiceFlowControlCenter:
                 if return_code == 0:
                     self.log(f"✅ {description} completed successfully")
                     self.update_status("✅ Complete")
+                    success = True
                 else:
                     self.log(f"❌ {description} failed with exit code {return_code}", "ERROR")
                     self.update_status("❌ Failed")
@@ -252,7 +254,7 @@ class VoiceFlowControlCenter:
 
                 # Run callback if provided
                 if callback:
-                    self.root.after(0, callback)
+                    self.root.after(0, lambda ok=success: callback(ok))
 
         # Start in separate thread
         thread = threading.Thread(target=run_in_thread, daemon=True)
@@ -281,26 +283,24 @@ class VoiceFlowControlCenter:
         except Exception as e:
             self.log(f"⚠️ Visual cleanup warning: {e}", "WARN")
 
-        def after_health_check():
-            # If health check passed, launch VoiceFlow
-            self.log("✅ Health check passed - launching VoiceFlow...")
-            self.process_start_time = time.time()  # Track start time
-            command = [
-                sys.executable,
-                "-c",
-                "import sys; sys.path.insert(0, 'src'); "
-                "import os; os.chdir('.'); "
-                "from voiceflow.ui.cli_enhanced import main; main()"
-            ]
-            self.run_command_async(command, "VoiceFlow Enhanced Application")
-
-        def on_health_failure():
-            # Show troubleshooting options if health check fails
-            self.log("⚠️ Health check failed - showing troubleshooting options...", "WARN")
-            self.show_troubleshoot_panel()
+        def after_health_check(passed: bool):
+            if passed:
+                self.log("✅ Health check passed - launching VoiceFlow...")
+                self.process_start_time = time.time()  # Track start time
+                command = [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.path.insert(0, 'src'); "
+                    "import os; os.chdir('.'); "
+                    "from voiceflow.ui.cli_enhanced import main; main()"
+                ]
+                self.run_command_async(command, "VoiceFlow Enhanced Application")
+            else:
+                self.log("⚠️ Health check failed - showing troubleshooting options...", "WARN")
+                self.show_troubleshoot_panel()
 
         # Run intelligent health check
-        self.run_smart_health_check(after_health_check, on_health_failure)
+        self.run_smart_health_check(after_health_check)
 
     def smart_setup(self):
         """Smart setup with comprehensive health checking"""
@@ -325,19 +325,10 @@ class VoiceFlowControlCenter:
             self.troubleshoot_frame.grid_remove()
             self.troubleshoot_visible = False
 
-    def run_smart_health_check(self, success_callback=None, failure_callback=None):
-        """Run health check with smart callbacks"""
-        def check_completed():
-            # This will be called after health check finishes
-            # We can check the result and call appropriate callback
-            if success_callback:
-                success_callback()
-            else:
-                if failure_callback:
-                    failure_callback()
-
+    def run_smart_health_check(self, completion_callback: Optional[Callable[[bool], None]] = None):
+        """Run quick smoke-based health check before launch."""
         command = [sys.executable, "scripts/dev/quick_smoke_test.py"]
-        self.run_command_async(command, "Intelligent Health Check", check_completed)
+        self.run_command_async(command, "Intelligent Health Check", completion_callback)
 
     def launch_voiceflow(self):
         """Legacy launch method - redirects to smart launch"""

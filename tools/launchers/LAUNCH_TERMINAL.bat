@@ -1,12 +1,11 @@
 @echo off
 cd /d %~dp0\..\..
-echo ========================================
-echo VoiceFlow - Terminal Mode (No Visuals)
-echo ========================================
+echo ==========================================
+echo VoiceFlow - Terminal Mode
+echo ==========================================
 echo.
-echo - Terminal output only
-echo - No system tray icon
-echo - No visual indicators
+echo - Console-first launch path
+echo - Uses voiceflow.py --no-tray
 echo.
 echo Press Ctrl+C to exit
 echo.
@@ -24,6 +23,6 @@ if /I not "%VOICEFLOW_USE_GPU_VENV%"=="0" (
         set "PYTHON_EXE=%cd%\venv\Scripts\python.exe"
     )
 )
-"%PYTHON_EXE%" -m voiceflow.ui.cli_enhanced --no-tray
+"%PYTHON_EXE%" voiceflow.py --no-tray
 
 pause

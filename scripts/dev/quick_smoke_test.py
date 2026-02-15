@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import List, Tuple, Dict, Any
 import subprocess
 
+# Allow direct script execution from repo root without editable install.
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
 class SmokeTestSuite:
     """Ultra-fast smoke tests for critical VoiceFlow functionality"""
 
@@ -216,7 +222,10 @@ class SmokeTestSuite:
             'keyboard',
             'pystray',
             'PIL',  # Pillow
-            'RealtimeSTT'
+            'faster_whisper',
+        ]
+        optional_deps = [
+            'torch',
         ]
 
         missing_deps = []
@@ -226,13 +235,23 @@ class SmokeTestSuite:
             except ImportError:
                 missing_deps.append(dep)
 
+        missing_optional = []
+        for dep in optional_deps:
+            try:
+                __import__(dep)
+            except ImportError:
+                missing_optional.append(dep)
+
         duration = time.perf_counter() - test_start
 
         if missing_deps:
             self.log_test("Dependencies", False, f"Missing: {', '.join(missing_deps)}", duration)
             return False
         else:
-            self.log_test("Dependencies", True, f"All {len(critical_deps)} available", duration)
+            details = f"All {len(critical_deps)} critical dependencies available"
+            if missing_optional:
+                details += f" (optional missing: {', '.join(missing_optional)})"
+            self.log_test("Dependencies", True, details, duration)
             return True
 
     def run_all_tests(self) -> bool:

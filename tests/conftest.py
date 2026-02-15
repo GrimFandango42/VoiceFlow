@@ -1,8 +1,7 @@
-"""Pytest configuration and shared fixtures for VoiceFlow test suite.
+"""Pytest configuration and shared fixtures for the VoiceFlow test suite.
 
-This makes packages like `localflow` and `voiceflow` importable from tests
-regardless of the selected testpaths, and provides shared fixtures for testing
-enhanced tray functionality, test infrastructure, and installer components.
+Ensures `src/` package imports resolve correctly (`voiceflow.*`) and provides
+shared fixtures for tray, installer, and stability-related tests.
 """
 from __future__ import annotations
 
@@ -19,8 +18,14 @@ import pytest
 def pytest_configure(config):
     """Configure pytest and add project root to Python path."""
     root = Path(__file__).resolve().parent.parent
+    src = root / "src"
+
+    # Keep src first so `import voiceflow` resolves to the package in src/,
+    # not the root-level voiceflow.py launcher script.
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
     if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+        sys.path.append(str(root))
 
 # Test Fixtures for Enhanced Functionality
 

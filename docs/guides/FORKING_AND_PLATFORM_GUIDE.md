@@ -78,6 +78,14 @@ This guide is the practical handoff for developers who want to fork VoiceFlow an
 - Force CPU when needed:
   - `VOICEFLOW_FORCE_CPU=1`
 
+## Fast Fork Bootstrap (Windows)
+
+- One-step setup helper:
+  - `Bootstrap_Windows.bat`
+- Under the hood this runs:
+  - `scripts/setup/bootstrap_windows.ps1`
+- It creates a venv, installs dependencies, and runs smoke validation.
+
 ## Testing Guidance For Forks
 
 ## Fast checks

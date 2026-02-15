@@ -19,6 +19,7 @@ This index points to the current, maintained documentation set for the Python-ba
 ## Platform and Forking
 
 - Forking and platform adaptation: `guides/FORKING_AND_PLATFORM_GUIDE.md`
+- Windows executable evaluation: `guides/WINDOWS_EXECUTABLE_EVALUATION.md`
 - Windows launch checklist: `guides/WINDOWS_APP_TEST_CHECKLIST.md`
 - App-specific validation scenarios: `guides/APPLICATION_SPECIFIC_TEST_SCENARIOS.md`
 
@@ -28,6 +29,7 @@ This index points to the current, maintained documentation set for the Python-ba
 - Performance analyses: `analysis/`
 - Archived historical docs: `archive/`
 - Legacy export artifacts: `VoiceFlow_Architecture_Guide.pdf` and `VoiceFlow_Architecture_Guide.txt` (reference only)
+- Latest cleanup audit: `reports/REPO_AUDIT_2026-02-15.md`
 
 ## Repository Layout (Relevant For Onboarding)
 

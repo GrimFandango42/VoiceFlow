@@ -10,6 +10,9 @@ src-tauri/WixTools/
 
 # Python
 python/venv/
+venv/
+.venv/
+.venv-gpu/
 python/__pycache__/
 *.pyc
 *.pyo
@@ -103,6 +106,7 @@ config.json
 test_results/
 tests/reports/
 tests/temp_audio/
+installation_report.json
 
 # Windows reserved name (can appear accidentally)
 nul

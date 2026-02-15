@@ -22,6 +22,12 @@ Optional health check:
 python scripts\dev\quick_smoke_test.py
 ```
 
+One-step bootstrap option:
+
+```powershell
+.\Bootstrap_Windows.bat
+```
+
 ## Launch Commands
 
 ### Standard (console visible)

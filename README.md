@@ -38,6 +38,12 @@ pip install --upgrade pip
 pip install -r scripts\setup\requirements_windows.txt
 ```
 
+Alternative one-step bootstrap:
+
+```powershell
+.\Bootstrap_Windows.bat
+```
+
 3. Launch VoiceFlow.
 
 ```powershell
@@ -142,6 +148,7 @@ If tray/overlay state looks stale, restart VoiceFlow and verify only one runtime
 - `docs/ARCHITECTURE.md` - architecture and data flow
 - `docs/TECHNICAL_OVERVIEW.md` - module-level implementation notes
 - `docs/guides/FORKING_AND_PLATFORM_GUIDE.md` - for contributors/fork maintainers
+- `docs/guides/WINDOWS_EXECUTABLE_EVALUATION.md` - executable packaging tradeoffs and plan
 
 ## License
 
