@@ -53,6 +53,13 @@ venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 ```
 
+## Platform Reality
+
+- VoiceFlow is currently **Windows-first** and that is the only environment validated end-to-end in active use.
+- Linux/macOS forks are possible, but you should expect to replace parts of hotkey, tray, and injection behavior.
+- If you plan to fork, read:
+  - [Forking And Platform Guide](docs/guides/FORKING_AND_PLATFORM_GUIDE.md)
+
 ## Usage
 
 ### Quick Start
@@ -214,6 +221,7 @@ Main dependencies:
 - [Technical Overview](docs/TECHNICAL_OVERVIEW.md): Architecture details
 - [User Guide](docs/USER_GUIDE.md): Detailed usage instructions
 - [Testing Notes](docs/TESTING_NOTES.md): Testing framework info
+- [Forking And Platform Guide](docs/guides/FORKING_AND_PLATFORM_GUIDE.md): Practical handoff for forks
 
 ## License
 

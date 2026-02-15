@@ -271,7 +271,8 @@ class BottomScreenIndicator:
             try:
                 geo = self.dock_window.geometry()  # e.g. 430x30+745+1008
                 dock_y = int(geo.rsplit("+", 1)[-1])
-                y = int(dock_y - self.height - 10)
+                # Keep animation close to the dock for a tighter visual stack.
+                y = int(dock_y - self.height - 4)
             except Exception:
                 y = min(y - 8, screen_height - self.height - reserved_bottom)
         else:
