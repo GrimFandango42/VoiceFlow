@@ -1,73 +1,89 @@
-# VoiceFlow Build Guide
+# VoiceFlow Build and Setup Guide
 
-## Quick Start
+## Scope
 
-1. **Check Prerequisites**
-   ```
-   CHECK_PREREQUISITES.bat
-   ```
+VoiceFlow in this repository is a Python runtime (Windows-first), not a Tauri/Electron build pipeline.
 
-2. **Build the App**
-   ```
-   COMPLETE_BUILD.bat
-   ```
+This guide covers:
+- environment setup
+- dependency installation
+- launch validation
+- optional packaging direction for fork maintainers
 
-## Manual Build Steps
+## Prerequisites
 
-If you prefer to build manually:
+- Python 3.9+
+- Windows 10/11 (primary validated target)
+- microphone device available
 
-### 1. Install Dependencies
+Optional for better performance:
+- NVIDIA GPU + working CUDA runtime
 
-#### Rust
-- Download from https://rustup.rs/
-- Run the installer
-- Restart your terminal
+## Environment Setup
 
-#### Node.js
-- Download from https://nodejs.org/
-- Install LTS version
-
-#### Microsoft C++ Build Tools (if needed)
-- Download from https://visualstudio.microsoft.com/visual-cpp-build-tools/
-- Install "Desktop development with C++"
-
-### 2. Build Commands
-
-```bash
-# Install Node dependencies
-npm install
-
-# Build frontend
-npm run build
-
-# Build Tauri app
-npm run tauri build
+```powershell
+python -m venv venv
+.\venv\Scripts\activate
+pip install --upgrade pip
+pip install -r scripts\setup\requirements_windows.txt
 ```
 
-## Output Locations
+Optional installer script:
 
-After successful build:
-- **Executable**: `src-tauri\target\release\voiceflow.exe`
-- **Installer**: `src-tauri\target\release\bundle\`
-- **Desktop Shortcut**: Created automatically
-
-## Troubleshooting
-
-### Build Fails
-1. Run `CHECK_PREREQUISITES.bat` to verify all dependencies
-2. Try debug build: `npm run tauri build -- --debug`
-3. Check `src-tauri\target\release\` for error logs
-
-### Missing Dependencies
-- Rust: Required for Tauri backend
-- Node.js: Required for frontend build
-- C++ Build Tools: Required for native modules
-- WebView2: Usually pre-installed with Windows
-
-### Development Mode
-For development without building:
-```
-dev.bat
+```powershell
+python scripts\setup\setup_voiceflow.py
 ```
 
-This runs the app in development mode with hot reload.
+## Verify Build/Runtime Readiness
+
+```powershell
+python scripts\dev\quick_smoke_test.py
+python scripts\list_audio_devices.py
+```
+
+If both pass, launch:
+
+```powershell
+.\VoiceFlow_Quick.bat
+```
+
+## Editable Install (Optional)
+
+If you prefer package-style imports while developing:
+
+```powershell
+pip install -e .
+```
+
+## Runtime Artifacts
+
+- Config: `%LOCALAPPDATA%\LocalFlow\config.json`
+- Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+
+## Test Commands
+
+Fast slice:
+
+```powershell
+pytest -q tests\test_textproc.py tests\test_injector_logic.py tests\test_sanitization_and_rate.py
+```
+
+Broader run:
+
+```powershell
+pytest -q
+```
+
+## Packaging Notes For Forks
+
+No single official installer pipeline is maintained in this branch.
+
+If you need distributable artifacts, common fork strategies are:
+- PyInstaller (`onefile` or directory mode)
+- signed internal launcher + managed Python runtime
+- OS-specific packaging in a downstream repo
+
+Before packaging, validate:
+- global hotkey reliability
+- injection behavior on your target apps
+- long-dictation latency and memory profile

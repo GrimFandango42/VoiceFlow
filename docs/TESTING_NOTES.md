@@ -1,55 +1,66 @@
-# Testing Notes (2025-09-08)
+# Testing Notes
 
-This document summarizes the current automated testing status and recent fixes.
+## Scope
 
-- Environment: Windows, Python 3.13, venv with `requirements-voiceflow.txt` + `requirements-dev.txt`.
-- Commands
-  - VoiceFlow unit slice: `pytest -q tests/test_textproc.py tests/test_injector_logic.py tests/test_sanitization_and_rate.py`
-  - Full suite: `pytest -q` (includes broader VoiceFlow tests)
+These notes describe practical validation for the current Windows-first VoiceFlow runtime.
 
-Recent fixes
-- Fixed VoiceFlow code-mode regex replacement and whitespace handling.
-- Hardened injection fallbacks; added clipboard preservation safety.
-- Cleaned `localflow/config.py` duplication; consistent defaults.
-- Added `paste_hotkey` and `get_config()` in `voiceflow.core.config` for tests.
-- Implemented HotkeyManager API to support both simple and named registrations; added `start_listening/stop_listening`.
-- Added `ClipboardManager.copy_text` alias and robust copy/copy_and_paste separation in app flows.
-- Implemented `VoiceFlowApp.paste_transcription_from_hotkey` and tracked `last_transcription`.
-- Entry points: ensured `VoiceFlowConfig` constructed via kwargs (debug/lite) and used `from_env()` classmethod in main; made argparse ignore unknown args.
-- StreamTranscriber: adjusted default segment/stride to be test-friendly; now passes dummy model test.
-- voiceflow_tray: avoided calling patched `pystray.Menu`, using list menu for test compatibility.
-- Added test shims: `voiceflow.audio.device.AudioDeviceManager`, `voiceflow.ui.systray.SystemTrayIcon/MenuItem`.
+## Recommended Local Validation
 
-Status snapshot
-- Before: 40+ failures during collection and runtime.
-- After: 32 failures, 65 passed, 1 skipped (full `pytest -q`).
-- Major remaining failures are in Windows-heavy integration tests and a few test authoring issues (e.g., undefined `self.default_config`, patching non-existent `pynput.keyboard.GlobalHotKey`, pystray test fixture bug).
+### 1. Environment smoke check
 
-Next candidates
-- Add markers to segment Windows/UI/integration tests for selective runs.
-- Flesh out `voiceflow.core.audio`/`transcription` factories to cover additional engine/recorder types or expand stubs.
-- Consider a headless mode for system tray to simplify CI.
+```powershell
+python scripts\dev\quick_smoke_test.py
+```
 
----
+### 2. Fast regression slice
 
-## Update (2026-02)
+```powershell
+pytest -q tests\test_textproc.py tests\test_injector_logic.py tests\test_sanitization_and_rate.py
+```
 
-Recent reliability/performance tuning added new behavior worth testing explicitly:
+### 3. Broader suite
 
-- Config migration for legacy performance settings in `voiceflow.utils.settings`.
-- Auto-prefer GPU (`cuda` + `float16`) when runtime checks pass.
-- Lower-overhead preview-stream shutdown on release.
-- Medium/long dictation speed tuning via pause compaction defaults.
+```powershell
+pytest -q
+```
 
-Recommended manual verification matrix:
+## Manual Runtime Matrix
 
-- Short utterance: 3-5 seconds.
-- Medium utterance: 8-12 seconds.
-- Long utterance: 20-40 seconds with pauses.
+Use these dictation scenarios for release validation:
 
-For each case, verify:
+1. Short utterance: 3-5 seconds.
+2. Medium utterance: 8-12 seconds.
+3. Long utterance: 20-40 seconds with pauses.
 
-- No dropped words on release.
-- Release-to-text latency is stable.
-- Formatting remains consistent and usable.
-- Overlay behavior does not affect transcription speed.
+For each run, verify:
+- no dropped text
+- stable release-to-text latency
+- correct target-window injection
+- no sticky listening state after release
+- overlay/tray behavior remains responsive
+
+## High-Risk Areas
+
+- hotkey press/release state machine
+- live preview/checkpoint handling during hold
+- focus handling around injection
+- medium/long utterance latency tuning
+
+## Helpful Diagnostics
+
+```powershell
+python scripts\list_audio_devices.py
+python scripts\debugging\debug_hang_issue.py
+python scripts\debugging\debug_nonetype_issue.py
+```
+
+Logs:
+- `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+
+## Notes For Fork Maintainers
+
+- Windows integration tests are more representative than generic unit tests for hotkey/injection behavior.
+- If you change hotkey or injection internals, run manual validation in at least:
+  - Notepad
+  - VS Code
+  - browser text inputs

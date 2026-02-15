@@ -1,238 +1,148 @@
 # VoiceFlow
 
-> **Author's Note**: This project has been primarily vibe coded with Claude. It's been fun to code with Claude. Feel free to tear the code apart - submit issues where Claude is good and bad at coding. Feel free to fork it off. I promise it should mostly work on a Windows machine, which is where I've tested it. Feel free to make your own, do what you need to, and hopefully you find it useful to avoid paying for equivalent transcription services (likely better transcription services for more money, but oh well). Do with it as you please, and again feel free to submit any issues. I may or may not ever get to them.
-
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](https://pytest.org/)
 
-A production-quality voice transcription system for Windows that converts speech to text using state-of-the-art AI models. Features WhisperX integration, speaker diarization, and word-level timestamps. Works offline with no data sent to external servers - your voice data stays completely private.
+VoiceFlow is a local, push-to-talk transcription app for Windows. It records while a hotkey is held, transcribes on release, and injects text into your active application (editor, terminal, browser, chat client).
 
-## What It Does
+Primary goals:
+- fast release-to-text turnaround
+- stable behavior for short and long dictation
+- local-first privacy (no required cloud service for ASR)
 
-- Press and hold a hotkey (default: Ctrl+Shift) to record speech
-- Automatically transcribes using WhisperX with 70x realtime performance
-- Types the transcribed text into whatever application you're using
-- Advanced features: speaker diarization, word timestamps, context awareness
-- Everything happens locally on your machine - no internet required
+## Current State
 
-## Control Center
+- Platform: Windows-first (actively tested and tuned on Windows).
+- Engine: `faster-whisper` with CPU and optional CUDA acceleration.
+- UI: system tray + overlay indicators + optional Control Center.
+- Focus area: reliable dictation workflow for coding and technical writing.
 
-![VoiceFlow Control Center](assets/control-center-gui-clean.png)
+For cross-platform forks (Linux/macOS), read `docs/guides/FORKING_AND_PLATFORM_GUIDE.md`.
 
-The Control Center provides system management and monitoring. Launch it with:
+## Quick Start (Windows)
 
-```bash
-# Windows
-tools\launchers\LAUNCH_CONTROL_CENTER.bat
+1. Clone and create a virtual environment.
 
-# Or run directly
-python tools/VoiceFlow_Control_Center.py
-```
-
-## Installation
-
-### Prerequisites
-- Python 3.9 or higher
-- Windows (tested here, other platforms untested)
-- A microphone
-- 4GB+ RAM recommended
-
-### Install Steps
-
-```bash
-# Clone the repository
+```powershell
 git clone https://github.com/yourusername/voiceflow.git
 cd voiceflow
-
-# Create virtual environment (recommended)
 python -m venv venv
-venv\Scripts\activate  # Windows
-
-# Install dependencies
-pip install -r requirements.txt
+.\venv\Scripts\activate
 ```
 
-## Platform Reality
+2. Install dependencies.
 
-- VoiceFlow is currently **Windows-first** and that is the only environment validated end-to-end in active use.
-- Linux/macOS forks are possible, but you should expect to replace parts of hotkey, tray, and injection behavior.
-- If you plan to fork, read:
-  - [Forking And Platform Guide](docs/guides/FORKING_AND_PLATFORM_GUIDE.md)
-
-## Usage
-
-### Quick Start
-
-```bash
-# Launch with system tray
-START_VOICEFLOW.bat
-
-# Or launch terminal mode
-LAUNCH_VOICEFLOW.bat
+```powershell
+pip install --upgrade pip
+pip install -r scripts\setup\requirements_windows.txt
 ```
 
-### Basic Operation
+3. Launch VoiceFlow.
 
-1. Launch VoiceFlow using one of the methods above
-2. Press and hold `Ctrl+Shift` to start recording
-3. Speak while holding the keys
-4. Release the keys to stop recording and transcribe
-5. The transcribed text appears in your active window with intelligent formatting
+```powershell
+.\VoiceFlow_Quick.bat
+```
 
-### Visual Indicators
+## Launch Options
 
-The system shows status with colored indicators:
+| Mode | Command | When to use |
+|---|---|---|
+| Standard | `VoiceFlow.bat` | Normal use with visible console output |
+| Quick | `VoiceFlow_Quick.bat` | Daily use, no extra pause on exit |
+| Silent tray | `VoiceFlow_Silent.bat` | Minimized/background workflow |
+| Control Center | `tools\launchers\LAUNCH_CONTROL_CENTER.bat` | Setup, diagnostics, and guided launch |
 
-- **Blue**: Ready for input
-- **Orange**: Recording (while holding hotkey)
-- **Green**: Processing/transcribing
-- **Red**: Error occurred
+Manual launch (no batch files):
 
-## Configuration
+```powershell
+$env:PYTHONPATH = "$pwd\src"
+python -m voiceflow.ui.cli_enhanced
+```
 
-Settings can be adjusted through:
+## Basic Usage
 
-- **System Tray**: Right-click the tray icon for basic toggles
-- **Configuration Files**: JSON files in the config directory
-- **Command Line**: Various startup options available
+1. Start VoiceFlow.
+2. Hold the push-to-talk hotkey (default: `Ctrl+Shift`).
+3. Speak while holding.
+4. Release to transcribe and inject text to the active target.
 
-Common settings:
-- Change hotkey combinations
-- Switch between typing and clipboard paste
-- Toggle "code mode" for programming terms
-- Adjust audio devices and quality
+Tray menu includes toggles for:
+- code mode
+- paste vs type injection
+- auto-enter
+- visual indicators/dock
+- push-to-talk preset selection
 
-## Architecture
-
-The system has four main layers:
-
-1. **UI Layer**: System tray, visual indicators, Control Center GUI
-2. **Integration Layer**: Hotkey capture, text injection, system events
-3. **Core Processing**: Audio capture, Whisper transcription, text formatting
-4. **Hardware Layer**: Audio devices, OS integration, file system
+## Architecture At A Glance
 
 ```
 src/voiceflow/
-├── core/           # Audio processing and transcription
-├── ui/             # User interface components
-├── integrations/   # System integrations and hotkeys
-└── utils/          # Utilities and configuration
+  core/          audio capture, ASR, streaming preview, text processing
+  integrations/  hotkeys and text injection
+  ui/            tray controller, overlay indicators, CLI runtime
+  utils/         settings, logging, monitoring, validation
+  ai/            optional correction/command/adaptive learning layer
 ```
 
-Key components:
-- `core/asr_production.py`: Production WhisperX transcription engine
-- `ui/cli_ultra_simple.py`: Simple production CLI interface
-- `ui/enhanced_tray.py`: System tray interface
-- `integrations/inject.py`: Text injection system
-- `ui/visual_indicators.py`: Status display system
-- `voiceflow_fixed.py`: Enhanced CLI with state management and error recovery
+Runtime entrypoint for day-to-day use:
+- `src/voiceflow/ui/cli_enhanced.py`
+
+See:
+- `docs/ARCHITECTURE.md`
+- `docs/TECHNICAL_OVERVIEW.md`
+
+## Configuration, Logs, and Data Paths (Windows)
+
+- Config: `%LOCALAPPDATA%\LocalFlow\config.json`
+- Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+
+Environment overrides:
+- `VOICEFLOW_FORCE_CPU=1` to force CPU mode
+- `VOICEFLOW_USE_GPU_VENV=0` to prefer `venv` over `.venv-gpu` in launchers
 
 ## Testing
 
-```bash
-# Run unit tests
-pytest tests/unit/
+Quick checks:
 
-# Run all tests
-pytest
-
-# Quick health check
-python scripts/dev/health_check_simple.py
-
-# Stress testing
-python tests/stress/test_edge_case_stress.py
+```powershell
+python scripts\dev\quick_smoke_test.py
+pytest -q tests\test_textproc.py tests\test_injector_logic.py tests\test_sanitization_and_rate.py
 ```
 
-## Performance
+Broader run:
 
-Production performance on modern hardware:
-- **Transcription speed**: 70x realtime with WhisperX (vs 10-15x with standard Whisper)
-- **Latency**: 50-150ms after key release
-- **Memory usage**: 1-3GB depending on model size
-- **Accuracy**: Professional-grade with word timestamps and speaker diarization
-- **Reliability**: Enhanced error handling with auto-recovery from failures
-- Works with or without GPU acceleration
+```powershell
+pytest -q
+```
 
-### Recent Tuning (2026)
-
-- Improved medium/long dictation latency by tightening pause-compaction defaults.
-- Added safe config migration to prefer `cuda` + `float16` when CUDA runtime is healthy.
-- Reduced preview-stream shutdown overhead on key release.
-- Stabilized long dictation behavior while preserving output quality.
-- Kept overlay animation isolated from ASR path to avoid transcription slowdowns.
-
-## Recent Improvements (Latest)
-
-- Fixed hanging transcription issue with stronger state management.
-- Production ASR integration with high realtime performance.
-- Enhanced error handling for audio/transcription failures.
-- Visual indicator cleanup for persistent notification edge cases.
-- Smart text formatting with pause detection and context awareness.
-- Diagnostic tools for troubleshooting and testing.
+More testing details: `docs/TESTING_NOTES.md`.
 
 ## Troubleshooting
 
-**Stuck in "listening" state or persistent notifications**:
-```bash
-python force_cleanup.py  # Emergency cleanup of visual indicators
-python voiceflow_fixed.py  # Use enhanced CLI with auto-recovery
+If audio or transcription is not behaving as expected:
+
+```powershell
+python scripts\list_audio_devices.py
+python scripts\debugging\debug_hang_issue.py
+python scripts\debugging\debug_nonetype_issue.py
 ```
 
-**Transcription hanging or not responding**:
-```bash
-python debug_hang_issue.py  # Diagnostic tool to identify issues
-python test_hotkey_issue.py  # Test hotkey and audio systems
+If tray/overlay state looks stale, restart VoiceFlow and verify only one runtime is active:
+
+```powershell
+.\VoiceFlow_Quick.bat
 ```
 
-**Audio not working**:
-```bash
-python scripts/list_audio_devices.py  # List available microphones
-```
+## Documentation Map
 
-**Performance issues**:
-- Try smaller Whisper model (`base.en` instead of `large`)
-- Check if GPU drivers are installed for CUDA support
-- Close other memory-intensive applications
-
-**Permission errors**:
-- Run as administrator on Windows
-- Check microphone permissions in Windows settings
-
-## Known Issues
-
-- Primarily tested on Windows 11
-- May not work well with some applications that block input simulation
-- Large Whisper models require significant RAM
-- GPU support depends on CUDA installation
-
-## Dependencies
-
-Main dependencies:
-- `faster-whisper`: Optimized Whisper inference
-- `sounddevice`: Audio capture
-- `keyboard`: Hotkey detection and text injection
-- `pyperclip`: Clipboard operations
-- `tkinter`: GUI components
-- `torch`: ML framework (CPU/CUDA)
-
-## Documentation
-
-- [Technical Overview](docs/TECHNICAL_OVERVIEW.md): Architecture details
-- [User Guide](docs/USER_GUIDE.md): Detailed usage instructions
-- [Testing Notes](docs/TESTING_NOTES.md): Testing framework info
-- [Forking And Platform Guide](docs/guides/FORKING_AND_PLATFORM_GUIDE.md): Practical handoff for forks
+- `docs/README.md` - full docs index
+- `docs/HOW_TO_LAUNCH.md` - launch modes and diagnostics
+- `docs/USER_GUIDE.md` - usage and settings
+- `docs/ARCHITECTURE.md` - architecture and data flow
+- `docs/TECHNICAL_OVERVIEW.md` - module-level implementation notes
+- `docs/guides/FORKING_AND_PLATFORM_GUIDE.md` - for contributors/fork maintainers
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file.
-
-## Acknowledgments
-
-- [OpenAI Whisper](https://github.com/openai/whisper) for the speech recognition
-- [faster-whisper](https://github.com/guillaumekln/faster-whisper) for optimized inference
-- Various Python libraries that make this possible
-
----
-
-**VoiceFlow** - Local speech-to-text for personal use
+MIT License. See `LICENSE`.

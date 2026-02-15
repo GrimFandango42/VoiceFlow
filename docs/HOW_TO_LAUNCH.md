@@ -1,167 +1,99 @@
-# VoiceFlow - How to Launch Guide
+# VoiceFlow Launch Guide (Windows)
 
-## 🚀 Quick Launch Options
+## Recommended Order
 
-VoiceFlow offers **3 main ways** to launch:
+1. `VoiceFlow_Quick.bat` for normal day-to-day use.
+2. `VoiceFlow.bat` when you want visible console logs.
+3. `VoiceFlow_Silent.bat` for background/tray-first mode.
+4. `tools\launchers\LAUNCH_CONTROL_CENTER.bat` for guided setup and diagnostics.
 
-### Option 1: Control Center (Recommended)
-**Double-click:** `tools/launchers/LAUNCH_CONTROL_CENTER.bat`
-- ✅ Full GUI control interface
-- ✅ Real-time status monitoring
-- ✅ Easy configuration management
-- ✅ Performance metrics display
-- ✅ System diagnostics and validation
+## One-Time Setup
 
-### Option 2: Enhanced Tray Mode
-**Double-click:** `START_VOICEFLOW.bat`
-- ✅ System tray icon with visual indicators
-- ✅ Real-time transcription feedback
-- ✅ Quick access to settings
-- ✅ Background operation mode
-
-### Option 3: Terminal Mode (Debugging)
-**Double-click:** `LAUNCH_VOICEFLOW.bat`
-- ✅ Terminal output with detailed logs
-- ✅ No visual indicators
-- ✅ Good for troubleshooting
-- ✅ Performance monitoring output
-
-## 🔧 Manual Launch (Advanced)
-
-If batch files don't work, use command line:
-
-```bash
-# Control Center (Recommended)
-cd C:\AI_Projects\VoiceFlow
-python tools/VoiceFlow_Control_Center.py
-
-# Enhanced Tray Mode
-cd C:\AI_Projects\VoiceFlow
-venv/Scripts/python.exe -c "
-import sys
-sys.path.insert(0, 'src')
-from voiceflow.ui.enhanced_tray import main
-main()
-"
-
-# Terminal Mode
-cd C:\AI_Projects\VoiceFlow
-venv/Scripts/python.exe -c "
-import sys
-sys.path.insert(0, 'src')
-from voiceflow.ui.cli_ultra_performance import main
-main()
-"
+```powershell
+python -m venv venv
+.\venv\Scripts\activate
+pip install --upgrade pip
+pip install -r scripts\setup\requirements_windows.txt
 ```
 
-## 📋 Requirements Check
+Optional health check:
 
-Before launching, ensure you have:
-
-```bash
-# Install dependencies
-pip install -r requirements_windows.txt
-
-# Verify installation
-python verify_visual_system.py
+```powershell
+python scripts\dev\quick_smoke_test.py
 ```
 
-## 🎮 How to Use
+## Launch Commands
 
-1. **Launch** using one of the methods above
-2. **Press and hold** your hotkey to record (default: `Ctrl+Shift+Space`)
-3. **Speak** while holding the key
-4. **Release** key to stop recording and transcribe
-5. **Text appears** automatically in your active window
+### Standard (console visible)
 
-## ⚙️ Configuration
-
-### Hotkey Options (Right-click tray):
-- `Ctrl+Shift+Space` (default)
-- `Ctrl+Alt+Space`  
-- `Ctrl+Space`
-- `Alt+Space`
-- `Ctrl+Alt` (no key)
-
-### Settings Toggle (Keyboard shortcuts):
-- `Ctrl+Alt+C` - Toggle code mode
-- `Ctrl+Alt+P` - Toggle paste/type mode
-- `Ctrl+Alt+Enter` - Toggle auto-enter
-
-## 🏗️ Project Structure (Cleaned)
-
-```
-VoiceFlow/
-├── LAUNCH_TRAY.bat          # Visual mode launcher ⭐
-├── LAUNCH_TERMINAL.bat      # Terminal mode launcher ⭐  
-├── README.md                # Project overview
-├── requirements_windows.txt # Dependencies
-├── verify_visual_system.py  # System test
-├── localflow/              # Main package
-│   ├── cli_enhanced.py     # Enhanced CLI with visuals
-│   ├── visual_indicators.py # Bottom overlay system
-│   ├── enhanced_tray.py    # Tray icon system
-│   └── ...                 # Other core modules
-├── tests/comprehensive/     # Full test suite
-└── archive/                # Old files (cleaned up)
-    ├── test_scripts/       # Archived tests  
-    ├── documentation/      # Old docs
-    └── old_launchers/      # Old batch files
+```powershell
+.\VoiceFlow.bat
 ```
 
-## 🧪 Testing
+### Quick (recommended)
 
-### Quick Verification:
-```bash
-python verify_visual_system.py
+```powershell
+.\VoiceFlow_Quick.bat
 ```
 
-### Comprehensive Testing:
-```bash
-python run_comprehensive_tests.py
+### Silent tray mode
+
+```powershell
+.\VoiceFlow_Silent.bat
 ```
 
-**⚠️ WARNING**: Comprehensive tests reveal critical stability issues. See `CRITICAL_GUARDRAILS_NEEDED.md` for details.
+### Control Center
 
-## 🐛 Test Results Summary
+```powershell
+tools\launchers\LAUNCH_CONTROL_CENTER.bat
+```
 
-### ✅ Working:
-- Basic transcription workflow  
-- Visual indicators (overlay + tray)
-- System tray integration
-- Configuration persistence
-- Short audio processing
+Or:
 
-### 🚨 Known Issues:
-- **Edge cases cause crashes** (10/40 tests failed)
-- **Extreme inputs crash Whisper** (NaN, Inf values)
-- **Thread safety issues** with visual updates
-- **Memory leaks** in long sessions  
-- **Integration tests cause segfaults**
+```powershell
+python tools\VoiceFlow_Control_Center.py
+```
 
-## 🛡️ Stability Recommendations
+## Manual Python Launch
 
-**For Production Use:**
-1. **Implement critical guardrails** from `CRITICAL_GUARDRAILS_NEEDED.md`
-2. **Avoid extreme inputs** (very long recordings, unusual sample rates)
-3. **Monitor memory usage** during long sessions
-4. **Use Terminal mode** for debugging issues
+From repo root:
 
-**For Development:**
-1. **Run comprehensive tests** before changes
-2. **Test edge cases** with new features
-3. **Monitor thread safety** in visual components
+```powershell
+$env:PYTHONPATH = "$pwd\src"
+python -m voiceflow.ui.cli_enhanced
+```
 
-## 🎯 Status Summary
+Terminal/no-tray variant:
 
-- ✅ **Visual System**: Working with Wispr Flow-style overlay
-- ✅ **Core Functionality**: Transcription works for normal usage  
-- ✅ **Repository Cleanup**: Organized and external-ready
-- ⚠️  **Stability**: Needs guardrails for production use
-- 🔄 **Comprehensive Testing**: Revealed critical issues requiring fixes
+```powershell
+$env:PYTHONPATH = "$pwd\src"
+python -m voiceflow.ui.cli_enhanced --no-tray
+```
 
-## 🚀 Ready to Launch!
+## Basic Operation
 
-**For immediate use:** `LAUNCH_TRAY.bat`  
-**For development:** `LAUNCH_TERMINAL.bat`  
-**For production:** Implement guardrails first
+1. Hold the push-to-talk hotkey (default: `Ctrl+Shift`).
+2. Speak while holding.
+3. Release to transcribe and inject text.
+
+## If Launch Fails
+
+Run:
+
+```powershell
+python scripts\list_audio_devices.py
+python scripts\debugging\debug_hang_issue.py
+python scripts\debugging\debug_nonetype_issue.py
+```
+
+Then relaunch with `VoiceFlow.bat` to capture console logs.
+
+## Runtime Paths
+
+- Config: `%LOCALAPPDATA%\LocalFlow\config.json`
+- Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+
+## Notes
+
+- If elevated apps do not receive injected text, run VoiceFlow with matching permissions.
+- If GPU behaves unexpectedly, set `VOICEFLOW_FORCE_CPU=1` and compare latency/stability.

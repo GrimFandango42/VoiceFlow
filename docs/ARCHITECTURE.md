@@ -1,261 +1,152 @@
 # VoiceFlow Architecture
 
-## Overview
+## Scope
 
-VoiceFlow is a desktop application built with Tauri, combining the performance of Rust with the flexibility of web technologies. It provides real-time voice transcription using OpenAI's Whisper model running locally on GPU.
+This document describes the current VoiceFlow runtime architecture in this repository:
 
-## System Architecture
+- Python application
+- Windows-first desktop workflow
+- push-to-talk recording with release-time transcription and text injection
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        User Interface                        │
-│                    (React + Vite + CSS)                     │
-├─────────────────────────────────────────────────────────────┤
-│                      Tauri Runtime                          │
-│                    (Rust + WebView2)                        │
-├─────────────────────────────────────────────────────────────┤
-│                    Backend Services                         │
-├─────────────┬────────────────┬─────────────────────────────┤
-│   Hotkey    │    Window      │      System Tray           │
-│  Manager    │   Manager      │      Integration           │
-├─────────────┴────────────────┴─────────────────────────────┤
-│                  WebSocket Client                           │
-│              (Rust - Tungstenite)                          │
-├─────────────────────────────────────────────────────────────┤
-│                Python STT Server                            │
-│            (localhost:5000)                                 │
-├─────────────┬────────────────┬─────────────────────────────┤
-│  Whisper    │      VAD       │    DeepSeek AI             │
-│    GPU      │   Detection    │  Post-Processing           │
-└─────────────┴────────────────┴─────────────────────────────┘
-```
+It intentionally does not describe archived/legacy Tauri, React, or Rust designs.
 
-## Component Details
+## System Overview
 
-### 1. Frontend (React Application)
+VoiceFlow is a process-local pipeline with five major layers:
 
-**Location**: `/src/`
+1. `ui`: tray + overlay + runtime orchestration
+2. `integrations`: global hotkeys and text injection
+3. `core`: audio capture, ASR, streaming preview, text processing
+4. `utils`: config persistence, logging, validation, monitoring
+5. `ai` (optional): course correction, command mode, adaptive learning
 
-**Responsibilities**:
-- User interface rendering
-- Real-time transcription display
-- Settings management
-- Statistics visualization
-- WebSocket message handling
+Primary runtime entrypoint:
+- `src/voiceflow/ui/cli_enhanced.py`
 
-**Key Files**:
-- `App.jsx` - Main application component
-- `main.jsx` - Application entry point
-- `index.css` - Global styles
+## High-Level Data Flow
 
-**Technologies**:
-- React 18.3.1
-- Vite (build tool)
-- Tauri API for native features
+```text
+Hold PTT
+  -> hotkey listener enters recording state
+  -> audio recorder buffers microphone samples
+  -> optional streaming preview updates overlay
 
-### 2. Tauri Backend (Rust)
-
-**Location**: `/src-tauri/`
-
-**Responsibilities**:
-- Native window management
-- System tray integration
-- Global hotkey registration
-- WebSocket communication
-- File system access
-- Process management
-
-**Key Files**:
-- `main.rs` - Application entry point
-- `Cargo.toml` - Rust dependencies
-- `tauri.conf.json` - Tauri configuration
-
-**Key Features**:
-```rust
-// Global hotkey handling
-tauri::GlobalShortcutManager::register("Ctrl+Alt")
-
-// System tray with menu
-SystemTray::new()
-    .with_menu(menu)
-    .on_event(|event| { /* handle events */ })
-
-// WebSocket client
-WebSocketClient::connect("ws://localhost:5000")
+Release PTT
+  -> recorder finalizes audio buffer
+  -> transcription manager runs ASR job
+  -> transcript normalization + formatting + optional AI cleanup
+  -> injector writes text to active target
+  -> tray/overlay status returns to idle
 ```
 
-### 3. Python STT Server
+## Component Map
 
-**Location**: `/python/`
+### UI Layer
 
-**Responsibilities**:
-- Audio capture and processing
-- Whisper model management
-- Voice Activity Detection (VAD)
-- DeepSeek AI integration
-- WebSocket server
+- `src/voiceflow/ui/cli_enhanced.py`
+  - top-level app lifecycle
+  - transcription manager and session tracking
+  - startup/shutdown handling and monitoring
+- `src/voiceflow/ui/enhanced_tray.py`
+  - tray icon status and menu actions
+  - toggles for code mode, injection mode, dock visibility, PTT presets
+- `src/voiceflow/ui/visual_indicators.py`
+  - overlay status rendering
+  - audio-reactive indicator updates
+  - recent-history panel behavior
 
-**Key Components**:
+### Integration Layer
 
-#### Audio Pipeline
-```python
-Audio Input → VAD → Whisper → DeepSeek → WebSocket Output
-```
+- `src/voiceflow/integrations/hotkeys_enhanced.py`
+  - hold-to-record lifecycle
+  - release confirmation debounce
+  - tail-buffer handling to avoid sentence cutoff
+  - synthetic event suppression for injection safety
+- `src/voiceflow/integrations/inject.py`
+  - clipboard paste and keyboard typing injection paths
+  - sanitization and rate limiting
+  - optional target-window capture/focus protection
 
-#### Model Management
-- Dynamic model loading based on GPU memory
-- Dual-model approach (preview + final)
-- Automatic fallback on errors
+### Core Layer
 
-#### WebSocket Protocol
-```json
-// Start recording
-{"action": "start_recording"}
+- `src/voiceflow/core/audio_enhanced.py`
+  - low-latency microphone capture and buffering
+- `src/voiceflow/core/asr_engine.py`
+  - model tiering and transcription execution
+  - CPU/CUDA runtime selection and fallbacks
+- `src/voiceflow/core/streaming.py`
+  - partial preview transcriptions while recording
+  - bounded partial audio window for stability
+- `src/voiceflow/core/textproc.py`
+  - normalization and formatting
+  - code-mode term mapping
+- `src/voiceflow/core/preloader.py`
+  - background model warm-up to reduce first-use latency
 
-// Stop recording
-{"action": "stop_recording"}
+### Utility Layer
 
-// Transcription result
-{
-  "type": "transcription",
-  "text": "Hello world",
-  "model": "large-v3",
-  "language": "en",
-  "processing_time": 0.125
-}
-```
+- `src/voiceflow/core/config.py`
+  - runtime defaults and feature flags
+- `src/voiceflow/utils/settings.py`
+  - persisted config load/save and migration
+- `src/voiceflow/utils/logging_setup.py`
+  - async rotating file logs
+- `src/voiceflow/utils/idle_aware_monitor.py`
+  - hang/memory state checks for long-running sessions
 
-## Data Flow
+### Optional AI Layer
 
-### 1. Recording Flow
-```
-User presses Ctrl+Alt
-    ↓
-Tauri captures hotkey
-    ↓
-Send "start_recording" via WebSocket
-    ↓
-Python server starts audio capture
-    ↓
-VAD detects speech segments
-    ↓
-Whisper processes audio chunks
-    ↓
-DeepSeek enhances text
-    ↓
-Send transcription back via WebSocket
-    ↓
-UI displays formatted text
-```
+- `src/voiceflow/ai/course_corrector.py`
+- `src/voiceflow/ai/command_mode.py`
+- `src/voiceflow/ai/adaptive_memory.py`
 
-### 2. Settings Flow
-```
-User changes settings in UI
-    ↓
-React updates local state
-    ↓
-Tauri saves to config file
-    ↓
-Send config update to Python server
-    ↓
-Server reloads models if needed
-```
+These are intentionally optional and can be disabled for speed-first operation.
 
-## Key Design Decisions
+## Runtime Concurrency Model
 
-### 1. Tauri over Electron
-- **Reason**: Smaller bundle size (10MB vs 100MB+)
-- **Benefits**: Native performance, lower memory usage
-- **Trade-off**: Requires Rust knowledge
+- Hotkey events and recording lifecycle are event-driven.
+- ASR execution is isolated through a managed worker (`EnhancedTranscriptionManager`) to prevent UI blocking.
+- Post-processing/checkpoint work is separated from critical capture state.
+- Single-instance and duplicate-process guards are used to avoid competing hotkey listeners.
 
-### 2. WebSocket Communication
-- **Reason**: Real-time bidirectional communication
-- **Benefits**: Low latency, event-driven
-- **Alternative considered**: HTTP polling (rejected due to latency)
+## State Model
 
-### 3. Separate Python Server
-- **Reason**: Best ML ecosystem support
-- **Benefits**: Easy Whisper integration, flexible processing
-- **Trade-off**: Additional process to manage
+Primary visible states:
+- `idle`
+- `listening`
+- `processing`
+- `transcribing`
+- `complete`
+- `error`
 
-### 4. GPU Acceleration
-- **Reason**: 40x performance improvement
-- **Benefits**: Real-time transcription possible
-- **Requirement**: NVIDIA GPU with CUDA
+State transitions are reflected in both tray and overlay to keep behavior transparent.
 
-### 5. Dual-Model Approach
-- **Preview Model**: Small/base for instant feedback
-- **Final Model**: Large-v3 for accuracy
-- **Benefit**: Best of both worlds - speed and accuracy
+## Configuration and Persistence
 
-## Security Considerations
+Windows paths:
+- config: `%LOCALAPPDATA%\LocalFlow\config.json`
+- logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
 
-### 1. Local Processing
-- All audio processing happens locally
-- No internet connection required
-- No data leaves the machine
+`settings.py` includes migration logic for legacy performance values to reduce medium/long dictation latency regressions.
 
-### 2. Process Isolation
-- Python server runs as separate process
-- Communication only via localhost WebSocket
-- No external network access
+## Performance Design Principles
 
-### 3. File System Access
-- Limited to app data directory
-- User consent required for other locations
-- Sandboxed by Tauri permissions
+- Keep audio capture and ASR on the critical path only.
+- Keep overlay/animation work off the ASR critical path.
+- Prefer release-time full transcription for reliability; use partials for preview only.
+- Use adaptive model/device settings with safe fallback to CPU.
 
-## Performance Optimizations
+## Failure Handling
 
-### 1. GPU Utilization
-- CUDA acceleration for Whisper
-- Batch processing for efficiency
-- Dynamic batch sizing based on GPU memory
+- Worker timeouts prevent indefinite hangs during transcription.
+- Input sanitization and injection guards reduce malformed output risk.
+- Idle-aware monitor surfaces memory and hang warnings for long sessions.
+- Tray/overlay cleanup paths are present for shutdown/restart resilience.
 
-### 2. Memory Management
-- Model loaded once and reused
-- Audio buffer recycling
-- Automatic garbage collection
+## Platform Notes
 
-### 3. Background Processing
-- UI remains responsive during transcription
-- Async/await patterns throughout
-- Worker threads for heavy operations
-
-## Deployment
-
-### Build Process
-```
-Frontend Build → Rust Compilation → Bundle Creation
-     ↓                ↓                    ↓
-  Vite Build    Cargo Build         Tauri Bundle
-     ↓                ↓                    ↓
-   /dist/       /target/release/    .exe/.msi
-```
-
-### Distribution
-- Standalone executable (no installer needed)
-- MSI installer for traditional installation
-- Portable version (upcoming)
-
-## Future Architecture Considerations
-
-### 1. Plugin System
-- Allow custom post-processors
-- Support for additional STT engines
-- Third-party integrations
-
-### 2. Multi-Language Support
-- i18n for UI
-- Multiple Whisper models
-- Language auto-detection
-
-### 3. Cloud Sync (Optional)
-- End-to-end encrypted
-- User-controlled
-- Privacy-first design
-
-### 4. Mobile Companion
-- Share transcriptions
-- Remote control
-- Sync settings
+- This architecture is validated for Windows.
+- Linux/macOS ports need platform-specific replacements for:
+  - global hotkeys
+  - text injection semantics
+  - tray/menu bar behavior
