@@ -290,9 +290,9 @@ class VoiceFlowControlCenter:
                 "-c",
                 "import sys; sys.path.insert(0, 'src'); "
                 "import os; os.chdir('.'); "
-                "from voiceflow.ui.cli_ultra_simple import main; main()"
+                "from voiceflow.ui.cli_enhanced import main; main()"
             ]
-            self.run_command_async(command, "VoiceFlow Ultra-Simple Application")
+            self.run_command_async(command, "VoiceFlow Enhanced Application")
 
         def on_health_failure():
             # Show troubleshooting options if health check fails

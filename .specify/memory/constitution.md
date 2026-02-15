@@ -47,6 +47,8 @@ All changes MUST be based on measurement and research, not assumptions. Benchmar
 - Input validation required for all user-facing interfaces
 - No hardcoded secrets or API keys - use environment variables
 - Follow existing code patterns and style within modules
+- Remove dead code and unused configuration settings to maintain clarity
+- Configuration should reflect actual system behavior, not deprecated approaches
 
 ### Testing Requirements
 - Test real-world scenarios with purpose-built tools rather than abstract frameworks
@@ -65,11 +67,12 @@ All changes MUST be based on measurement and research, not assumptions. Benchmar
 ## Quality Assurance
 
 ### Performance Standards
-- 70x realtime transcription speed minimum using WhisperX
+- Use best model for available hardware (CPU/GPU) without arbitrary speed targets
 - First transcription completion within 5 seconds of audio end
 - No audio cutoff at beginning or end of speech
 - Model loading time under 10 seconds on typical hardware
 - Consistent performance between first and subsequent transcriptions
+- Optimize for accuracy and user experience over synthetic benchmarks
 
 ### Reliability Standards
 - 24/7 operation capability with automatic error recovery
@@ -104,4 +107,4 @@ Constitution follows semantic versioning:
 - MINOR: New principles or material expansions
 - PATCH: Clarifications and refinements
 
-**Version**: 1.0.0 | **Ratified**: 2025-01-25 | **Last Amended**: 2025-01-25
+**Version**: 1.1.0 | **Ratified**: 2025-01-25 | **Last Amended**: 2025-10-05

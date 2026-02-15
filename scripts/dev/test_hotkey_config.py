@@ -1,65 +1,47 @@
 #!/usr/bin/env python3
-"""
-Test script to verify hotkey configuration for Ctrl+Shift
-"""
+"""Validate current VoiceFlow hotkey configuration."""
+
+from __future__ import annotations
 
 import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), 'localflow'))
+from pathlib import Path
 
-from config import Config
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-def test_hotkey_config():
-    """Test the current hotkey configuration"""
-    print("Testing VoiceFlow Hotkey Configuration")
-    print("=" * 50)
+from voiceflow.core.config import Config
+from voiceflow.utils.settings import load_config, config_path
 
-    # Load configuration
-    cfg = Config()
 
-    # Check current hotkey settings
-    print(f"Hotkey Configuration:")
-    print(f"  Ctrl Required:  {cfg.hotkey_ctrl}")
-    print(f"  Shift Required: {cfg.hotkey_shift}")
-    print(f"  Alt Required:   {cfg.hotkey_alt}")
-    print(f"  Key Required:   '{cfg.hotkey_key}'")
-    print()
-
-    # Determine what the actual hotkey combination is
-    hotkey_parts = []
+def hotkey_string(cfg: Config) -> str:
+    parts = []
     if cfg.hotkey_ctrl:
-        hotkey_parts.append("Ctrl")
+        parts.append("Ctrl")
     if cfg.hotkey_shift:
-        hotkey_parts.append("Shift")
+        parts.append("Shift")
     if cfg.hotkey_alt:
-        hotkey_parts.append("Alt")
+        parts.append("Alt")
     if cfg.hotkey_key:
-        hotkey_parts.append(cfg.hotkey_key.upper())
+        parts.append(cfg.hotkey_key.upper())
+    return "+".join(parts) if parts else "None"
 
-    current_hotkey = "+".join(hotkey_parts) if hotkey_parts else "None"
-    print(f"Current Hotkey Combination: {current_hotkey}")
-    print()
 
-    # Check if this matches our target
-    target_hotkey = "Ctrl+Shift"
-    is_correct = (cfg.hotkey_ctrl and cfg.hotkey_shift and not cfg.hotkey_alt and not cfg.hotkey_key)
+def test_hotkey_config() -> bool:
+    cfg = load_config(Config())
+    expected = "Ctrl+Shift"
+    current = hotkey_string(cfg)
+    is_match = cfg.hotkey_ctrl and cfg.hotkey_shift and not cfg.hotkey_alt and not cfg.hotkey_key
 
-    print(f"Target Hotkey:  {target_hotkey}")
-    print(f"Match Status:   {'[CORRECT]' if is_correct else '[NEEDS UPDATE]'}")
+    print("VoiceFlow Hotkey Configuration")
+    print("=" * 40)
+    print(f"Config file: {config_path()}")
+    print(f"Current: {current}")
+    print(f"Expected: {expected}")
+    print(f"Status: {'OK' if is_match else 'NEEDS UPDATE'}")
+    return is_match
 
-    if not is_correct:
-        print("\nRequired Changes:")
-        if not cfg.hotkey_ctrl:
-            print("  - Set hotkey_ctrl = True")
-        if not cfg.hotkey_shift:
-            print("  - Set hotkey_shift = True")
-        if cfg.hotkey_alt:
-            print("  - Set hotkey_alt = False")
-        if cfg.hotkey_key:
-            print("  - Set hotkey_key = \"\" (empty string)")
-
-    return is_correct
 
 if __name__ == "__main__":
-    success = test_hotkey_config()
-    sys.exit(0 if success else 1)
+    raise SystemExit(0 if test_hotkey_config() else 1)

@@ -18,7 +18,19 @@ if errorlevel 1 (
 )
 
 REM Launch Control Center
-python tools\VoiceFlow_Control_Center.py
+set "PYTHON_EXE=python"
+if /I not "%VOICEFLOW_USE_GPU_VENV%"=="0" (
+    if exist ".venv-gpu\Scripts\python.exe" (
+        set "PYTHON_EXE=%cd%\.venv-gpu\Scripts\python.exe"
+    ) else if exist "venv\Scripts\python.exe" (
+        set "PYTHON_EXE=%cd%\venv\Scripts\python.exe"
+    )
+) else (
+    if exist "venv\Scripts\python.exe" (
+        set "PYTHON_EXE=%cd%\venv\Scripts\python.exe"
+    )
+)
+"%PYTHON_EXE%" tools\VoiceFlow_Control_Center.py
 
 REM If we get here, the program exited
 echo.

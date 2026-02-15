@@ -57,11 +57,16 @@ try:
     from voiceflow.ui.visual_indicators import (
         show_listening, show_processing, show_transcribing,
         show_complete, show_error, hide_status,
-        TranscriptionStatus, show_transcription_status
+        TranscriptionStatus, show_transcription_status,
+        set_dock_enabled, toggle_recent_history
     )
     VISUAL_INDICATORS_AVAILABLE = True
 except ImportError:
     VISUAL_INDICATORS_AVAILABLE = False
+    def set_dock_enabled(_enabled: bool):
+        return None
+    def toggle_recent_history():
+        return None
 
 def _make_status_icon(size: int = 16, status: str = "idle", recording: bool = False):
     """Create dynamic status icons based on VoiceFlow state"""
@@ -256,6 +261,29 @@ class EnhancedTrayController(ITrayManager):
             except Exception:
                 pass
 
+        def toggle_dock(icon, item):
+            """Toggle always-on dock visibility."""
+            current = bool(getattr(self.app.cfg, "visual_dock_enabled", True))
+            new_state = not current
+            self.app.cfg.visual_dock_enabled = new_state
+            try:
+                set_dock_enabled(new_state)
+            except Exception:
+                pass
+            try:
+                from voiceflow.utils.settings import save_config
+                save_config(self.app.cfg)
+                self._notify("VoiceFlow", f"Dock: {'ON' if new_state else 'OFF'}")
+            except Exception:
+                pass
+
+        def show_recent_history(icon, item):
+            """Open/close recent history panel from tray."""
+            try:
+                toggle_recent_history()
+            except Exception:
+                pass
+
         def show_status_test(icon, item):
             """Test the visual indicators"""
             def test_sequence():
@@ -359,6 +387,12 @@ class EnhancedTrayController(ITrayManager):
                 toggle_visual_indicators,
                 checked=lambda item: getattr(self.app.cfg, 'visual_indicators_enabled', True),
             ),
+            pystray.MenuItem(
+                lambda item: f"Dock: {'ON' if getattr(self.app.cfg, 'visual_dock_enabled', True) else 'OFF'}",
+                toggle_dock,
+                checked=lambda item: getattr(self.app.cfg, 'visual_dock_enabled', True),
+            ),
+            pystray.MenuItem("Recent History", show_recent_history),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("PTT Hotkey", ptt_menu),
             pystray.MenuItem("Test Visual Indicators", show_status_test),
@@ -393,6 +427,14 @@ class EnhancedTrayController(ITrayManager):
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
+
+        # Apply dock visibility preference on startup.
+        if VISUAL_INDICATORS_AVAILABLE:
+            try:
+                set_dock_enabled(True)
+                self.app.cfg.visual_dock_enabled = True
+            except Exception:
+                pass
         
         # Welcome notification
         def _welcome():

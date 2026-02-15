@@ -7,7 +7,8 @@ with natural sentence breaks and punctuation based on speech pauses.
 
 import re
 from typing import List, Optional
-from voiceflow.core.asr_production import TranscriptionResult, TranscriptionSegment
+# Use new unified ASR engine
+from voiceflow.core.asr_engine import TranscriptionResult, TranscriptionSegment
 
 class SmartTextFormatter:
     """
@@ -136,7 +137,7 @@ class SmartTextFormatter:
             return ""
 
         # Create minimal result object
-        from voiceflow.core.asr_production import TranscriptionResult
+        from voiceflow.core.asr_engine import TranscriptionResult
         result = TranscriptionResult(
             segments=segments,
             language="en",
