@@ -64,6 +64,7 @@ class StreamingTranscriber:
         sample_rate: int = 16000,
         chunk_duration: float = 1.0,  # Process audio in 1-second chunks
         min_audio_duration: float = 0.5,  # Minimum audio before first transcription
+        partial_max_audio_seconds: float = 8.0,  # Limit partial ASR window to keep cost stable
         on_partial: Optional[Callable[[StreamingResult], None]] = None,
         on_final: Optional[Callable[[StreamingResult], None]] = None,
     ):
@@ -75,6 +76,7 @@ class StreamingTranscriber:
             sample_rate: Audio sample rate
             chunk_duration: How often to process audio (seconds)
             min_audio_duration: Minimum audio before first transcription
+            partial_max_audio_seconds: Max trailing audio used for each partial transcription
             on_partial: Callback for partial results
             on_final: Callback for final result
         """
@@ -82,6 +84,7 @@ class StreamingTranscriber:
         self.sample_rate = sample_rate
         self.chunk_duration = chunk_duration
         self.min_audio_duration = min_audio_duration
+        self.partial_max_audio_seconds = max(1.0, float(partial_max_audio_seconds))
         self.on_partial = on_partial
         self.on_final = on_final
 
@@ -152,7 +155,7 @@ class StreamingTranscriber:
 
         logger.info("Streaming transcription started")
 
-    def stop(self) -> Optional[StreamingResult]:
+    def stop(self, discard_final: bool = False) -> Optional[StreamingResult]:
         """
         Stop streaming and get final result.
 
@@ -171,13 +174,18 @@ class StreamingTranscriber:
         if self._process_thread and self._process_thread.is_alive():
             self._process_thread.join(timeout=10.0)
 
-        # Process any remaining audio for final result
-        final_result = self._process_final()
+        final_result = None
+        if not discard_final:
+            # Process any remaining audio for final result
+            final_result = self._process_final()
 
         with self._state_lock:
             self._state = StreamState.IDLE
 
-        logger.info(f"Streaming transcription stopped. Final: '{final_result.text if final_result else ''}'")
+        logger.info(
+            "Streaming transcription stopped. Final%s",
+            (f": '{final_result.text}'" if final_result else " skipped"),
+        )
 
         return final_result
 
@@ -257,6 +265,10 @@ class StreamingTranscriber:
     def _do_partial_transcription(self, audio: np.ndarray) -> None:
         """Process partial transcription"""
         try:
+            max_samples = int(self.partial_max_audio_seconds * self.sample_rate)
+            if max_samples > 0 and len(audio) > max_samples:
+                audio = audio[-max_samples:]
+
             result = self.asr.transcribe(audio)
 
             # Handle result (could be string or TranscriptionResult)

@@ -13,7 +13,7 @@ class Config:
     hotkey_shift: bool = True
     hotkey_alt: bool = False
     hotkey_key: str = ""  # primary key pressed along with modifiers (empty = modifier keys only)
-    ptt_tail_buffer_seconds: float = 0.25  # continue recording briefly after release
+    ptt_tail_buffer_seconds: float = 0.35  # continue recording briefly after release
     ptt_tail_min_recording_seconds: float = 0.35  # only apply tail buffer to sustained presses
 
     # Audio - Optimized for speed
@@ -67,7 +67,7 @@ class Config:
     no_speech_threshold: float = 0.9  # Silence detection sensitivity
     latency_boost_enabled: bool = True  # Use a smaller model for short utterances
     latency_boost_model_tier: str = "tiny"  # Fast-path model tier for short utterances
-    latency_boost_max_audio_seconds: float = 20.0  # Apply fast-path to more utterances for lower latency
+    latency_boost_max_audio_seconds: float = 10.0  # Keep ultra-fast path short; preserve accuracy on longer utterances
 
     # Quality improvements without speed impact
     enable_smart_prompting: bool = True  # Adaptive prompting for better accuracy

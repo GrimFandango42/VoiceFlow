@@ -85,6 +85,9 @@ class BottomScreenIndicator:
         self.audio_level = 0.0
         self.audio_level_target = 0.0
         self.audio_level_smoothed = 0.0
+        self.audio_features_target = {"low": 0.34, "mid": 0.33, "high": 0.33, "centroid": 0.5}
+        self.audio_features_smoothed = {"low": 0.34, "mid": 0.33, "high": 0.33, "centroid": 0.5}
+        self._visual_agc = 0.18
         self.recent_transcriptions = deque(maxlen=50)
         self.history_visible = False
         self.history_expanded = False
@@ -276,7 +279,7 @@ class BottomScreenIndicator:
         self.wave_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=70,
+            height=126,
             bg="#0B1220",
             highlightthickness=0,
             bd=0,
@@ -377,10 +380,10 @@ class BottomScreenIndicator:
         if not self.wave_canvas:
             return
         self.wave_canvas.delete("all")
-        self.wave_h = 70
+        self.wave_h = int(max(96, self.wave_canvas.winfo_reqheight()))
         left = 8
         right = self.wave_w - 8
-        base = self.wave_h - 10
+        base = self.wave_h // 2
         self.wave_baseline = self.wave_canvas.create_line(left, base, right, base, fill="#1F2937", width=1)
         self.wave_line = None
         self.wave_line_glow = None
@@ -394,16 +397,16 @@ class BottomScreenIndicator:
         self.space_arcs = []
         self.wave_bars = []
 
-        bar_count = 46
-        gap = 3
-        bar_w = max(3, int((right - left - ((bar_count - 1) * gap)) / bar_count))
+        bar_count = 64
+        gap = 1
+        bar_w = max(4, int((right - left - ((bar_count - 1) * gap)) / bar_count))
         x = left
         for _ in range(bar_count):
             bar = self.wave_canvas.create_rectangle(
                 x,
-                base - 2,
+                base - 1,
                 x + bar_w,
-                base,
+                base + 1,
                 fill="#38BDF8",
                 outline="",
             )
@@ -423,23 +426,54 @@ class BottomScreenIndicator:
             self.audio_level_smoothed *= 0.58
         lvl = self.audio_level_smoothed
 
+        # Smooth frequency-profile features.
+        for key in ("low", "mid", "high", "centroid"):
+            tv = max(0.0, min(1.0, float(self.audio_features_target.get(key, 0.0))))
+            sv = float(self.audio_features_smoothed.get(key, tv))
+            blend = 0.42 if tv > sv else 0.28
+            self.audio_features_smoothed[key] = sv + (tv - sv) * blend
+
+        low = float(self.audio_features_smoothed["low"])
+        mid = float(self.audio_features_smoothed["mid"])
+        high = float(self.audio_features_smoothed["high"])
+        centroid = float(self.audio_features_smoothed["centroid"])
+
         if mode == "idle":
             lvl *= 0.20
 
         # Recorder/radio style bars.
-        self.wave_phase += 0.35 + 1.5 * lvl
-        base = self.wave_h - 10
-        max_h = self.wave_h - 18
+        self.wave_phase += 0.22 + 1.1 * lvl
+        base = self.wave_h // 2
+        max_h = max(18, (self.wave_h // 2) - 10)
+
+        # AGC prevents "too zoomed in" or "too flat" look as mic level changes.
+        target_agc = max(0.04, min(1.0, lvl))
+        self._visual_agc = (self._visual_agc * 0.94) + (target_agc * 0.06)
+        agc_scale = 0.85 + (0.95 / max(0.08, self._visual_agc))
+        agc_scale = max(0.9, min(2.6, agc_scale))
+
         n = len(self.wave_bars)
         center = (n - 1) / 2.0
         for i, bar in enumerate(self.wave_bars):
+            p = i / max(1.0, n - 1.0)  # 0..1 (left=low freq, right=high freq)
+
+            # Blend low/mid/high energies by bar position.
+            w_low = max(0.0, 1.0 - abs(p - 0.15) / 0.26)
+            w_mid = max(0.0, 1.0 - abs(p - 0.50) / 0.30)
+            w_high = max(0.0, 1.0 - abs(p - 0.85) / 0.26)
+            w_sum = max(1e-6, w_low + w_mid + w_high)
+            band_energy = ((low * w_low) + (mid * w_mid) + (high * w_high)) / w_sum
+
             falloff = 1.0 - min(1.0, abs(i - center) / (center + 0.001))
-            osc = 0.62 + 0.38 * math.sin((self.wave_phase * 1.4) + (i * 0.44))
-            h = 2 + (max_h * lvl * (0.45 + 0.55 * falloff) * osc)
+            osc = 0.66 + 0.34 * math.sin((self.wave_phase * (1.1 + centroid * 1.3)) + (i * 0.38))
+            combined = (0.28 + 0.72 * falloff) * (0.20 + 0.80 * band_energy)
+            voiced = min(1.0, lvl * agc_scale)
+            h = 2 + (max_h * voiced * combined * osc)
             x0, _, x1, _ = self.wave_canvas.coords(bar)
-            y0 = base - h
-            self.wave_canvas.coords(bar, x0, y0, x1, base)
-            color = "#0EA5E9" if h < 10 else ("#22D3EE" if h < 22 else "#67E8F9")
+            top = base - h
+            bottom = base + (h * 0.72)
+            self.wave_canvas.coords(bar, x0, top, x1, bottom)
+            color = "#0891B2" if h < 10 else ("#06B6D4" if h < 22 else "#67E8F9")
             self.wave_canvas.itemconfig(bar, fill=color)
 
     def update_audio_level(self, level: float):
@@ -454,13 +488,32 @@ class BottomScreenIndicator:
     def _update_audio_level_ui(self, level: float):
         try:
             val = max(0.0, min(1.0, float(level)))
-            # Direct mapping for immediate responsiveness in tuning mode.
-            boosted = min(1.0, (val ** 0.8) * 1.8)
+            boosted = min(1.0, (val ** 0.85) * 1.35)
             self.audio_level_target = 0.0 if boosted < 0.006 else boosted
             self.audio_level = self.audio_level_target
         except Exception:
             self.audio_level = 0.0
             self.audio_level_target = 0.0
+
+    def update_audio_features(self, features: Dict[str, float]):
+        """Thread-safe audio feature update for frequency-reactive bars."""
+        if not self.gui_ready or not self.command_queue:
+            return
+        try:
+            self.command_queue.put((self._update_audio_features_ui, (features,), {}))
+        except Exception:
+            pass
+
+    def _update_audio_features_ui(self, features: Dict[str, float]):
+        try:
+            if not isinstance(features, dict):
+                return
+            self._update_audio_level_ui(float(features.get("level", self.audio_level_target)))
+            for key in ("low", "mid", "high", "centroid"):
+                val = max(0.0, min(1.0, float(features.get(key, self.audio_features_target.get(key, 0.0)))))
+                self.audio_features_target[key] = val
+        except Exception:
+            pass
 
     def _setup_dock_window(self, screen_width: int, screen_height: int):
         """Always-on minimal dock for quick glance and history toggle."""
@@ -705,15 +758,15 @@ class BottomScreenIndicator:
         if status == TranscriptionStatus.LISTENING:
             self._animate_geometric_strip(mode="listening")
             self._animate_waveform(mode="listening")
-            interval = 95
+            interval = 48
         elif status == TranscriptionStatus.PROCESSING:
             self._animate_geometric_strip(mode="processing")
             self._animate_waveform(mode="processing")
-            interval = 80
+            interval = 42
         elif status == TranscriptionStatus.TRANSCRIBING:
             self._animate_geometric_strip(mode="transcribing")
             self._animate_waveform(mode="transcribing")
-            interval = 70
+            interval = 36
         else:
             self._set_icon_idle()
             return
@@ -1215,6 +1268,12 @@ def update_audio_level(level: float):
     indicator = get_indicator()
     if indicator:
         indicator.update_audio_level(level)
+
+def update_audio_features(features: Dict[str, float]):
+    """Push live amplitude + frequency features to waveform animation."""
+    indicator = get_indicator()
+    if indicator:
+        indicator.update_audio_features(features)
 
 def set_dock_enabled(enabled: bool):
     """Show/hide the always-on dock without affecting status overlay."""

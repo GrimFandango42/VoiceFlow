@@ -292,6 +292,7 @@ try:
         show_preview as visual_show_preview, clear_preview as visual_clear_preview,
         record_transcription_event as visual_record_transcription_event,
         update_audio_level as visual_update_audio_level,
+        update_audio_features as visual_update_audio_features,
     )
     VISUAL_INDICATORS_AVAILABLE = True
 except ImportError:
@@ -300,6 +301,7 @@ except ImportError:
     def visual_clear_preview(): pass
     def visual_record_transcription_event(text, audio_duration, processing_time): pass
     def visual_update_audio_level(level): pass
+    def visual_update_audio_features(features): pass
 
 
 class EnhancedTranscriptionManager:
@@ -809,8 +811,9 @@ class EnhancedApp:
             self._streaming_transcriber = StreamingTranscriber(
                 self.asr_fast if self.asr_fast else self.asr,
                 sample_rate=self.cfg.sample_rate,
-                chunk_duration=0.70,
-                min_audio_duration=0.40,
+                chunk_duration=0.85,
+                min_audio_duration=0.55,
+                partial_max_audio_seconds=6.0,
                 on_partial=self._on_streaming_preview,
             )
             self._streaming_transcriber.start()
@@ -852,23 +855,21 @@ class EnhancedApp:
 
         while self.rec.is_recording() and self._streaming_transcriber:
             try:
-                # Get current audio buffer
-                audio = self.rec._ring_buffer.get_samples()
-                current_count = len(audio)
-
-                # Only add new audio
-                if current_count > last_sample_count:
-                    new_audio = audio[last_sample_count:]
+                # Pull only new samples since last poll; avoids O(n) full-buffer copies on long dictation.
+                new_audio, current_total = self.rec._ring_buffer.get_samples_since(last_sample_count)
+                if len(new_audio) > 0:
                     self._streaming_transcriber.add_audio(new_audio)
-                    last_sample_count = current_count
+                    last_sample_count = current_total
                     if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE and len(new_audio) > 0:
                         # Lightweight amplitude estimate for visual waveform (no ASR impact).
                         rms = float(np.sqrt(np.mean(np.square(new_audio))))
                         denom = max(1e-6, float(getattr(self.cfg, "min_rms_amplitude", 5e-4)) * 12.0)
                         level = min(1.0, (rms / denom) ** 0.7)
                         visual_update_audio_level(level)
+                else:
+                    last_sample_count = current_total
 
-                time.sleep(0.5)  # Check every 500ms
+                time.sleep(0.18)  # Lower-latency feed without high CPU usage.
 
             except Exception as e:
                 logger.warning(f"Streaming feed error: {e}")
@@ -924,13 +925,14 @@ class EnhancedApp:
         self._audio_visual_stop.set()
         if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
             visual_update_audio_level(0.0)
+            visual_update_audio_features({"level": 0.0, "low": 0.0, "mid": 0.0, "high": 0.0, "centroid": 0.0})
 
     def _audio_visual_loop(self) -> None:
         while self.rec.is_recording() and not self._audio_visual_stop.is_set():
             try:
-                audio = self.rec._ring_buffer.get_samples()
+                audio = self.rec._ring_buffer.get_latest_samples(4096)
                 if len(audio) > 0:
-                    window = audio[-min(len(audio), 3200):]  # ~200ms at 16kHz
+                    window = audio
                     rms = float(np.sqrt(np.mean(np.square(window))))
                     # Adaptive floor to suppress constant movement from room noise.
                     if self._audio_noise_floor <= 0.0:
@@ -938,17 +940,53 @@ class EnhancedApp:
                     if rms < self._audio_noise_floor * 1.8:
                         self._audio_noise_floor = (self._audio_noise_floor * 0.96) + (rms * 0.04)
 
-                    signal = max(0.0, rms - (self._audio_noise_floor * 1.15))
                     min_rms = float(getattr(self.cfg, "min_rms_amplitude", 5e-4))
-                    denom = max(1e-6, min_rms * 4.5, self._audio_noise_floor * 3.0)
-                    level_signal = min(1.0, (signal / denom) ** 0.75)
-                    level_raw = min(1.0, (rms / max(1e-6, min_rms * 8.0)) ** 0.55)
-                    # Keep a clear zero-state when quiet, but react strongly when speech starts.
-                    if signal < max(min_rms * 0.35, self._audio_noise_floor * 0.22):
+                    noise_ref = max(min_rms * 0.8, self._audio_noise_floor)
+                    signal = max(0.0, rms - noise_ref)
+                    speech_gate = max(min_rms * 0.15, noise_ref * 0.08)
+                    if signal <= speech_gate:
                         level = 0.0
                     else:
-                        level = max(level_signal, level_raw * 0.45)
+                        denom = max(1e-6, (noise_ref * 2.2) + (min_rms * 1.5))
+                        level = min(1.0, (signal / denom) ** 0.62)
                     visual_update_audio_level(level)
+
+                    # Frequency profile for animation (UI-only; no ASR dependency).
+                    n = min(len(window), 2048)
+                    if n >= 256:
+                        seg = window[-n:].astype(np.float32)
+                        hann = np.hanning(n).astype(np.float32)
+                        spectrum = np.abs(np.fft.rfft(seg * hann))
+                        freqs = np.fft.rfftfreq(n, d=1.0 / float(self.cfg.sample_rate))
+
+                        def _band(lo: float, hi: float) -> float:
+                            m = (freqs >= lo) & (freqs < hi)
+                            if not np.any(m):
+                                return 0.0
+                            return float(np.mean(spectrum[m]))
+
+                        low_e = _band(70.0, 280.0)
+                        mid_e = _band(280.0, 1800.0)
+                        high_e = _band(1800.0, 6000.0)
+                        total = max(1e-8, low_e + mid_e + high_e)
+
+                        spec_sum = float(np.sum(spectrum))
+                        centroid_hz = (
+                            float(np.sum(freqs * spectrum)) / max(1e-8, spec_sum)
+                            if spec_sum > 0.0
+                            else 0.0
+                        )
+                        centroid_norm = max(0.0, min(1.0, centroid_hz / 5000.0))
+
+                        visual_update_audio_features(
+                            {
+                                "level": float(level),
+                                "low": float(low_e / total),
+                                "mid": float(mid_e / total),
+                                "high": float(high_e / total),
+                                "centroid": float(centroid_norm),
+                            }
+                        )
                 time.sleep(0.06)
             except Exception:
                 break
@@ -961,7 +999,8 @@ class EnhancedApp:
 
         if self._streaming_transcriber:
             try:
-                self._streaming_transcriber.stop()
+                # Preview stream only; skip expensive final pass to protect long-utterance latency.
+                self._streaming_transcriber.stop(discard_final=True)
             except Exception as e:
                 logger.warning(f"Error stopping streaming preview: {e}")
             finally:
