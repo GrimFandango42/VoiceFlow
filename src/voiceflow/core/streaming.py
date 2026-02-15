@@ -155,7 +155,11 @@ class StreamingTranscriber:
 
         logger.info("Streaming transcription started")
 
-    def stop(self, discard_final: bool = False) -> Optional[StreamingResult]:
+    def stop(
+        self,
+        discard_final: bool = False,
+        join_timeout: Optional[float] = None,
+    ) -> Optional[StreamingResult]:
         """
         Stop streaming and get final result.
 
@@ -170,9 +174,11 @@ class StreamingTranscriber:
         # Signal thread to stop
         self._stop_event.set()
 
-        # Wait for thread
+        # Wait for thread. For preview-only shutdown we keep this near-nonblocking.
+        if join_timeout is None:
+            join_timeout = 0.25 if discard_final else 10.0
         if self._process_thread and self._process_thread.is_alive():
-            self._process_thread.join(timeout=10.0)
+            self._process_thread.join(timeout=max(0.0, float(join_timeout)))
 
         final_result = None
         if not discard_final:

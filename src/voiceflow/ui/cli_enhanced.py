@@ -1000,7 +1000,7 @@ class EnhancedApp:
         if self._streaming_transcriber:
             try:
                 # Preview stream only; skip expensive final pass to protect long-utterance latency.
-                self._streaming_transcriber.stop(discard_final=True)
+                self._streaming_transcriber.stop(discard_final=True, join_timeout=0.2)
             except Exception as e:
                 logger.warning(f"Error stopping streaming preview: {e}")
             finally:
