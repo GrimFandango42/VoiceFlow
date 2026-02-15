@@ -1,13 +1,18 @@
-# VoiceFlow Windows Requirements
+# VoiceFlow 3.0 Windows Requirements
 # Core dependencies for VoiceFlow voice transcription system
 
 # Audio processing
 sounddevice>=0.4.6
 numpy>=1.24.0
 
-# Speech recognition
+# Speech recognition - VoiceFlow 3.0 unified ASR engine
+# Supports: Distil-Whisper (6x faster), standard Whisper, Voxtral
 faster-whisper>=1.0.0
 torch>=2.0.0
+
+# For Voxtral model support (optional)
+transformers>=4.40.0
+accelerate>=0.30.0
 
 # Input handling
 keyboard>=0.13.5
@@ -23,6 +28,9 @@ psutil>=5.9.0
 
 # Optional: GPU acceleration (CUDA)
 # torch[cuda] # Uncomment if using CUDA
+
+# Optional: WhisperX for advanced features (diarization, word timestamps)
+# whisperx
 
 # Development and testing
 pytest>=7.0.0

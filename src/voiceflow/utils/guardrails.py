@@ -209,11 +209,42 @@ def validate_config(cfg: Config) -> Config:
             cfg.hotkey_shift = True
             cfg.hotkey_key = ""  # Just modifiers
 
-        # Model validation
-        valid_models = ['tiny', 'tiny.en', 'base', 'base.en', 'small', 'small.en', 'medium', 'medium.en', 'large', 'large-v2', 'large-v3']
-        if not hasattr(cfg, 'model_name') or cfg.model_name not in valid_models:
-            logger.warning(f"Invalid model {getattr(cfg, 'model_name', 'None')}, defaulting to base.en")
-            cfg.model_name = 'base.en'
+        # PTT latency tuning safeguards
+        if not hasattr(cfg, 'ptt_tail_buffer_seconds') or cfg.ptt_tail_buffer_seconds < 0.0 or cfg.ptt_tail_buffer_seconds > 2.0:
+            logger.warning(
+                f"Invalid ptt_tail_buffer_seconds {getattr(cfg, 'ptt_tail_buffer_seconds', 'None')}, defaulting to 0.25"
+            )
+            cfg.ptt_tail_buffer_seconds = 0.25
+
+        if not hasattr(cfg, 'ptt_tail_min_recording_seconds') or cfg.ptt_tail_min_recording_seconds < 0.0 or cfg.ptt_tail_min_recording_seconds > 2.0:
+            logger.warning(
+                f"Invalid ptt_tail_min_recording_seconds {getattr(cfg, 'ptt_tail_min_recording_seconds', 'None')}, defaulting to 0.35"
+            )
+            cfg.ptt_tail_min_recording_seconds = 0.35
+
+        # Model validation (VoiceFlow 3.0: supports Distil-Whisper and Voxtral)
+        valid_models = [
+            # Standard Whisper models
+            'tiny', 'tiny.en', 'base', 'base.en', 'small', 'small.en',
+            'medium', 'medium.en', 'large', 'large-v2', 'large-v3',
+            # Distil-Whisper models (2025)
+            'distil-large-v3', 'distil-large-v3.5',
+            'Systran/faster-distil-whisper-large-v3',
+            'distil-whisper/distil-large-v3.5',
+            # Voxtral models (Mistral AI)
+            'voxtral-3b', 'mistralai/Voxtral-Mini-3B-2507',
+        ]
+
+        # Model tier validation (VoiceFlow 3.0)
+        valid_tiers = ['tiny', 'quick', 'balanced', 'quality', 'voxtral']
+        if hasattr(cfg, 'model_tier') and cfg.model_tier:
+            if cfg.model_tier.lower() not in valid_tiers:
+                logger.warning(f"Invalid model_tier {cfg.model_tier}, defaulting to 'quick'")
+                cfg.model_tier = 'quick'
+            # Skip model_name validation if using tier (asr_engine handles it)
+        elif not hasattr(cfg, 'model_name') or cfg.model_name not in valid_models:
+            logger.warning(f"Invalid model {getattr(cfg, 'model_name', 'None')}, defaulting to distil-large-v3")
+            cfg.model_name = 'distil-large-v3'
 
         # Device validation
         valid_devices = ['cpu', 'cuda', 'auto']
@@ -227,6 +258,25 @@ def validate_config(cfg: Config) -> Config:
             logger.warning(f"Invalid compute_type {getattr(cfg, 'compute_type', 'None')}, defaulting to float16")
             cfg.compute_type = 'float16'
 
+        # CPU tuning validation
+        if not hasattr(cfg, 'cpu_threads') or cfg.cpu_threads < 0 or cfg.cpu_threads > 64:
+            logger.warning(f"Invalid cpu_threads {getattr(cfg, 'cpu_threads', 'None')}, defaulting to 0 (auto)")
+            cfg.cpu_threads = 0
+
+        if not hasattr(cfg, 'asr_num_workers') or cfg.asr_num_workers < 1 or cfg.asr_num_workers > 8:
+            logger.warning(f"Invalid asr_num_workers {getattr(cfg, 'asr_num_workers', 'None')}, defaulting to 1")
+            cfg.asr_num_workers = 1
+
+        if not hasattr(cfg, 'latency_boost_max_audio_seconds') or cfg.latency_boost_max_audio_seconds < 1.0 or cfg.latency_boost_max_audio_seconds > 120.0:
+            logger.warning(
+                f"Invalid latency_boost_max_audio_seconds {getattr(cfg, 'latency_boost_max_audio_seconds', 'None')}, defaulting to 12.0"
+            )
+            cfg.latency_boost_max_audio_seconds = 12.0
+
+        if not hasattr(cfg, 'latency_boost_model_tier') or str(cfg.latency_boost_model_tier).lower() not in ['tiny', 'quick', 'balanced', 'quality', 'voxtral']:
+            logger.warning(f"Invalid latency_boost_model_tier {getattr(cfg, 'latency_boost_model_tier', 'None')}, defaulting to tiny")
+            cfg.latency_boost_model_tier = 'tiny'
+
         # Beam size validation
         if not hasattr(cfg, 'beam_size') or cfg.beam_size < 1 or cfg.beam_size > 10:
             logger.warning(f"Invalid beam_size {getattr(cfg, 'beam_size', 'None')}, defaulting to 2")
@@ -236,6 +286,31 @@ def validate_config(cfg: Config) -> Config:
         if not hasattr(cfg, 'temperature') or cfg.temperature < 0.0 or cfg.temperature > 1.0:
             logger.warning(f"Invalid temperature {getattr(cfg, 'temperature', 'None')}, defaulting to 0.0")
             cfg.temperature = 0.0
+
+        # Adaptive learning validation (privacy-first temporary storage)
+        if not hasattr(cfg, 'adaptive_retention_hours') or cfg.adaptive_retention_hours < 1 or cfg.adaptive_retention_hours > 720:
+            logger.warning(
+                f"Invalid adaptive_retention_hours {getattr(cfg, 'adaptive_retention_hours', 'None')}, defaulting to 72"
+            )
+            cfg.adaptive_retention_hours = 72
+
+        if not hasattr(cfg, 'adaptive_min_count') or cfg.adaptive_min_count < 1 or cfg.adaptive_min_count > 20:
+            logger.warning(f"Invalid adaptive_min_count {getattr(cfg, 'adaptive_min_count', 'None')}, defaulting to 3")
+            cfg.adaptive_min_count = 3
+
+        if not hasattr(cfg, 'adaptive_max_rules') or cfg.adaptive_max_rules < 10 or cfg.adaptive_max_rules > 5000:
+            logger.warning(f"Invalid adaptive_max_rules {getattr(cfg, 'adaptive_max_rules', 'None')}, defaulting to 200")
+            cfg.adaptive_max_rules = 200
+
+        if not hasattr(cfg, 'adaptive_snippet_chars') or cfg.adaptive_snippet_chars < 50 or cfg.adaptive_snippet_chars > 2000:
+            logger.warning(
+                f"Invalid adaptive_snippet_chars {getattr(cfg, 'adaptive_snippet_chars', 'None')}, defaulting to 200"
+            )
+            cfg.adaptive_snippet_chars = 200
+
+        if not hasattr(cfg, 'command_mode_prefix') or not str(cfg.command_mode_prefix).strip():
+            logger.warning("Invalid command_mode_prefix, defaulting to 'command'")
+            cfg.command_mode_prefix = "command"
 
         logger.debug("Configuration validation completed successfully")
         return cfg

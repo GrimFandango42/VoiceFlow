@@ -1,17 +1,13 @@
 @echo off
-cd /d %~dp0\..\..
-echo ========================================
-echo VoiceFlow - Terminal Mode (No Visuals)
-echo ========================================
-echo.
-echo - Terminal output only
-echo - No system tray icon
-echo - No visual indicators
-echo.
-echo Press Ctrl+C to exit
-echo.
+:: VoiceFlow 3.0 Quick Launcher (no pause on exit)
+:: Use this for taskbar pinning
 
-set PYTHONPATH=src
+cd /d "%~dp0"
+
+:: Python runtime selection:
+:: 1) .venv-gpu (preferred for CUDA retest)
+:: 2) venv
+:: 3) system python
 set "PYTHON_EXE=python"
 if /I not "%VOICEFLOW_USE_GPU_VENV%"=="0" (
     if exist ".venv-gpu\Scripts\python.exe" (
@@ -24,6 +20,7 @@ if /I not "%VOICEFLOW_USE_GPU_VENV%"=="0" (
         set "PYTHON_EXE=%cd%\venv\Scripts\python.exe"
     )
 )
-"%PYTHON_EXE%" -m voiceflow.ui.cli_enhanced --no-tray
 
-pause
+:: Change to src directory and run
+cd src
+"%PYTHON_EXE%" -m voiceflow.ui.cli_enhanced

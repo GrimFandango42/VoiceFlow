@@ -40,8 +40,8 @@ class SmokeTestSuite:
             ('voiceflow.core.audio_enhanced', 'EnhancedAudioRecorder'),
             ('voiceflow.ui.visual_indicators', 'BottomScreenIndicator'),
             ('voiceflow.ui.enhanced_tray', 'EnhancedTrayController'),
-            ('voiceflow.ui.cli_ultra_performance', 'EnhancedApp'),
-            ('voiceflow.core.advanced_performance_asr', 'AdvancedPerformanceASR')
+            ('voiceflow.ui.cli_enhanced', 'EnhancedApp'),
+            ('voiceflow.core.asr_engine', 'ASREngine')
         ]
 
         failed_imports = []

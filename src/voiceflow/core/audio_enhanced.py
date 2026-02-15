@@ -341,6 +341,55 @@ class BoundedRingBuffer:
                     self.buffer[self.write_pos:],
                     self.buffer[:self.write_pos]
                 ])
+
+    def get_latest_samples(self, max_samples: int) -> np.ndarray:
+        """Get only the latest N samples in logical order."""
+        if max_samples <= 0:
+            return np.array([], dtype=np.float32)
+        with self.lock:
+            available = min(self.samples_written, self.max_samples)
+            if available <= 0:
+                return np.array([], dtype=np.float32)
+
+            count = min(int(max_samples), int(available))
+            if self.samples_written < self.max_samples:
+                start = max(0, self.write_pos - count)
+                return self.buffer[start:self.write_pos].copy()
+
+            # Full ring: latest samples end at write_pos.
+            start = (self.write_pos - count) % self.max_samples
+            if start < self.write_pos:
+                return self.buffer[start:self.write_pos].copy()
+            return np.concatenate((self.buffer[start:], self.buffer[:self.write_pos]))
+
+    def get_samples_since(self, last_total_samples: int) -> tuple[np.ndarray, int]:
+        """
+        Return samples written after `last_total_samples` plus current absolute sample count.
+        If caller lags past ring capacity, returns the oldest still-available slice.
+        """
+        with self.lock:
+            total = int(self.samples_written)
+            if total <= 0:
+                return np.array([], dtype=np.float32), 0
+
+            oldest_available = max(0, total - self.max_samples)
+            start_total = max(int(last_total_samples), oldest_available)
+            if start_total >= total:
+                return np.array([], dtype=np.float32), total
+
+            count = total - start_total
+            if self.samples_written < self.max_samples:
+                start = max(0, self.write_pos - count)
+                return self.buffer[start:self.write_pos].copy(), total
+
+            start = (self.write_pos - count) % self.max_samples
+            if start < self.write_pos:
+                return self.buffer[start:self.write_pos].copy(), total
+            return np.concatenate((self.buffer[start:], self.buffer[:self.write_pos])), total
+
+    def get_samples(self) -> np.ndarray:
+        """Compatibility alias used by UI/streaming callers."""
+        return self.get_data()
     
     def clear(self):
         """Clear the buffer AND zero out data to prevent corruption"""

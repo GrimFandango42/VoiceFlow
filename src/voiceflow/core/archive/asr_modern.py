@@ -105,14 +105,20 @@ class ModernWhisperASR:
                 logger.debug("Audio too short, skipping")
                 return ""
 
-            # Check for silent audio
+            # Check for silent audio (respect config settings)
+            allow_low_energy = getattr(self.cfg, 'allow_low_energy_audio', True)
+            min_energy = getattr(self.cfg, 'min_audio_energy', 1e-8)
+
             energy = np.mean(audio ** 2)
-            if energy < 1e-6:  # Very quiet audio
-                logger.debug("Audio too quiet, skipping")
+            if not allow_low_energy and energy < min_energy:
+                logger.debug(f"Audio too quiet (energy: {energy:.2e}, threshold: {min_energy:.2e}), skipping")
                 return ""
 
             # Transcribe with faster-whisper
             with self._model_lock:
+                # Respect config settings instead of hardcoding
+                use_vad = getattr(self.cfg, 'vad_filter', False)
+
                 segments, info = self._model.transcribe(
                     audio,
                     language="en",
@@ -120,12 +126,12 @@ class ModernWhisperASR:
                     best_of=1,    # No alternative generation
                     temperature=0.0,  # Deterministic output
                     condition_on_previous_text=False,  # Avoid context pollution
-                    vad_filter=True,  # Use built-in VAD
+                    vad_filter=use_vad,  # Respect config setting
                     vad_parameters={
                         "threshold": 0.5,
                         "min_speech_duration_ms": 250,
                         "max_speech_duration_s": 300
-                    }
+                    } if use_vad else None
                 )
 
                 # Extract text from segments

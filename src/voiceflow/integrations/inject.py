@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Optional
 import logging
 import re
+import ctypes
 
 # Graceful imports for testing environments without system packages
 try:
@@ -62,6 +63,7 @@ class ClipboardInjector:
         self.cfg = cfg
         self._last_inject_ts = 0.0
         self._log = logging.getLogger("localflow")
+        self._target_hwnd: Optional[int] = None
 
     def _sanitize(self, text: str) -> str:
         """Enhanced sanitization with security validation"""
@@ -100,7 +102,9 @@ class ClipboardInjector:
             pyperclip.copy(text)
             time.sleep(0.03)  # allow clipboard to settle
             keyboard.send(self.cfg.paste_shortcut)
-            time.sleep(0.01)
+            # Some apps read clipboard asynchronously; avoid restoring too quickly.
+            restore_delay = max(0, int(getattr(self.cfg, "clipboard_restore_delay_ms", 150))) / 1000.0
+            time.sleep(restore_delay)
             if self.cfg.press_enter_after_paste:
                 keyboard.send('enter')
         return True
@@ -137,3 +141,49 @@ class ClipboardInjector:
             ok = self.type_text(text)
             self._log.info("inject len=%d method=%s ok=%s", len(text), method, ok)
             return ok
+
+    def capture_target_window(self) -> None:
+        """Capture current foreground window as preferred injection target."""
+        try:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if hwnd:
+                self._target_hwnd = int(hwnd)
+        except Exception:
+            self._target_hwnd = None
+
+    def clear_target_window(self) -> None:
+        self._target_hwnd = None
+
+    def _focus_target_window(self) -> None:
+        if not self._target_hwnd:
+            return
+        try:
+            ctypes.windll.user32.SetForegroundWindow(int(self._target_hwnd))
+            time.sleep(0.01)
+        except Exception:
+            pass
+
+    def _foreground_window(self) -> Optional[int]:
+        try:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            return int(hwnd) if hwnd else None
+        except Exception:
+            return None
+
+    def inject_live_checkpoint(self, text: str) -> bool:
+        """
+        Inject while PTT keys may still be held.
+        Keep this path low-risk for continuous hold:
+        do not force focus changes mid-recording, only inject into the captured target
+        when it is already foreground.
+        """
+        self._throttle()
+        text = self._sanitize(text)
+        if not text.strip():
+            return False
+        fg = self._foreground_window()
+        if self._target_hwnd and fg and int(fg) != int(self._target_hwnd):
+            # Focus drifted (e.g., overlay/tray). Skip this checkpoint to avoid typing into
+            # the wrong target and to avoid aggressive focus-stealing during active hold.
+            return False
+        return self.type_text(text)

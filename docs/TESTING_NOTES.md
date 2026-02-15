@@ -29,3 +29,27 @@ Next candidates
 - Add markers to segment Windows/UI/integration tests for selective runs.
 - Flesh out `voiceflow.core.audio`/`transcription` factories to cover additional engine/recorder types or expand stubs.
 - Consider a headless mode for system tray to simplify CI.
+
+---
+
+## Update (2026-02)
+
+Recent reliability/performance tuning added new behavior worth testing explicitly:
+
+- Config migration for legacy performance settings in `voiceflow.utils.settings`.
+- Auto-prefer GPU (`cuda` + `float16`) when runtime checks pass.
+- Lower-overhead preview-stream shutdown on release.
+- Medium/long dictation speed tuning via pause compaction defaults.
+
+Recommended manual verification matrix:
+
+- Short utterance: 3-5 seconds.
+- Medium utterance: 8-12 seconds.
+- Long utterance: 20-40 seconds with pauses.
+
+For each case, verify:
+
+- No dropped words on release.
+- Release-to-text latency is stable.
+- Formatting remains consistent and usable.
+- Overlay behavior does not affect transcription speed.
