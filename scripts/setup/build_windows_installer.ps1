@@ -1,6 +1,3 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
 param(
     [string]$PythonExe = "",
     [string]$AppVersion = "3.0.0",
@@ -8,6 +5,9 @@ param(
     [switch]$SkipBuild,
     [switch]$InstallInnoSetup
 )
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
 
 function Resolve-IsccPath {
     param([string]$ExplicitPath)
@@ -86,4 +86,3 @@ if (-not $installer) {
 }
 
 Write-Host "[build_windows_installer] Installer ready: $($installer.FullName)"
-

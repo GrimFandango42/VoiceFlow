@@ -1,6 +1,3 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
 param(
     [string]$PythonExe = "",
     [string]$OutputName = "VoiceFlow",
@@ -9,6 +6,9 @@ param(
     [switch]$Console,
     [switch]$InstallPackagingDeps
 )
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
 
 function Resolve-PythonExe {
     param([string]$RepoRoot, [string]$ExplicitPython)
@@ -32,6 +32,24 @@ function Resolve-PythonExe {
         return $venvPython
     }
     return "python"
+}
+
+function Test-IcoHeader {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return $false
+    }
+
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        if ($bytes.Length -lt 4) {
+            return $false
+        }
+        return ($bytes[0] -eq 0 -and $bytes[1] -eq 0 -and $bytes[2] -eq 1 -and $bytes[3] -eq 0)
+    } catch {
+        return $false
+    }
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -100,8 +118,10 @@ if ($Console) {
 } else {
     $args += "--windowed"
 }
-if (Test-Path $iconPath) {
+if (Test-IcoHeader -Path $iconPath) {
     $args += @("--icon", $iconPath)
+} elseif (Test-Path $iconPath) {
+    Write-Warning "[build_windows_exe] icon.ico exists but is not a valid ICO; building without custom icon."
 }
 
 $args += $entryScript
@@ -130,4 +150,3 @@ if ($OneFile) {
     Write-Host "[build_windows_exe] Built bundled executable: $(Join-Path $bundleRoot "$OutputName.exe")"
     Write-Host "[build_windows_exe] Zip artifact: $zipOut"
 }
-

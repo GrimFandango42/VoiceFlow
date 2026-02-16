@@ -1194,8 +1194,11 @@ class BottomScreenIndicator:
             )
             card.pack(fill=tk.X, padx=0, pady=4)
 
+            header = tk.Frame(card, bg="#111827")
+            header.pack(fill=tk.X, padx=8, pady=(6, 2))
+
             meta = tk.Label(
-                card,
+                header,
                 text="[{ts}] dur={dur:.1f}s proc={proc:.2f}s rtf={rtf:.2f}x".format(
                     ts=item["ts"],
                     dur=item["audio_duration"],
@@ -1207,10 +1210,27 @@ class BottomScreenIndicator:
                 font=("Consolas", 8, "bold"),
                 anchor="w",
                 justify=tk.LEFT,
-                padx=8,
-                pady=6,
+                pady=0,
             )
-            meta.pack(fill=tk.X)
+            meta.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            copy_btn = tk.Button(
+                header,
+                text="⧉",
+                command=lambda txt=full_text: self._copy_history_item(txt),
+                bg="#111827",
+                fg="#C4D9F2",
+                activebackground="#111827",
+                activeforeground="#FFFFFF",
+                relief=tk.FLAT,
+                bd=0,
+                highlightthickness=0,
+                padx=2,
+                pady=0,
+                font=("Segoe UI Symbol", 10, "bold"),
+                cursor="hand2",
+            )
+            copy_btn.pack(side=tk.RIGHT)
 
             message = tk.Label(
                 card,
@@ -1226,10 +1246,9 @@ class BottomScreenIndicator:
             )
             message.pack(fill=tk.X)
 
-            actions = tk.Frame(card, bg="#111827")
-            actions.pack(fill=tk.X, padx=8, pady=(0, 6))
-
             if can_expand:
+                actions = tk.Frame(card, bg="#111827")
+                actions.pack(fill=tk.X, padx=8, pady=(0, 6))
                 expand_btn = tk.Button(
                     actions,
                     text=("Less" if show_full else "More"),
@@ -1247,24 +1266,6 @@ class BottomScreenIndicator:
                     cursor="hand2",
                 )
                 expand_btn.pack(side=tk.LEFT)
-
-            copy_btn = tk.Button(
-                actions,
-                text="⧉",
-                command=lambda txt=full_text: self._copy_history_item(txt),
-                bg="#111827",
-                fg="#C4D9F2",
-                activebackground="#111827",
-                activeforeground="#FFFFFF",
-                relief=tk.FLAT,
-                bd=0,
-                highlightthickness=0,
-                padx=0,
-                pady=2,
-                font=("Segoe UI Symbol", 10, "bold"),
-                cursor="hand2",
-            )
-            copy_btn.pack(side=tk.RIGHT)
 
     def record_transcription_event(self, text: str, audio_duration: float, processing_time: float):
         """Record summary for always-on dock/history panel."""
