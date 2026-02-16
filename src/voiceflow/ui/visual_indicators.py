@@ -103,6 +103,7 @@ class BottomScreenIndicator:
         self.audio_features_smoothed = {"low": 0.34, "mid": 0.33, "high": 0.33, "centroid": 0.5}
         self._visual_agc = 0.18
         self.recent_transcriptions = deque(maxlen=50)
+        self.pending_history_events = deque(maxlen=200)
         self.history_item_expanded_ids = set()
         self.history_event_seq = 0
         self.history_visible = False
@@ -1094,6 +1095,7 @@ class BottomScreenIndicator:
             return
         self.history_visible = not self.history_visible
         if self.history_visible:
+            self._flush_pending_history_events_ui()
             if self.history_geometry_compact:
                 self.history_window.geometry(self.history_geometry_compact)
             self.history_expanded = False
@@ -1269,14 +1271,32 @@ class BottomScreenIndicator:
 
     def record_transcription_event(self, text: str, audio_duration: float, processing_time: float):
         """Record summary for always-on dock/history panel."""
-        if not self.gui_ready or not self.command_queue:
+        safe_text = (text or "").strip()
+        if not safe_text:
+            return
+        event = (safe_text, float(audio_duration), float(processing_time))
+        if not self.command_queue or not self.gui_ready:
+            self.pending_history_events.append(event)
             return
         try:
+            while self.pending_history_events:
+                pending_text, pending_audio, pending_proc = self.pending_history_events.popleft()
+                self.command_queue.put(
+                    (self._record_transcription_event_ui, (pending_text, pending_audio, pending_proc), {})
+                )
             self.command_queue.put(
-                (self._record_transcription_event_ui, (text, audio_duration, processing_time), {})
+                (self._record_transcription_event_ui, event, {})
             )
         except Exception as e:
             logger.debug(f"Failed to queue transcription event: {e}")
+
+    def _flush_pending_history_events_ui(self):
+        """Flush startup-race history events when history panel is opened."""
+        if not self.pending_history_events:
+            return
+        while self.pending_history_events:
+            pending_text, pending_audio, pending_proc = self.pending_history_events.popleft()
+            self._record_transcription_event_ui(pending_text, pending_audio, pending_proc)
 
     def _record_transcription_event_ui(self, text: str, audio_duration: float, processing_time: float):
         safe_text = (text or "").strip()

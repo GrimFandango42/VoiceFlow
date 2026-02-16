@@ -299,7 +299,13 @@ except ImportError:
     VISUAL_INDICATORS_AVAILABLE = False
     def visual_show_preview(text): pass
     def visual_clear_preview(): pass
-    def visual_record_transcription_event(text, audio_duration, processing_time): pass
+    def visual_record_transcription_event(text, audio_duration, processing_time):
+        # Late-bind fallback: import can fail early during startup races.
+        try:
+            from voiceflow.ui.visual_indicators import record_transcription_event as _record_event
+            _record_event(text, audio_duration, processing_time)
+        except Exception:
+            pass
     def visual_update_audio_level(level): pass
     def visual_update_audio_features(features): pass
 
@@ -1361,7 +1367,7 @@ class EnhancedApp:
                 perf_snapshot["session_rtf_avg"],
                 perf_snapshot["status"],
             )
-            if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE and text.strip():
+            if self.visual_indicators_enabled and text.strip():
                 visual_record_transcription_event(text, audio_duration, transcription_time)
 
             # Inject text
