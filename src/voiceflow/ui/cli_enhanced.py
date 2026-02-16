@@ -573,6 +573,10 @@ class EnhancedApp:
         if not self.asr_fast:
             return self.asr, "primary"
         threshold = float(getattr(self.cfg, "latency_boost_max_audio_seconds", 12.0))
+        fast_tier = str(getattr(self.cfg, "latency_boost_model_tier", "tiny")).strip().lower()
+        if fast_tier == "tiny":
+            tiny_cap = float(getattr(self.cfg, "latency_boost_tiny_max_audio_seconds", 3.0))
+            threshold = min(threshold, tiny_cap)
         if 0.0 < audio_duration <= threshold:
             return self.asr_fast, "fast"
         return self.asr, "primary"

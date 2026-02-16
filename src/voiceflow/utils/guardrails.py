@@ -273,6 +273,16 @@ def validate_config(cfg: Config) -> Config:
             )
             cfg.latency_boost_max_audio_seconds = 12.0
 
+        if (
+            not hasattr(cfg, 'latency_boost_tiny_max_audio_seconds')
+            or cfg.latency_boost_tiny_max_audio_seconds < 0.5
+            or cfg.latency_boost_tiny_max_audio_seconds > 30.0
+        ):
+            logger.warning(
+                f"Invalid latency_boost_tiny_max_audio_seconds {getattr(cfg, 'latency_boost_tiny_max_audio_seconds', 'None')}, defaulting to 3.0"
+            )
+            cfg.latency_boost_tiny_max_audio_seconds = 3.0
+
         if not hasattr(cfg, 'latency_boost_model_tier') or str(cfg.latency_boost_model_tier).lower() not in ['tiny', 'quick', 'balanced', 'quality', 'voxtral']:
             logger.warning(f"Invalid latency_boost_model_tier {getattr(cfg, 'latency_boost_model_tier', 'None')}, defaulting to tiny")
             cfg.latency_boost_model_tier = 'tiny'

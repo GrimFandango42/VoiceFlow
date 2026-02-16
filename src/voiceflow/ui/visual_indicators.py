@@ -1216,18 +1216,18 @@ class BottomScreenIndicator:
 
             copy_btn = tk.Button(
                 header,
-                text="⧉",
+                text="Copy",
                 command=lambda txt=full_text: self._copy_history_item(txt),
-                bg="#111827",
-                fg="#C4D9F2",
-                activebackground="#111827",
+                bg="#1E3A8A",
+                fg="#DBEAFE",
+                activebackground="#1D4ED8",
                 activeforeground="#FFFFFF",
                 relief=tk.FLAT,
                 bd=0,
                 highlightthickness=0,
-                padx=2,
-                pady=0,
-                font=("Segoe UI Symbol", 10, "bold"),
+                padx=8,
+                pady=1,
+                font=("Segoe UI", 8, "bold"),
                 cursor="hand2",
             )
             copy_btn.pack(side=tk.RIGHT)

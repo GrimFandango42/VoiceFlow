@@ -68,6 +68,7 @@ class Config:
     latency_boost_enabled: bool = True  # Use a smaller model for short utterances
     latency_boost_model_tier: str = "tiny"  # Fast-path model tier for short utterances
     latency_boost_max_audio_seconds: float = 10.0  # Keep ultra-fast path short; preserve accuracy on longer utterances
+    latency_boost_tiny_max_audio_seconds: float = 3.0  # Hard cap for tiny tier to protect recognition quality
 
     # Quality improvements without speed impact
     enable_smart_prompting: bool = True  # Adaptive prompting for better accuracy

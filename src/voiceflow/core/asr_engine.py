@@ -107,6 +107,10 @@ class ModelConfig:
     vad_filter: bool = False
     cpu_threads: int = 0
     asr_num_workers: int = 1
+    beam_size: int = 1
+    best_of: int = 1
+    temperature: float = 0.0
+    condition_on_previous_text: bool = False
 
 
 # Predefined model configurations
@@ -338,12 +342,14 @@ class FasterWhisperBackend(ASRBackend):
 
         try:
             with self._lock:
+                beam_size = max(1, int(getattr(self.config, "beam_size", 1)))
+                best_of = max(1, int(getattr(self.config, "best_of", 1)))
                 kwargs: Dict[str, Any] = {
                     "language": "en",
-                    "beam_size": 1,
-                    "best_of": 1,
-                    "temperature": 0.0,
-                    "condition_on_previous_text": False,
+                    "beam_size": beam_size,
+                    "best_of": max(best_of, beam_size),
+                    "temperature": float(getattr(self.config, "temperature", 0.0)),
+                    "condition_on_previous_text": bool(getattr(self.config, "condition_on_previous_text", False)),
                     "without_timestamps": True,
                     "vad_filter": self.config.vad_filter,
                 }
@@ -705,6 +711,10 @@ class ASREngine:
         vad_filter: bool = False,
         cpu_threads: int = 0,
         asr_num_workers: int = 1,
+        beam_size: int = 1,
+        best_of: int = 1,
+        temperature: float = 0.0,
+        condition_on_previous_text: bool = False,
     ):
         """
         Initialize the ASR engine.
@@ -720,6 +730,10 @@ class ASREngine:
             vad_filter: Enable backend VAD filtering before decode
             cpu_threads: Number of CPU threads for ctranslate2 (0 = auto)
             asr_num_workers: Number of ctranslate2 workers for model inference
+            beam_size: Beam search size (1 keeps greedy fastest path)
+            best_of: Number of sampled candidates per segment
+            temperature: Decoding temperature (0.0 deterministic)
+            condition_on_previous_text: Whether to chain previous text context
         """
         if str(device).lower() == "cuda" and not _cuda_runtime_ready():
             logger.warning("CUDA requested but runtime dependencies are missing. Falling back to CPU int8.")
@@ -752,6 +766,10 @@ class ASREngine:
         self.model_config.vad_filter = vad_filter
         self.model_config.cpu_threads = cpu_threads
         self.model_config.asr_num_workers = asr_num_workers
+        self.model_config.beam_size = max(1, int(beam_size))
+        self.model_config.best_of = max(1, int(best_of))
+        self.model_config.temperature = float(temperature)
+        self.model_config.condition_on_previous_text = bool(condition_on_previous_text)
 
         self.sample_rate = sample_rate
         self.enable_diarization = enable_diarization
@@ -939,6 +957,9 @@ class ModernWhisperASR(ASREngine):
         vad_filter = getattr(cfg, 'vad_filter', False)
         cpu_threads = getattr(cfg, 'cpu_threads', 0)
         asr_num_workers = getattr(cfg, 'asr_num_workers', 1)
+        beam_size = getattr(cfg, 'beam_size', 1)
+        temperature = getattr(cfg, 'temperature', 0.0)
+        condition_on_previous_text = getattr(cfg, 'condition_on_previous_text', False)
 
         # If model_tier is specified, use it to select the model
         tier = None
@@ -961,6 +982,9 @@ class ModernWhisperASR(ASREngine):
                 vad_filter=vad_filter,
                 cpu_threads=cpu_threads,
                 asr_num_workers=asr_num_workers,
+                beam_size=beam_size,
+                temperature=temperature,
+                condition_on_previous_text=condition_on_previous_text,
             )
             logger.info(f"Using model tier '{model_tier}' -> {self.model_config.name}")
         else:
@@ -972,6 +996,9 @@ class ModernWhisperASR(ASREngine):
                 vad_filter=vad_filter,
                 cpu_threads=cpu_threads,
                 asr_num_workers=asr_num_workers,
+                beam_size=beam_size,
+                temperature=temperature,
+                condition_on_previous_text=condition_on_previous_text,
             )
         self.cfg = cfg
 
