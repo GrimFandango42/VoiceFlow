@@ -102,10 +102,18 @@ See:
 
 - Config: `%LOCALAPPDATA%\LocalFlow\config.json`
 - Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+- Optional engineering terms dictionary: `%LOCALAPPDATA%\LocalFlow\engineering_terms.json`
 
 Environment overrides:
 - `VOICEFLOW_FORCE_CPU=1` to force CPU mode
 - `VOICEFLOW_USE_GPU_VENV=0` to prefer `venv` over `.venv-gpu` in launchers
+- `VOICEFLOW_TERMS_PATH=C:\path\engineering_terms.json` to use a custom dictionary file
+- `VOICEFLOW_TECHNICAL_TERMS_PATH=...` remains supported for backward compatibility
+
+Engineering term dictionary (optional):
+- VoiceFlow includes built-in technical normalization for common terms (`OAuth`, `CLI`, `API`, `JSON`, `YAML`, `SQL`, `AWS`, `GCP`, `MQTT`, etc.).
+- It also detects common engineering conversation context (tickets, sprint/incident/release language, PR/MR/workflow terms) for safer contextual corrections.
+- You can add your own high-priority terms by creating `engineering_terms.json` using `docs/examples/engineering_terms.json` as a template.
 
 ## Testing
 

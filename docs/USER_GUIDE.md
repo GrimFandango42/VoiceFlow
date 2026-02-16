@@ -35,8 +35,8 @@ Primary toggles:
 Use `Recent History` from the dock or tray to review the latest transcriptions.
 
 For each item you can:
-- `Show more` to expand to the full transcript text
-- `Copy` to copy the full transcript
+- `More` / `Less` to expand or collapse full transcript text
+- `⧉` copy icon to copy the full transcript
 
 This is useful when audio was successfully transcribed but injection into the target app did not complete.
 
@@ -80,6 +80,13 @@ If you want higher consistency:
 
 Config file:
 - `%LOCALAPPDATA%\LocalFlow\config.json`
+
+Technical vocabulary tuning:
+- Default technical normalization already handles common terms like `OAuth`, `CLI`, `API`, `JSON`, `SQL`, `AWS`, and `MQTT`.
+- VoiceFlow also uses engineering-context hints (for example sprint/ticket/incident/release/PR language) to apply context-aware corrections more safely.
+- Add a local custom dictionary at `%LOCALAPPDATA%\LocalFlow\engineering_terms.json` to bias toward your own stack and team vocabulary.
+- Use `docs/examples/engineering_terms.json` as a starter template.
+- Optional override for testing: set `VOICEFLOW_TERMS_PATH` (or legacy `VOICEFLOW_TECHNICAL_TERMS_PATH`) to another dictionary file path.
 
 ## Reliability Tips
 

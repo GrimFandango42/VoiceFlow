@@ -279,11 +279,11 @@ class BottomScreenIndicator:
                 geo = self.dock_window.geometry()  # e.g. 430x30+745+1008
                 dock_y = int(geo.rsplit("+", 1)[-1])
                 # Keep animation close to the dock for a tighter visual stack.
-                y = int(dock_y - self.height - 4)
+                y = int(dock_y - self.height - 1)
             except Exception:
-                y = min(y - 8, screen_height - self.height - reserved_bottom)
+                y = min(y - 5, screen_height - self.height - reserved_bottom)
         else:
-            y = min(y - 8, screen_height - self.height - reserved_bottom)
+            y = min(y - 6, screen_height - self.height - reserved_bottom)
 
         x = max(8, min(screen_width - self.width - 8, x))
         y = max(10, y)
@@ -316,7 +316,7 @@ class BottomScreenIndicator:
             highlightthickness=0,
             bd=0,
         )
-        self.wave_canvas.pack(pady=(0, 4))
+        self.wave_canvas.pack(pady=(6, 4))
         self._init_waveform_strip()
 
         # Status text
@@ -447,6 +447,26 @@ class BottomScreenIndicator:
             width=8,
             fill="#0EA5E9",
         )
+        self.wave_line_glow = self.wave_canvas.create_line(
+            left,
+            base,
+            right,
+            base,
+            smooth=True,
+            splinesteps=24,
+            width=6,
+            fill="#0EA5E9",
+        )
+        self.wave_line = self.wave_canvas.create_line(
+            left,
+            base,
+            right,
+            base,
+            smooth=True,
+            splinesteps=24,
+            width=2,
+            fill="#BAE6FD",
+        )
         self.wave_orb_glow = self.wave_canvas.create_oval(left - 6, base - 6, left + 6, base + 6, fill="#0EA5E9", outline="")
         self.wave_orb = self.wave_canvas.create_oval(left - 3, base - 3, left + 3, base + 3, fill="#38BDF8", outline="")
         self.space_star_ids = []
@@ -459,7 +479,7 @@ class BottomScreenIndicator:
         self.wave_spark_meta = []
         self.wave_bars = []
 
-        bar_count = 56
+        bar_count = 64
         gap = 2
         bar_w = max(3, int((right - left - ((bar_count - 1) * gap)) / bar_count))
         x = left
@@ -512,6 +532,10 @@ class BottomScreenIndicator:
             self.wave_canvas.tag_raise(self.wave_trail_glow)
         if self.wave_trail_line:
             self.wave_canvas.tag_raise(self.wave_trail_line)
+        if self.wave_line_glow:
+            self.wave_canvas.tag_raise(self.wave_line_glow)
+        if self.wave_line:
+            self.wave_canvas.tag_raise(self.wave_line)
         for ring in self.wave_pulse_rings:
             self.wave_canvas.tag_raise(ring)
         for bar in self.wave_bars:
@@ -551,10 +575,9 @@ class BottomScreenIndicator:
         centroid = float(self.audio_features_smoothed["centroid"])
 
         if mode == "idle":
-            lvl *= 0.15
+            lvl *= 0.08
 
         # Recorder/radio style bars.
-        self.wave_phase += 0.20 + 1.35 * lvl
         base = self.wave_h // 2
         max_h = max(18, (self.wave_h // 2) - 10)
 
@@ -574,6 +597,8 @@ class BottomScreenIndicator:
         # Additional smoothing to avoid jitter while preserving speech swings.
         self._speech_level = (self._speech_level * 0.78) + (voiced * 0.22)
         voiced = self._speech_level
+        voiced_drive = max(0.0, min(1.0, voiced ** 0.86))
+        self.wave_phase += 0.05 + (1.75 * voiced_drive)
 
         speech_now = voiced > 0.12
         if speech_now and not self._speech_active:
@@ -601,20 +626,45 @@ class BottomScreenIndicator:
             for idx, sample in enumerate(hist):
                 x = self.wave_left + (span * (idx / max(1, total)))
                 harmonic = 0.62 + (0.38 * math.sin((idx * 0.19) + (self.wave_phase * 0.95) + (centroid * 1.7)))
-                y = base - (sample * max_h * harmonic)
+                carrier = math.sin((idx * 0.34) + (self.wave_phase * 1.55) + (centroid * 2.2))
+                y = base + (sample * max_h * harmonic * carrier)
                 points.extend((x, y))
             self.wave_canvas.coords(self.wave_trail_line, *points)
             self.wave_canvas.coords(self.wave_trail_glow, *points)
-            self.wave_canvas.itemconfig(self.wave_trail_line, fill=trail_color, width=(1 + (1.8 * voiced)))
+            self.wave_canvas.itemconfig(self.wave_trail_line, fill=trail_color, width=(1 + (1.8 * voiced_drive)))
             self.wave_canvas.itemconfig(
                 self.wave_trail_glow,
                 fill=glow_color,
-                width=(4 + (4.2 * voiced) + (2.4 * self._burst_energy)),
+                width=(4 + (4.2 * voiced_drive) + (2.4 * self._burst_energy)),
+            )
+
+        if self.wave_line and self.wave_line_glow:
+            points = []
+            point_count = 72
+            span = max(1.0, float(self.wave_right - self.wave_left))
+            wave_amp = 1.2 + (voiced_drive * max_h * (0.58 + (0.32 * mid)))
+            base_freq = 1.4 + (4.8 * centroid) + (0.8 * high)
+            texture_freq = (base_freq * 0.47) + 0.60
+            for idx in range(point_count):
+                p = idx / max(1, point_count - 1)
+                x = self.wave_left + (span * p)
+                envelope = 0.25 + (0.75 * ((1.0 - abs((p * 2.0) - 1.0)) ** 1.35))
+                carrier = math.sin((p * math.pi * 2.0 * base_freq) + (self.wave_phase * 2.2))
+                texture = math.sin((p * math.pi * 2.0 * texture_freq) - (self.wave_phase * 1.4))
+                y = base + (wave_amp * envelope * ((0.74 * carrier) + (0.26 * texture)))
+                points.extend((x, y))
+            self.wave_canvas.coords(self.wave_line, *points)
+            self.wave_canvas.coords(self.wave_line_glow, *points)
+            self.wave_canvas.itemconfig(self.wave_line, fill=trail_color, width=(1.1 + (2.2 * voiced_drive)))
+            self.wave_canvas.itemconfig(
+                self.wave_line_glow,
+                fill=glow_color,
+                width=(3.0 + (7.5 * voiced_drive) + (2.0 * self._burst_energy)),
             )
 
         n = len(self.wave_bars)
         center = (n - 1) / 2.0
-        wave_front = (0.5 + 0.5 * math.sin(self.wave_phase * 0.56))  # 0..1 traveling emphasis
+        wave_front = 0.5 + (0.5 * math.sin((self.wave_phase * (0.40 + (0.35 * voiced_drive))) + centroid))
         for i, bar in enumerate(self.wave_bars):
             p = i / max(1.0, n - 1.0)  # 0..1 (left=low freq, right=high freq)
 
@@ -626,14 +676,15 @@ class BottomScreenIndicator:
             band_energy = ((low * w_low) + (mid * w_mid) + (high * w_high)) / w_sum
 
             falloff = 1.0 - min(1.0, abs(i - center) / (center + 0.001))
-            osc = 0.66 + 0.34 * math.sin((self.wave_phase * (1.1 + centroid * 1.3)) + (i * 0.38))
+            osc = 0.52 + (0.48 * math.sin((self.wave_phase * (0.95 + (band_energy * 0.75))) + (i * (0.18 + (0.28 * centroid)))))
             front_dist = abs(p - wave_front)
             front_boost = max(0.0, 1.0 - (front_dist / 0.24))
-            combined = (0.26 + 0.74 * falloff) * (0.20 + 0.80 * band_energy) * (0.88 + 0.35 * front_boost)
-            h = 2 + (max_h * voiced * combined * osc)
+            combined = (0.20 + (0.80 * falloff)) * (0.16 + (0.84 * band_energy)) * (0.72 + (0.38 * front_boost))
+            amplitude = voiced_drive * (0.12 + (0.88 * band_energy))
+            h = 1.8 + (max_h * amplitude * combined * osc)
             x0, _, x1, _ = self.wave_canvas.coords(bar)
             top = base - h
-            bottom = base + (h * (0.58 + 0.08 * front_boost))
+            bottom = base + (h * (0.54 + (0.14 * front_boost)))
             self.wave_canvas.coords(bar, x0, top, x1, bottom)
             bar_r = int(max(24, min(200, 34 + (88 * band_energy) + (62 * voiced))))
             bar_g = int(max(82, min(220, 106 + (76 * mid) + (34 * falloff))))
@@ -647,10 +698,10 @@ class BottomScreenIndicator:
 
         if self.wave_orb and self.wave_orb_glow:
             span = max(1.0, float(self.wave_right - self.wave_left))
-            orb_x = self.wave_left + ((0.20 + (0.64 * centroid) + (0.06 * math.sin(self.wave_phase * 0.72))) * span)
-            orb_y = base + (math.sin(self.wave_phase * 0.9) * (2 + (10 * voiced)))
-            core_r = 3 + (6 * voiced) + (4 * self._burst_energy)
-            glow_r = core_r + 6 + (7 * voiced)
+            orb_x = self.wave_left + ((0.20 + (0.64 * centroid) + (0.03 * math.sin(self.wave_phase * 0.72))) * span)
+            orb_y = base + (math.sin(self.wave_phase * (0.60 + (0.40 * voiced_drive))) * (1 + (11 * voiced_drive)))
+            core_r = 2.8 + (5.8 * voiced_drive) + (4 * self._burst_energy)
+            glow_r = core_r + 6 + (7 * voiced_drive)
             self.wave_canvas.coords(self.wave_orb, orb_x - core_r, orb_y - core_r, orb_x + core_r, orb_y + core_r)
             self.wave_canvas.coords(
                 self.wave_orb_glow,
@@ -666,7 +717,7 @@ class BottomScreenIndicator:
             for idx, ring in enumerate(self.wave_pulse_rings):
                 phase = (self.wave_phase * (0.34 + (idx * 0.08))) + (idx * 1.7)
                 pulse = (0.5 + 0.5 * math.sin(phase))
-                ring_r = glow_r + 5 + (idx * 8) + (pulse * 7) + (voiced * 12)
+                ring_r = glow_r + 5 + (idx * 8) + (pulse * 6) + (voiced_drive * 14)
                 self.wave_canvas.coords(
                     ring,
                     orb_x - ring_r,
@@ -678,24 +729,25 @@ class BottomScreenIndicator:
                 rc_g = min(255, accent_g + 8 + (idx * 4))
                 rc_b = min(255, accent_b + 18 + (idx * 3))
                 ring_color = "#{:02X}{:02X}{:02X}".format(rc_r, rc_g, rc_b)
-                ring_w = max(1, int(1 + voiced + (0.4 * (2 - idx)) + (0.4 * self._burst_energy)))
+                ring_w = max(1, int(1 + voiced_drive + (0.4 * (2 - idx)) + (0.4 * self._burst_energy)))
                 self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
 
         # Spark particles orbiting the waveform path.
         if self.wave_sparks and self.wave_spark_meta:
             span = max(1.0, float(self.wave_right - self.wave_left))
-            speed = 0.25 + (0.95 * voiced)
-            spark_base = 1.8 + (2.8 * voiced) + (1.4 * self._burst_energy)
+            speed = 0.02 + (1.05 * voiced_drive)
+            drift = 0.02 + (0.20 * voiced_drive)
+            spark_base = 1.6 + (2.8 * voiced_drive) + (1.4 * self._burst_energy)
             for idx, spark in enumerate(self.wave_sparks):
                 meta = self.wave_spark_meta[idx]
                 meta["phase"] += 0.08 + (0.03 * idx) + (0.05 * speed)
-                meta["x"] += (meta["vx"] * speed) + (0.12 * math.sin(meta["phase"] * 0.7))
+                meta["x"] += (meta["vx"] * speed) + (drift * math.sin(meta["phase"] * 0.7))
                 if meta["x"] < self.wave_left:
                     meta["x"] = self.wave_right
                 elif meta["x"] > self.wave_right:
                     meta["x"] = self.wave_left
-                y_wave = base - (voiced * max_h * 0.44 * math.sin((meta["x"] / span) * 8.6 + self.wave_phase))
-                meta["y"] = y_wave + (meta["amp"] * 0.08 * math.sin(meta["phase"] * 1.5))
+                y_wave = base + (voiced_drive * max_h * 0.44 * math.sin((meta["x"] / span) * 8.6 + self.wave_phase))
+                meta["y"] = y_wave + (meta["amp"] * 0.06 * math.sin(meta["phase"] * 1.5))
                 r = spark_base * (0.72 + 0.28 * math.sin(meta["phase"] + (idx * 0.21)))
                 self.wave_canvas.coords(spark, meta["x"] - r, meta["y"] - r, meta["x"] + r, meta["y"] + r)
                 s_r = min(255, accent_r + 18 + (idx % 3) * 10)
@@ -717,8 +769,8 @@ class BottomScreenIndicator:
         try:
             val = max(0.0, min(1.0, float(level)))
             # Stronger mapping for clearer quiet-vs-speaking contrast.
-            boosted = min(1.0, (val ** 0.66) * 1.95)
-            self.audio_level_target = 0.0 if boosted < 0.004 else boosted
+            boosted = min(1.0, (val ** 0.72) * 1.75)
+            self.audio_level_target = 0.0 if boosted < 0.012 else boosted
             self.audio_level = self.audio_level_target
         except Exception:
             self.audio_level = 0.0
@@ -741,6 +793,11 @@ class BottomScreenIndicator:
             for key in ("low", "mid", "high", "centroid"):
                 val = max(0.0, min(1.0, float(features.get(key, self.audio_features_target.get(key, 0.0)))))
                 self.audio_features_target[key] = val
+            if self.audio_level_target <= 0.001:
+                self.audio_features_target["low"] = 0.34
+                self.audio_features_target["mid"] = 0.33
+                self.audio_features_target["high"] = 0.33
+                self.audio_features_target["centroid"] = 0.50
         except Exception:
             pass
 
@@ -1175,14 +1232,16 @@ class BottomScreenIndicator:
             if can_expand:
                 expand_btn = tk.Button(
                     actions,
-                    text=("Show less" if show_full else "Show more"),
+                    text=("Less" if show_full else "More"),
                     command=lambda i=item_id: self._toggle_history_item_details(i),
-                    bg="#1F2937",
-                    fg="#E5E7EB",
-                    activebackground="#334155",
-                    activeforeground="#FFFFFF",
+                    bg="#111827",
+                    fg="#60A5FA",
+                    activebackground="#111827",
+                    activeforeground="#93C5FD",
                     relief=tk.FLAT,
-                    padx=8,
+                    bd=0,
+                    highlightthickness=0,
+                    padx=0,
                     pady=2,
                     font=("Segoe UI", 8, "bold"),
                     cursor="hand2",
@@ -1191,16 +1250,18 @@ class BottomScreenIndicator:
 
             copy_btn = tk.Button(
                 actions,
-                text="Copy",
+                text="⧉",
                 command=lambda txt=full_text: self._copy_history_item(txt),
-                bg="#1F2937",
-                fg="#E5E7EB",
-                activebackground="#334155",
+                bg="#111827",
+                fg="#C4D9F2",
+                activebackground="#111827",
                 activeforeground="#FFFFFF",
                 relief=tk.FLAT,
-                padx=8,
+                bd=0,
+                highlightthickness=0,
+                padx=0,
                 pady=2,
-                font=("Segoe UI", 8, "bold"),
+                font=("Segoe UI Symbol", 10, "bold"),
                 cursor="hand2",
             )
             copy_btn.pack(side=tk.RIGHT)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from voiceflow.core.textproc import apply_code_mode, format_transcript_text
+import json
+
+from voiceflow.core.textproc import apply_code_mode, format_transcript_text, normalize_context_terms
 
 
 def test_basic_symbols():
@@ -38,4 +40,48 @@ def test_format_transcript_text():
     # Test punctuation spacing
     result = format_transcript_text("hello , world")
     assert "Hello," in result and "world" in result
+
+
+def test_technical_term_dictionary_defaults():
+    text = "configure oath for cli login and api token exchange"
+    normalized = normalize_context_terms(text)
+    assert "OAuth" in normalized
+    assert "CLI" in normalized
+    assert "API" in normalized
+
+
+def test_technical_term_dictionary_context_guard():
+    text = "i bought oat milk today"
+    normalized = normalize_context_terms(text)
+    assert "oat milk" in normalized.lower()
+    assert "OAuth" not in normalized
+
+
+def test_custom_technical_term_dictionary(monkeypatch, tmp_path):
+    custom_path = tmp_path / "engineering_terms.json"
+    custom_path.write_text(
+        json.dumps(
+            {
+                "exact": {
+                    "fast api": "FastAPI",
+                },
+                "engineering_exact": {
+                    "oat": "OAuth",
+                },
+                "engineering_regex": [
+                    {
+                        "pattern": r"\\bc\\s*l\\s*i\\b",
+                        "replacement": "CLI",
+                    }
+                ],
+            },
+            ensure_ascii=True,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOICEFLOW_TERMS_PATH", str(custom_path))
+    normalized = normalize_context_terms("set up oat token flow with c l i and fast api")
+    assert "OAuth token flow" in normalized
+    assert "CLI" in normalized
+    assert "FastAPI" in normalized
 

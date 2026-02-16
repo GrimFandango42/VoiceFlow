@@ -1,0 +1,28 @@
+{
+  "exact": {
+    "fast api": "FastAPI",
+    "postgress": "Postgres",
+    "pydan tic": "Pydantic",
+    "alembik": "Alembic"
+  },
+  "regex": [
+    {
+      "pattern": "\\bci\\s*cd\\b",
+      "replacement": "CI/CD"
+    }
+  ],
+  "engineering_exact": {
+    "oath": "OAuth",
+    "oat": "OAuth",
+    "see el eye": "CLI",
+    "c l i": "CLI",
+    "pull request": "PR",
+    "merge request": "MR"
+  },
+  "engineering_regex": [
+    {
+      "pattern": "\\bo\\s*auth\\s*(?:2|two)\\b",
+      "replacement": "OAuth2"
+    }
+  ]
+}

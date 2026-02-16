@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
 import re
+from pathlib import Path
 from typing import Dict
 
 
@@ -59,6 +62,264 @@ SYMBOL_MAP: Dict[str, str] = {
     "new lines": "\n",
     "tab": "\t",
 }
+
+
+_TECH_CONTEXT_HINTS = (
+    "api",
+    "asr",
+    "auth",
+    "authentication",
+    "authorization",
+    "aws",
+    "azure",
+    "bash",
+    "backlog",
+    "bug",
+    "bugfix",
+    "canary",
+    "ci",
+    "cli",
+    "cloud",
+    "code",
+    "docker",
+    "endpoint",
+    "fastapi",
+    "gcp",
+    "git",
+    "github",
+    "gitlab",
+    "incident",
+    "issue",
+    "jira",
+    "kanban",
+    "kpi",
+    "google cloud",
+    "grpc",
+    "helm",
+    "http",
+    "https",
+    "infra",
+    "jwt",
+    "kafka",
+    "kubernetes",
+    "llm",
+    "model",
+    "mqtt",
+    "mr",
+    "observability",
+    "oauth",
+    "oidc",
+    "oncall",
+    "on-call",
+    "pipeline",
+    "postgres",
+    "postmortem",
+    "pull request",
+    "powershell",
+    "python",
+    "pr",
+    "redis",
+    "release",
+    "repo",
+    "retrospective",
+    "retro",
+    "rfc",
+    "rollout",
+    "runbook",
+    "sdk",
+    "sli",
+    "slo",
+    "sla",
+    "sql",
+    "sprint",
+    "standup",
+    "ssh",
+    "sso",
+    "terraform",
+    "terminal",
+    "ticket",
+    "token",
+    "throughput",
+    "latency",
+    "typescript",
+    "vpc",
+    "vs code",
+    "vscode",
+    "yaml",
+)
+
+_GLOBAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bapi\b", re.IGNORECASE), "API"),
+    (re.compile(r"\bcli\b", re.IGNORECASE), "CLI"),
+    (re.compile(r"\bsdk\b", re.IGNORECASE), "SDK"),
+    (re.compile(r"\bjson\b", re.IGNORECASE), "JSON"),
+    (re.compile(r"\byaml\b", re.IGNORECASE), "YAML"),
+    (re.compile(r"\bhttp\b", re.IGNORECASE), "HTTP"),
+    (re.compile(r"\bhttps\b", re.IGNORECASE), "HTTPS"),
+    (re.compile(r"\bgrpc\b", re.IGNORECASE), "gRPC"),
+    (re.compile(r"\bllm\b", re.IGNORECASE), "LLM"),
+    (re.compile(r"\basr\b", re.IGNORECASE), "ASR"),
+    (re.compile(r"\bsql\b", re.IGNORECASE), "SQL"),
+    (re.compile(r"\bcpu\b", re.IGNORECASE), "CPU"),
+    (re.compile(r"\bgpu\b", re.IGNORECASE), "GPU"),
+    (re.compile(r"\baws\b", re.IGNORECASE), "AWS"),
+    (re.compile(r"\bgcp\b", re.IGNORECASE), "GCP"),
+    (re.compile(r"\bmqtt\b", re.IGNORECASE), "MQTT"),
+)
+
+_CONTEXTUAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bo[\s-]*auth(?:\s*(?:2|two))?\b", re.IGNORECASE), "OAuth"),
+    (re.compile(r"\boath(?:\s*(?:2|two))?\b", re.IGNORECASE), "OAuth"),
+    (re.compile(r"\boat(?=\s+(?:flow|token|client|login|provider|callback|redirect|scope|grant|authorization|auth|oidc|sso|jwt))", re.IGNORECASE), "OAuth"),
+    (re.compile(r"\bsee[\s-]*el[\s-]*eye\b", re.IGNORECASE), "CLI"),
+    (re.compile(r"\bc[\s-]*l[\s-]*i\b", re.IGNORECASE), "CLI"),
+    (re.compile(r"\bci[\s-]*cd\b", re.IGNORECASE), "CI/CD"),
+)
+
+_TECH_TERM_CACHE_KEY: tuple[str, float] | None = None
+_TECH_TERM_CACHE_ALWAYS: tuple[tuple[re.Pattern[str], str], ...] = ()
+_TECH_TERM_CACHE_CONTEXTUAL: tuple[tuple[re.Pattern[str], str], ...] = ()
+
+
+def _apply_regex_rules(text: str, rules: tuple[tuple[re.Pattern[str], str], ...]) -> str:
+    updated = text
+    for pattern, replacement in rules:
+        updated = pattern.sub(replacement, updated)
+    return updated
+
+
+def _is_technical_sentence(sentence_lower: str) -> bool:
+    return any(token in sentence_lower for token in _TECH_CONTEXT_HINTS)
+
+
+def _resolve_technical_terms_path() -> Path:
+    for env_name in ("VOICEFLOW_TERMS_PATH", "VOICEFLOW_TECHNICAL_TERMS_PATH"):
+        override = str(os.environ.get(env_name, "")).strip()
+        if override:
+            return Path(override).expanduser()
+    try:
+        from voiceflow.utils.settings import config_dir
+
+        base = config_dir()
+        preferred = base / "engineering_terms.json"
+        legacy = base / "technical_terms.json"
+        if preferred.exists() or not legacy.exists():
+            return preferred
+        return legacy
+    except Exception:
+        if Path("engineering_terms.json").exists():
+            return Path("engineering_terms.json")
+        return Path("technical_terms.json")
+
+
+def _compile_exact_term_rules(mapping: dict[str, str]) -> tuple[tuple[re.Pattern[str], str], ...]:
+    compiled: list[tuple[re.Pattern[str], str]] = []
+    for source, target in mapping.items():
+        src = str(source or "").strip()
+        dst = str(target or "").strip()
+        if not src or not dst:
+            continue
+        compiled.append((re.compile(rf"\b{re.escape(src)}\b", re.IGNORECASE), dst))
+    return tuple(compiled)
+
+
+def _compile_regex_term_rules(entries: list[dict[str, str]]) -> tuple[tuple[re.Pattern[str], str], ...]:
+    compiled: list[tuple[re.Pattern[str], str]] = []
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        pattern = str(item.get("pattern", "")).strip()
+        replacement = str(item.get("replacement", "")).strip()
+        if not pattern or not replacement:
+            continue
+        try:
+            compiled.append((re.compile(pattern, re.IGNORECASE), replacement))
+        except re.error:
+            continue
+    return tuple(compiled)
+
+
+def _load_custom_technical_term_rules() -> tuple[tuple[tuple[re.Pattern[str], str], ...], tuple[tuple[re.Pattern[str], str], ...]]:
+    global _TECH_TERM_CACHE_KEY
+    global _TECH_TERM_CACHE_ALWAYS
+    global _TECH_TERM_CACHE_CONTEXTUAL
+
+    path = _resolve_technical_terms_path()
+    try:
+        resolved = str(path.resolve())
+    except Exception:
+        resolved = str(path)
+
+    mtime = -1.0
+    if path.exists():
+        try:
+            mtime = float(path.stat().st_mtime)
+        except Exception:
+            mtime = -1.0
+
+    key = (resolved, mtime)
+    if _TECH_TERM_CACHE_KEY == key:
+        return _TECH_TERM_CACHE_ALWAYS, _TECH_TERM_CACHE_CONTEXTUAL
+
+    always_rules: tuple[tuple[re.Pattern[str], str], ...] = ()
+    contextual_rules: tuple[tuple[re.Pattern[str], str], ...] = ()
+
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            exact_map: dict[str, str] = {}
+            regex_entries: list[dict[str, str]] = []
+            technical_exact_map: dict[str, str] = {}
+            technical_regex_entries: list[dict[str, str]] = []
+
+            if isinstance(payload, dict):
+                recognized_blocks = {
+                    "exact",
+                    "regex",
+                    "technical_exact",
+                    "technical_regex",
+                    "engineering_exact",
+                    "engineering_regex",
+                }
+                if recognized_blocks.intersection(set(payload.keys())):
+                    if isinstance(payload.get("exact"), dict):
+                        exact_map = {str(k): str(v) for k, v in payload["exact"].items()}
+                    if isinstance(payload.get("regex"), list):
+                        regex_entries = [item for item in payload["regex"] if isinstance(item, dict)]
+                    if isinstance(payload.get("technical_exact"), dict):
+                        technical_exact_map = {str(k): str(v) for k, v in payload["technical_exact"].items()}
+                    if isinstance(payload.get("technical_regex"), list):
+                        technical_regex_entries = [item for item in payload["technical_regex"] if isinstance(item, dict)]
+                    if isinstance(payload.get("engineering_exact"), dict):
+                        technical_exact_map.update({str(k): str(v) for k, v in payload["engineering_exact"].items()})
+                    if isinstance(payload.get("engineering_regex"), list):
+                        technical_regex_entries.extend(
+                            [item for item in payload["engineering_regex"] if isinstance(item, dict)]
+                        )
+                elif all(isinstance(k, str) and isinstance(v, str) for k, v in payload.items()):
+                    exact_map = {str(k): str(v) for k, v in payload.items()}
+
+            always_rules = _compile_exact_term_rules(exact_map) + _compile_regex_term_rules(regex_entries)
+            contextual_rules = _compile_exact_term_rules(technical_exact_map) + _compile_regex_term_rules(technical_regex_entries)
+        except Exception:
+            always_rules = ()
+            contextual_rules = ()
+
+    _TECH_TERM_CACHE_KEY = key
+    _TECH_TERM_CACHE_ALWAYS = always_rules
+    _TECH_TERM_CACHE_CONTEXTUAL = contextual_rules
+    return _TECH_TERM_CACHE_ALWAYS, _TECH_TERM_CACHE_CONTEXTUAL
+
+
+def _apply_technical_term_dictionary(text: str, technical_context: bool) -> str:
+    updated = _apply_regex_rules(text, _GLOBAL_TECH_TERM_RULES)
+    if technical_context:
+        updated = _apply_regex_rules(updated, _CONTEXTUAL_TECH_TERM_RULES)
+    custom_always, custom_contextual = _load_custom_technical_term_rules()
+    updated = _apply_regex_rules(updated, custom_always)
+    if technical_context:
+        updated = _apply_regex_rules(updated, custom_contextual)
+    return updated
 
 
 def apply_code_mode(text: str, lowercase: bool = True) -> str:
@@ -264,6 +525,10 @@ def _apply_context_corrections(text: str) -> str:
     for i in range(0, len(parts), 2):
         sentence = parts[i]
         sep = parts[i + 1] if i + 1 < len(parts) else ""
+        lower = sentence.lower()
+
+        technical_context = _is_technical_sentence(lower)
+        sentence = _apply_technical_term_dictionary(sentence, technical_context=technical_context)
         lower = sentence.lower()
 
         weather_context = any(word in lower for word in ["today", "sunny", "rain", "forecast", "temperature"])
