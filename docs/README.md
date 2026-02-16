@@ -20,6 +20,7 @@ This index points to the current, maintained documentation set for the Python-ba
 
 - Forking and platform adaptation: `guides/FORKING_AND_PLATFORM_GUIDE.md`
 - Windows executable evaluation: `guides/WINDOWS_EXECUTABLE_EVALUATION.md`
+- Windows setup executable build/publish guide: `guides/WINDOWS_SETUP_EXECUTABLE.md`
 - Windows launch checklist: `guides/WINDOWS_APP_TEST_CHECKLIST.md`
 - App-specific validation scenarios: `guides/APPLICATION_SPECIFIC_TEST_SCENARIOS.md`
 

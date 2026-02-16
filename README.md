@@ -50,6 +50,17 @@ Alternative one-step bootstrap:
 .\VoiceFlow_Quick.bat
 ```
 
+## Windows Installer (Download + Run)
+
+For non-developer onboarding, use the packaged installer from Releases:
+
+1. Download `VoiceFlow-Setup-<version>.exe`.
+2. Run installer.
+3. Launch `VoiceFlow` from Start Menu.
+
+Installer build/publishing guide for maintainers:
+- `docs/guides/WINDOWS_SETUP_EXECUTABLE.md`
+
 ## Launch Options
 
 | Mode | Command | When to use |
@@ -157,6 +168,7 @@ If tray/overlay state looks stale, restart VoiceFlow and verify only one runtime
 - `docs/TECHNICAL_OVERVIEW.md` - module-level implementation notes
 - `docs/guides/FORKING_AND_PLATFORM_GUIDE.md` - for contributors/fork maintainers
 - `docs/guides/WINDOWS_EXECUTABLE_EVALUATION.md` - executable packaging tradeoffs and plan
+- `docs/guides/WINDOWS_SETUP_EXECUTABLE.md` - build and publish Windows installer artifacts
 
 ## License
 
