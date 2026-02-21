@@ -39,6 +39,13 @@ class Config:
     pause_compaction_frame_ms: int = 30  # frame size for pause detection
     pause_compaction_keep_silence_ms: int = 80  # tighter silence retention for better medium/long latency
     pause_compaction_max_reduction_pct: float = 82.0  # allow stronger dead-air removal in long conversations
+    enable_non_speech_guard: bool = True  # Reject likely sneeze/cough/throat-clear bursts before ASR
+    non_speech_max_audio_seconds: float = 1.25  # Only run non-speech filter on short clips
+    non_speech_min_peak: float = 0.16  # Minimum peak for impulsive-noise consideration
+    non_speech_min_crest_factor: float = 9.0  # Peak/RMS threshold for transient noise
+    non_speech_max_voiced_ratio: float = 0.24  # Upper bound of voiced-frame ratio for non-speech
+    non_speech_min_flatness: float = 0.50  # Spectral flatness threshold for broadband noise
+    non_speech_min_zcr: float = 0.10  # Zero-crossing threshold for noisy bursts
 
     # ASR - Hardware-appropriate configuration (Constitutional Principle: optimize for available hardware)
     # Model tier selection (VoiceFlow 3.0): "tiny", "quick", "balanced", "quality", "voxtral"
@@ -73,6 +80,12 @@ class Config:
     # Quality improvements without speed impact
     enable_smart_prompting: bool = True  # Adaptive prompting for better accuracy
     use_enhanced_post_processing: bool = True  # Smart text cleaning
+    destination_aware_formatting: bool = True  # Adjust output layout by destination app/window
+    destination_wrap_enabled: bool = True  # Wrap long output for target window width
+    destination_default_chars: int = 78  # Generic readability width
+    destination_terminal_chars: int = 96  # Wider terminal columns
+    destination_chat_chars: int = 64  # Tighter wrapping for chat-like inputs
+    destination_editor_chars: int = 88  # Comfortable width for editors/docs
 
     # Advanced optimization flags (disabled by default for safety)
     enable_lockfree_model_access: bool = False  # Experimental: lock-free access

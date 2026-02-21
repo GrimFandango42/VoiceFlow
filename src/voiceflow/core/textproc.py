@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import textwrap
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Any, Mapping, Optional
 
 
 SYMBOL_MAP: Dict[str, str] = {
@@ -179,6 +180,59 @@ _CONTEXTUAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
 _TECH_TERM_CACHE_KEY: tuple[str, float] | None = None
 _TECH_TERM_CACHE_ALWAYS: tuple[tuple[re.Pattern[str], str], ...] = ()
 _TECH_TERM_CACHE_CONTEXTUAL: tuple[tuple[re.Pattern[str], str], ...] = ()
+
+
+_TERMINAL_PROCESS_HINTS = (
+    "windowsterminal",
+    "wt",
+    "cmd",
+    "powershell",
+    "pwsh",
+    "conhost",
+    "bash",
+    "wsl",
+    "mintty",
+)
+
+_EDITOR_PROCESS_HINTS = (
+    "code",
+    "cursor",
+    "devenv",
+    "pycharm",
+    "idea64",
+    "webstorm",
+    "rider64",
+    "sublime_text",
+    "notepad++",
+)
+
+_CHAT_PROCESS_HINTS = (
+    "slack",
+    "teams",
+    "discord",
+    "telegram",
+    "whatsapp",
+    "signal",
+)
+
+_DOCUMENT_PROCESS_HINTS = (
+    "winword",
+    "wordpad",
+    "notepad",
+    "onenote",
+    "outlook",
+)
+
+_CHAT_TITLE_HINTS = (
+    "chat",
+    "message",
+    "gmail",
+    "inbox",
+    "compose",
+    "teams",
+    "slack",
+    "discord",
+)
 
 
 def _apply_regex_rules(text: str, rules: tuple[tuple[re.Pattern[str], str], ...]) -> str:
@@ -378,9 +432,172 @@ def format_transcript_text(text: str) -> str:
     return text
 
 
+def infer_destination_profile(destination: Optional[Mapping[str, Any]]) -> str:
+    """
+    Infer output profile based on destination window metadata.
+
+    Profiles:
+    - terminal: shells and command prompts
+    - chat: chat-like composition inputs
+    - editor: IDE/editor surfaces
+    - document: document/note style inputs
+    - generic: fallback profile
+    """
+    if not destination:
+        return "generic"
+
+    process_name = str(destination.get("process_name", "") or "").strip().lower()
+    window_title = str(destination.get("window_title", "") or "").strip().lower()
+    window_class = str(destination.get("window_class", "") or "").strip().lower()
+
+    if any(hint in process_name for hint in _TERMINAL_PROCESS_HINTS):
+        return "terminal"
+    if "consolewindowclass" in window_class or "cascadia_hosting_window_class" in window_class:
+        return "terminal"
+    if any(hint in process_name for hint in _CHAT_PROCESS_HINTS):
+        return "chat"
+    if any(hint in process_name for hint in _EDITOR_PROCESS_HINTS):
+        return "editor"
+    if any(hint in process_name for hint in _DOCUMENT_PROCESS_HINTS):
+        return "document"
+    if any(hint in window_title for hint in _CHAT_TITLE_HINTS):
+        return "chat"
+    return "generic"
+
+
+def format_transcript_for_destination(
+    text: str,
+    destination: Optional[Mapping[str, Any]] = None,
+    audio_duration: float = 0.0,
+) -> str:
+    """
+    Format transcript for readability with lightweight destination-aware rules.
+    """
+    formatted = format_transcript_text(text)
+    if not formatted.strip():
+        return formatted
+
+    if destination and not bool(destination.get("destination_aware_formatting", True)):
+        return formatted
+
+    profile = infer_destination_profile(destination)
+    long_form = len(formatted) >= 220 or float(audio_duration) >= 7.0
+    if long_form and profile != "terminal":
+        formatted = _insert_light_paragraph_breaks(formatted)
+
+    if destination and not bool(destination.get("destination_wrap_enabled", True)):
+        return formatted
+
+    wrap_width = _estimate_wrap_width(destination, profile)
+    if wrap_width <= 0:
+        return formatted
+    return _wrap_transcript_blocks(formatted, wrap_width, profile)
+
+
 def normalize_context_terms(text: str) -> str:
     """Apply context-aware term normalization without full formatting."""
     return _apply_context_corrections(text or "")
+
+
+def _estimate_wrap_width(destination: Optional[Mapping[str, Any]], profile: str) -> int:
+    width_px = 0
+    cfg_default = 78
+    cfg_terminal = 96
+    cfg_chat = 64
+    cfg_editor = 88
+    if destination:
+        try:
+            width_px = int(destination.get("window_width", 0) or 0)
+        except Exception:
+            width_px = 0
+        try:
+            cfg_default = int(destination.get("destination_default_chars", cfg_default) or cfg_default)
+            cfg_terminal = int(destination.get("destination_terminal_chars", cfg_terminal) or cfg_terminal)
+            cfg_chat = int(destination.get("destination_chat_chars", cfg_chat) or cfg_chat)
+            cfg_editor = int(destination.get("destination_editor_chars", cfg_editor) or cfg_editor)
+        except Exception:
+            cfg_default, cfg_terminal, cfg_chat, cfg_editor = 78, 96, 64, 88
+
+    if profile == "terminal":
+        base = cfg_terminal
+    elif profile == "chat":
+        base = cfg_chat
+    elif profile in ("editor", "document"):
+        base = cfg_editor
+    else:
+        base = cfg_default
+
+    if width_px <= 0:
+        return base
+
+    # Rough conversion for common Windows UI fonts.
+    estimated_chars = max(32, min(180, int(width_px / 8.8)))
+    if profile == "chat":
+        return max(44, min(80, estimated_chars - 4))
+    if profile == "terminal":
+        return max(64, min(140, estimated_chars))
+    if profile in ("editor", "document"):
+        return max(56, min(120, estimated_chars - 2))
+    return max(52, min(104, estimated_chars - 2))
+
+
+def _insert_light_paragraph_breaks(text: str) -> str:
+    updated = text
+    updated = re.sub(
+        r"([.!?])\s+(also|however|anyway|next|so|that said|in addition|on the other hand|meanwhile)\b",
+        lambda m: f"{m.group(1)}\n\n{m.group(2).capitalize()}",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(r"\bnew paragraph\b[:\s-]*", "\n\n", updated, flags=re.IGNORECASE)
+    updated = re.sub(r"\n{3,}", "\n\n", updated)
+    return updated.strip()
+
+
+def _wrap_transcript_blocks(text: str, width: int, profile: str) -> str:
+    blocks = re.split(r"\n\s*\n", text.strip())
+    wrapped_blocks: list[str] = []
+    list_prefix_re = re.compile(r"^\s*(?:[-•]|\d+\.)\s+")
+
+    for block in blocks:
+        lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+        if not lines:
+            continue
+
+        wrapped_lines: list[str] = []
+        for line in lines:
+            # Preserve command-like lines in terminal profile.
+            if profile == "terminal" and re.search(r"(?:\\|/|--|==|::|`|\$>|^\w+:\s)", line):
+                wrapped_lines.append(line)
+                continue
+
+            if list_prefix_re.match(line):
+                prefix_match = list_prefix_re.match(line)
+                assert prefix_match is not None
+                prefix = prefix_match.group(0)
+                remainder = line[len(prefix):].strip()
+                wrapped = textwrap.fill(
+                    remainder,
+                    width=max(24, width - len(prefix)),
+                    initial_indent=prefix,
+                    subsequent_indent=" " * len(prefix),
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+                wrapped_lines.append(wrapped)
+            else:
+                wrapped_lines.append(
+                    textwrap.fill(
+                        line,
+                        width=width,
+                        break_long_words=False,
+                        break_on_hyphens=False,
+                    )
+                )
+
+        wrapped_blocks.append("\n".join(wrapped_lines))
+
+    return "\n\n".join(wrapped_blocks)
 
 
 def _apply_context_corrections(text: str) -> str:

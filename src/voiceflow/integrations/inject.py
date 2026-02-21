@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, Any, Dict
 import logging
 import re
 import ctypes
+from ctypes import wintypes
 
 # Graceful imports for testing environments without system packages
 try:
@@ -39,6 +40,20 @@ except Exception:  # pragma: no cover - fallback for minimal environments
 from voiceflow.core.config import Config
 from voiceflow.utils.validation import validate_text_input, ValidationError
 
+try:
+    import psutil  # type: ignore
+except Exception:  # pragma: no cover
+    psutil = None
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
+
 
 @contextmanager
 def _preserve_clipboard(enabled: bool):
@@ -64,6 +79,7 @@ class ClipboardInjector:
         self._last_inject_ts = 0.0
         self._log = logging.getLogger("localflow")
         self._target_hwnd: Optional[int] = None
+        self._target_context: Dict[str, Any] = {}
 
     def _sanitize(self, text: str) -> str:
         """Enhanced sanitization with security validation"""
@@ -148,11 +164,28 @@ class ClipboardInjector:
             hwnd = ctypes.windll.user32.GetForegroundWindow()
             if hwnd:
                 self._target_hwnd = int(hwnd)
+                self._target_context = self._build_window_context(self._target_hwnd)
         except Exception:
             self._target_hwnd = None
+            self._target_context = {}
 
     def clear_target_window(self) -> None:
         self._target_hwnd = None
+        self._target_context = {}
+
+    def get_target_context(self, refresh: bool = False) -> Dict[str, Any]:
+        """
+        Return cached target window context captured at recording start.
+        Falls back to current foreground window when target is unavailable.
+        """
+        hwnd = self._target_hwnd
+        if refresh or not self._target_context:
+            if not hwnd:
+                fg = self._foreground_window()
+                hwnd = int(fg) if fg else None
+            if hwnd:
+                self._target_context = self._build_window_context(hwnd)
+        return dict(self._target_context)
 
     def _focus_target_window(self) -> None:
         if not self._target_hwnd:
@@ -169,6 +202,49 @@ class ClipboardInjector:
             return int(hwnd) if hwnd else None
         except Exception:
             return None
+
+    def _build_window_context(self, hwnd: int) -> Dict[str, Any]:
+        context: Dict[str, Any] = {
+            "hwnd": int(hwnd),
+            "window_title": "",
+            "window_class": "",
+            "process_name": "",
+            "window_width": 0,
+            "window_height": 0,
+        }
+        if not hwnd:
+            return context
+        try:
+            title_buffer = ctypes.create_unicode_buffer(512)
+            ctypes.windll.user32.GetWindowTextW(int(hwnd), title_buffer, len(title_buffer))
+            context["window_title"] = (title_buffer.value or "").strip()
+        except Exception:
+            pass
+        try:
+            class_buffer = ctypes.create_unicode_buffer(256)
+            ctypes.windll.user32.GetClassNameW(int(hwnd), class_buffer, len(class_buffer))
+            context["window_class"] = (class_buffer.value or "").strip()
+        except Exception:
+            pass
+        try:
+            rect = _RECT()
+            if ctypes.windll.user32.GetWindowRect(int(hwnd), ctypes.byref(rect)):
+                width = max(0, int(rect.right - rect.left))
+                height = max(0, int(rect.bottom - rect.top))
+                context["window_width"] = width
+                context["window_height"] = height
+        except Exception:
+            pass
+        try:
+            pid = wintypes.DWORD(0)
+            ctypes.windll.user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+            context["process_id"] = int(pid.value)
+            if psutil and int(pid.value) > 0:
+                pname = psutil.Process(int(pid.value)).name()
+                context["process_name"] = str(pname or "").strip()
+        except Exception:
+            pass
+        return context
 
     def inject_live_checkpoint(self, text: str) -> bool:
         """

@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import json
 
-from voiceflow.core.textproc import apply_code_mode, format_transcript_text, normalize_context_terms
+from voiceflow.core.textproc import (
+    apply_code_mode,
+    format_transcript_text,
+    format_transcript_for_destination,
+    infer_destination_profile,
+    normalize_context_terms,
+)
 
 
 def test_basic_symbols():
@@ -84,4 +90,29 @@ def test_custom_technical_term_dictionary(monkeypatch, tmp_path):
     assert "OAuth token flow" in normalized
     assert "CLI" in normalized
     assert "FastAPI" in normalized
+
+
+def test_infer_destination_profile():
+    assert infer_destination_profile({"process_name": "WindowsTerminal.exe"}) == "terminal"
+    assert infer_destination_profile({"process_name": "Code.exe"}) == "editor"
+    assert infer_destination_profile({"process_name": "Slack.exe"}) == "chat"
+    assert infer_destination_profile({"process_name": "WINWORD.EXE"}) == "document"
+
+
+def test_format_transcript_for_destination_chat_wrap():
+    src = (
+        "okay this is a long transcript and also we need this to be easier to read in a chat window "
+        "because otherwise it turns into one giant wall of text and that is harder to scan quickly."
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={
+            "process_name": "Slack.exe",
+            "window_width": 520,
+            "destination_chat_chars": 48,
+        },
+        audio_duration=9.0,
+    )
+    assert "\n" in out
+    assert "Also" in out or "also" in out
 

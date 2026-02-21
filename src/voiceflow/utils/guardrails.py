@@ -267,6 +267,42 @@ def validate_config(cfg: Config) -> Config:
             logger.warning(f"Invalid asr_num_workers {getattr(cfg, 'asr_num_workers', 'None')}, defaulting to 1")
             cfg.asr_num_workers = 1
 
+        if not hasattr(cfg, 'non_speech_max_audio_seconds') or cfg.non_speech_max_audio_seconds < 0.2 or cfg.non_speech_max_audio_seconds > 5.0:
+            logger.warning(
+                f"Invalid non_speech_max_audio_seconds {getattr(cfg, 'non_speech_max_audio_seconds', 'None')}, defaulting to 1.25"
+            )
+            cfg.non_speech_max_audio_seconds = 1.25
+
+        if not hasattr(cfg, 'non_speech_min_peak') or cfg.non_speech_min_peak < 0.01 or cfg.non_speech_min_peak > 1.0:
+            logger.warning(
+                f"Invalid non_speech_min_peak {getattr(cfg, 'non_speech_min_peak', 'None')}, defaulting to 0.16"
+            )
+            cfg.non_speech_min_peak = 0.16
+
+        if not hasattr(cfg, 'non_speech_min_crest_factor') or cfg.non_speech_min_crest_factor < 1.5 or cfg.non_speech_min_crest_factor > 30.0:
+            logger.warning(
+                f"Invalid non_speech_min_crest_factor {getattr(cfg, 'non_speech_min_crest_factor', 'None')}, defaulting to 9.0"
+            )
+            cfg.non_speech_min_crest_factor = 9.0
+
+        if not hasattr(cfg, 'non_speech_max_voiced_ratio') or cfg.non_speech_max_voiced_ratio < 0.01 or cfg.non_speech_max_voiced_ratio > 0.95:
+            logger.warning(
+                f"Invalid non_speech_max_voiced_ratio {getattr(cfg, 'non_speech_max_voiced_ratio', 'None')}, defaulting to 0.24"
+            )
+            cfg.non_speech_max_voiced_ratio = 0.24
+
+        if not hasattr(cfg, 'non_speech_min_flatness') or cfg.non_speech_min_flatness < 0.0 or cfg.non_speech_min_flatness > 1.0:
+            logger.warning(
+                f"Invalid non_speech_min_flatness {getattr(cfg, 'non_speech_min_flatness', 'None')}, defaulting to 0.50"
+            )
+            cfg.non_speech_min_flatness = 0.50
+
+        if not hasattr(cfg, 'non_speech_min_zcr') or cfg.non_speech_min_zcr < 0.0 or cfg.non_speech_min_zcr > 1.0:
+            logger.warning(
+                f"Invalid non_speech_min_zcr {getattr(cfg, 'non_speech_min_zcr', 'None')}, defaulting to 0.10"
+            )
+            cfg.non_speech_min_zcr = 0.10
+
         if not hasattr(cfg, 'latency_boost_max_audio_seconds') or cfg.latency_boost_max_audio_seconds < 1.0 or cfg.latency_boost_max_audio_seconds > 120.0:
             logger.warning(
                 f"Invalid latency_boost_max_audio_seconds {getattr(cfg, 'latency_boost_max_audio_seconds', 'None')}, defaulting to 12.0"
@@ -296,6 +332,21 @@ def validate_config(cfg: Config) -> Config:
         if not hasattr(cfg, 'temperature') or cfg.temperature < 0.0 or cfg.temperature > 1.0:
             logger.warning(f"Invalid temperature {getattr(cfg, 'temperature', 'None')}, defaulting to 0.0")
             cfg.temperature = 0.0
+
+        for field, default_val in (
+            ('destination_default_chars', 78),
+            ('destination_terminal_chars', 96),
+            ('destination_chat_chars', 64),
+            ('destination_editor_chars', 88),
+        ):
+            current = getattr(cfg, field, None)
+            try:
+                parsed = int(current)
+            except Exception:
+                parsed = -1
+            if parsed < 24 or parsed > 240:
+                logger.warning(f"Invalid {field} {current}, defaulting to {default_val}")
+                setattr(cfg, field, default_val)
 
         # Adaptive learning validation (privacy-first temporary storage)
         if not hasattr(cfg, 'adaptive_retention_hours') or cfg.adaptive_retention_hours < 1 or cfg.adaptive_retention_hours > 720:

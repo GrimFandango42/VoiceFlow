@@ -27,7 +27,12 @@ from voiceflow.core.streaming import StreamingTranscriber, StreamingResult
 from voiceflow.integrations.inject import ClipboardInjector
 from voiceflow.integrations.hotkeys_enhanced import EnhancedPTTHotkeyListener
 from voiceflow.utils.utils import is_admin, nvidia_smi_info
-from voiceflow.core.textproc import apply_code_mode, format_transcript_text, normalize_context_terms
+from voiceflow.core.textproc import (
+    apply_code_mode,
+    format_transcript_for_destination,
+    infer_destination_profile,
+    normalize_context_terms,
+)
 import keyboard
 from voiceflow.ui.tray import TrayController
 from voiceflow.ui.enhanced_tray import EnhancedTrayController, update_tray_status
@@ -670,6 +675,95 @@ class EnhancedApp:
             compacted = np.concatenate((compacted, tail))
         return compacted
 
+    def _detect_likely_non_speech(self, audio_data: np.ndarray) -> tuple[bool, str, Dict[str, float]]:
+        """
+        Conservative short-audio detector for sneeze/cough/throat-clear bursts.
+        Returns (is_non_speech, reason, metrics).
+        """
+        metrics: Dict[str, float] = {}
+        if not getattr(self.cfg, "enable_non_speech_guard", True):
+            return False, "disabled", metrics
+        if audio_data is None or len(audio_data) == 0:
+            return False, "empty", metrics
+
+        sample_rate = max(8000, int(getattr(self.cfg, "sample_rate", 16000)))
+        duration = len(audio_data) / float(sample_rate)
+        max_duration = float(getattr(self.cfg, "non_speech_max_audio_seconds", 1.25))
+        metrics["duration"] = float(duration)
+        if duration <= 0.0 or duration > max_duration:
+            return False, "duration_out_of_scope", metrics
+
+        audio = np.asarray(audio_data, dtype=np.float32)
+        peak = float(np.max(np.abs(audio)))
+        rms = float(np.sqrt(np.mean(audio * audio)) + 1e-9)
+        crest_factor = peak / max(rms, 1e-7)
+        metrics["peak"] = peak
+        metrics["rms"] = rms
+        metrics["crest_factor"] = crest_factor
+
+        frame_len = max(64, int(sample_rate * 0.02))
+        usable = (len(audio) // frame_len) * frame_len
+        if usable < frame_len:
+            return False, "insufficient_frames", metrics
+        framed = audio[:usable].reshape(-1, frame_len)
+        frame_rms = np.sqrt(np.mean(framed * framed, axis=1) + 1e-12)
+
+        activity_floor = max(float(getattr(self.cfg, "min_rms_amplitude", 5e-4)) * 3.0, 0.006)
+        voiced_frames = frame_rms > activity_floor
+        voiced_ratio = float(np.mean(voiced_frames))
+        metrics["voiced_ratio"] = voiced_ratio
+
+        # Longest sustained voiced run helps avoid filtering short spoken words like "yes/no/hi".
+        run = 0
+        max_run = 0
+        for active in voiced_frames:
+            if bool(active):
+                run += 1
+                if run > max_run:
+                    max_run = run
+            else:
+                run = 0
+        longest_voiced_seconds = (max_run * frame_len) / float(sample_rate)
+        metrics["longest_voiced_seconds"] = float(longest_voiced_seconds)
+
+        signs = np.sign(audio)
+        zcr = float(np.mean(signs[1:] != signs[:-1])) if len(signs) > 1 else 0.0
+        metrics["zcr"] = zcr
+
+        flatness = 0.0
+        n_fft = min(len(audio), 2048)
+        if n_fft >= 64:
+            segment = audio[-n_fft:].astype(np.float32)
+            windowed = segment * np.hanning(len(segment))
+            spectrum = np.abs(np.fft.rfft(windowed)) + 1e-9
+            flatness = float(np.exp(np.mean(np.log(spectrum))) / np.mean(spectrum))
+        metrics["flatness"] = flatness
+
+        min_peak = float(getattr(self.cfg, "non_speech_min_peak", 0.16))
+        min_crest = float(getattr(self.cfg, "non_speech_min_crest_factor", 9.0))
+        max_voiced = float(getattr(self.cfg, "non_speech_max_voiced_ratio", 0.24))
+        min_flatness = float(getattr(self.cfg, "non_speech_min_flatness", 0.50))
+        min_zcr = float(getattr(self.cfg, "non_speech_min_zcr", 0.10))
+
+        impulsive = peak >= min_peak and crest_factor >= min_crest
+        noise_like = flatness >= min_flatness and zcr >= min_zcr
+        short_burst = duration <= 0.55 and peak >= min_peak and zcr >= min_zcr
+        low_voicing = voiced_ratio <= max_voiced and longest_voiced_seconds <= 0.22
+
+        if (impulsive and noise_like and low_voicing) or (short_burst and low_voicing):
+            return True, "likely_non_speech_burst", metrics
+        return False, "speech_like", metrics
+
+    def _destination_format_context(self) -> Dict[str, Any]:
+        context = self.injector.get_target_context()
+        context["destination_aware_formatting"] = bool(getattr(self.cfg, "destination_aware_formatting", True))
+        context["destination_wrap_enabled"] = bool(getattr(self.cfg, "destination_wrap_enabled", True))
+        context["destination_default_chars"] = int(getattr(self.cfg, "destination_default_chars", 78))
+        context["destination_terminal_chars"] = int(getattr(self.cfg, "destination_terminal_chars", 96))
+        context["destination_chat_chars"] = int(getattr(self.cfg, "destination_chat_chars", 64))
+        context["destination_editor_chars"] = int(getattr(self.cfg, "destination_editor_chars", 88))
+        return context
+
     def wait_for_model(self, timeout: float = 60.0) -> bool:
         """Wait for model to be ready"""
         if self._model_ready:
@@ -739,7 +833,12 @@ class EnhancedApp:
             if self.code_mode:
                 text = apply_code_mode(text, lowercase=self.cfg.code_mode_lowercase)
             else:
-                text = format_transcript_text(text)
+                destination_context = self._destination_format_context()
+                text = format_transcript_for_destination(
+                    text,
+                    destination=destination_context,
+                    audio_duration=segment_duration,
+                )
             text = (text or "").strip()
             if not text:
                 return
@@ -1223,6 +1322,27 @@ class EnhancedApp:
                 len(compacted_audio),
             )
 
+            is_non_speech, non_speech_reason, non_speech_metrics = self._detect_likely_non_speech(compacted_audio)
+            if is_non_speech:
+                self._log.info(
+                    "transcription_filtered reason=%s duration=%.2f peak=%.3f rms=%.5f crest=%.2f voiced=%.3f zcr=%.3f flatness=%.3f",
+                    non_speech_reason,
+                    non_speech_metrics.get("duration", 0.0),
+                    non_speech_metrics.get("peak", 0.0),
+                    non_speech_metrics.get("rms", 0.0),
+                    non_speech_metrics.get("crest_factor", 0.0),
+                    non_speech_metrics.get("voiced_ratio", 0.0),
+                    non_speech_metrics.get("zcr", 0.0),
+                    non_speech_metrics.get("flatness", 0.0),
+                )
+                print("[TRANSCRIPTION] Filtered likely non-speech audio burst.")
+                mark_idle()
+                if self.visual_indicators_enabled:
+                    update_tray_status(self.tray_controller, "idle", False)
+                    if VISUAL_INDICATORS_AVAILABLE:
+                        hide_status()
+                return ""
+
             # Already in processing state from stop_recording
 
             # Update visual indicators - transcribing status
@@ -1285,8 +1405,19 @@ class EnhancedApp:
             else:
                 if self.adaptive_learning and text.strip():
                     text = self.adaptive_learning.apply(text)
-                # Apply improved text formatting for better readability
-                text = format_transcript_text(text)
+                destination_context = self._destination_format_context()
+                destination_profile = infer_destination_profile(destination_context)
+                text = format_transcript_for_destination(
+                    text,
+                    destination=destination_context,
+                    audio_duration=audio_duration,
+                )
+                self._log.info(
+                    "format_profile profile=%s process=%s width=%s",
+                    destination_profile,
+                    str(destination_context.get("process_name", "") or ""),
+                    int(destination_context.get("window_width", 0) or 0),
+                )
 
             # AI Enhancement Layer (VoiceFlow 3.0)
             course_corrected = False
