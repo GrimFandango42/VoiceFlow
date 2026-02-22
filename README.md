@@ -6,6 +6,14 @@
 VoiceFlow is a Windows-first, local push-to-talk transcription app.
 Hold a hotkey, speak, release, and text is inserted into your active app.
 
+## Download for Windows
+
+[![Download VoiceFlow for Windows](https://img.shields.io/badge/Download-Windows%20Portable-blue?style=for-the-badge)](https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-portable-win64.zip)
+
+Direct download:
+- `https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-portable-win64.zip`
+- All releases: `https://github.com/GrimFandango42/VoiceFlow/releases`
+
 ## What The App Looks Like
 
 <p align="center">
