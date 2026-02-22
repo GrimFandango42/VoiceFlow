@@ -72,6 +72,7 @@ pip install -r scripts\setup\requirements_windows.txt
 ## Daily Learning (Self-Improvement Batch Job)
 
 VoiceFlow includes an offline daily learning job that reviews prior-day transcripts and saved correction edits.
+It also runs an instructional-feedback pass on conversational requests (for example formatting/noise/UI feedback) and stores local insight summaries for iterative improvements.
 
 Manual run:
 
@@ -126,6 +127,7 @@ Security notes:
 - Correction review data: `%LOCALAPPDATA%\LocalFlow\transcription_corrections.jsonl`
 - Adaptive patterns: `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json`
 - Adaptive audit: `%LOCALAPPDATA%\LocalFlow\adaptive_audit.jsonl`
+- Instructional insights: `%LOCALAPPDATA%\LocalFlow\self_learning_insights.json`
 - Daily learning reports: `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\`
 
 ## Architecture Snapshot

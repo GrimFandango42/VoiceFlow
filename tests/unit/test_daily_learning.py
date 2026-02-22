@@ -89,3 +89,57 @@ def test_daily_learning_auto_analysis_learns_from_history(tmp_path):
     assert stats["observed_from_auto_analysis"] == 1
     assert any(item["to"] == "terraform" for item in report["top_replacement_pairs"])
     assert job.manager.apply("use terraforce now") == "use terraform now"
+
+
+def test_daily_learning_instructional_pass_updates_insights(tmp_path):
+    yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+    _write_jsonl(tmp_path / "transcription_corrections.jsonl", [])
+    _write_jsonl(
+        tmp_path / "recent_history_events.jsonl",
+        [
+            {
+                "event_epoch": yesterday_epoch,
+                "audio_duration": 9.2,
+                "full_text": (
+                    "please improve capitalization at the beginning of each sentence "
+                    "and keep paragraph spacing more readable"
+                ),
+            }
+        ],
+    )
+
+    cfg = Config(adaptive_min_count=1, adaptive_store_raw_text=False)
+    job = DailyLearningJob(cfg=cfg, base_dir=tmp_path)
+    report = job.run(days_back=1, dry_run=False)
+
+    stats = report["stats"]
+    assert stats["instructional_items_used"] == 1
+    assert stats["observed_from_instruction_pass"] == 1
+
+    insights = report["instructional_insights"]
+    assert any(item["theme"] == "formatting_capitalization" for item in insights["top_themes"])
+    assert (tmp_path / "self_learning_insights.json").exists()
+
+
+def test_daily_learning_instructional_pass_dry_run_does_not_persist_insights(tmp_path):
+    yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+    _write_jsonl(tmp_path / "transcription_corrections.jsonl", [])
+    _write_jsonl(
+        tmp_path / "recent_history_events.jsonl",
+        [
+            {
+                "event_epoch": yesterday_epoch,
+                "audio_duration": 6.8,
+                "full_text": "we should improve recent history ordering and correction review workflow",
+            }
+        ],
+    )
+
+    cfg = Config(adaptive_min_count=1, adaptive_store_raw_text=False)
+    job = DailyLearningJob(cfg=cfg, base_dir=tmp_path)
+    report = job.run(days_back=1, dry_run=True)
+
+    stats = report["stats"]
+    assert stats["instructional_items_used"] == 1
+    assert stats["observed_from_instruction_pass"] == 1
+    assert not (tmp_path / "self_learning_insights.json").exists()

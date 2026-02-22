@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 from collections import Counter
@@ -16,6 +17,108 @@ from voiceflow.core.textproc import format_transcript_text, normalize_context_te
 from voiceflow.utils.settings import config_dir, load_config
 
 logger = logging.getLogger(__name__)
+
+INTENT_CUES = (
+    "please",
+    "i want",
+    "i would like",
+    "let's",
+    "lets",
+    "make sure",
+    "we should",
+    "should be",
+    "need to",
+    "fix",
+    "improve",
+    "not working",
+    "still not",
+    "goal",
+)
+
+INSTRUCTION_THEME_RULES: Dict[str, Tuple[str, ...]] = {
+    "formatting_capitalization": (
+        "capitalization",
+        "capitalize",
+        "capitalized",
+        "sentence structure",
+    ),
+    "formatting_paragraphs": (
+        "paragraph",
+        "paragraphs",
+        "spacing",
+        "readable",
+        "formatting",
+        "split",
+        "grouping",
+    ),
+    "noise_resilience": (
+        "cough",
+        "sneeze",
+        "throat",
+        "noise",
+        "white noise",
+        "cut off",
+        "clipped",
+        "pause",
+    ),
+    "ui_recent_history": (
+        "recent history",
+        "history button",
+        "reverse chronological",
+        "most recent",
+    ),
+    "ui_correction_review": (
+        "correction review",
+        "corrections ui",
+        "side-by-side",
+        "side by side",
+        "left right",
+        "inline correction",
+    ),
+    "release_reliability": (
+        "trigger",
+        "release",
+        "stuck",
+        "hotkey",
+        "stop transcription",
+    ),
+    "performance_latency": (
+        "latency",
+        "speed",
+        "responsive",
+        "real-time",
+        "real time",
+        "slow",
+    ),
+    "memory_efficiency": (
+        "memory",
+        "buffer",
+        "leak",
+        "cleanup",
+        "over 1gb",
+    ),
+    "learning_system": (
+        "self-learning",
+        "self learning",
+        "learning system",
+        "batch job",
+        "daily learning",
+        "continual learning",
+    ),
+}
+
+THEME_RECOMMENDATIONS: Dict[str, str] = {
+    "formatting_capitalization": "Prioritize sentence-start capitalization and punctuation consistency.",
+    "formatting_paragraphs": "Rebalance paragraph splitting for readability without over-fragmenting.",
+    "noise_resilience": "Strengthen cough/sneeze filtering while preserving nearby spoken words.",
+    "ui_recent_history": "Keep recent history ordering and refresh behavior deterministic and immediate.",
+    "ui_correction_review": "Keep correction review pinned/inline across repeated dictation cycles.",
+    "release_reliability": "Harden hotkey press/release state transitions and stuck-state recovery.",
+    "performance_latency": "Protect release-to-text latency while applying quality improvements.",
+    "memory_efficiency": "Bound memory growth and purge stale state for long-running sessions.",
+    "learning_system": "Use corrections plus conversational instruction signals for daily learning.",
+    "workflow_feedback": "Capture unresolved user intent and convert it into next-iteration tasks.",
+}
 
 
 def _safe_jsonl_lines(path: Path) -> Iterable[Dict[str, Any]]:
@@ -125,6 +228,9 @@ class DailyLearningStats:
     correction_items_used: int
     observed_from_user_corrections: int
     observed_from_auto_analysis: int
+    instructional_items_total: int
+    instructional_items_used: int
+    observed_from_instruction_pass: int
     replacement_pairs_from_user: int
     replacement_pairs_from_auto: int
     report_path: str
@@ -137,6 +243,7 @@ class DailyLearningJob:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.corrections_path = self.base_dir / "transcription_corrections.jsonl"
         self.history_path = self.base_dir / "recent_history_events.jsonl"
+        self.insights_path = self.base_dir / "self_learning_insights.json"
         self.report_dir = self.base_dir / "daily_learning_reports"
         self.report_dir.mkdir(parents=True, exist_ok=True)
         self.manager = AdaptiveLearningManager(self.cfg)
@@ -245,6 +352,100 @@ class DailyLearningJob:
         normalized = normalize_context_terms(raw_text)
         return format_transcript_text(normalized)
 
+    @staticmethod
+    def _content_hash(text: str) -> str:
+        return hashlib.sha256(str(text or "").encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+    @staticmethod
+    def _instruction_interpretation(raw_text: str) -> str:
+        normalized = normalize_context_terms(raw_text)
+        return format_transcript_text(normalized)
+
+    @staticmethod
+    def _instruction_themes(text: str) -> List[str]:
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return []
+        matches: List[str] = []
+        for theme, keywords in INSTRUCTION_THEME_RULES.items():
+            if any(keyword in lowered for keyword in keywords):
+                matches.append(theme)
+        if not matches and any(cue in lowered for cue in INTENT_CUES):
+            matches.append("workflow_feedback")
+        return matches
+
+    def _load_insights_state(self) -> Dict[str, Any]:
+        default: Dict[str, Any] = {
+            "updated_at_local": "",
+            "theme_totals": {},
+            "entry_points": {},
+        }
+        if not self.insights_path.exists():
+            return default
+        try:
+            payload = json.loads(self.insights_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                default.update(payload)
+        except Exception as exc:
+            logger.warning("Failed to load learning insights: %s", exc)
+        if not isinstance(default.get("theme_totals"), dict):
+            default["theme_totals"] = {}
+        if not isinstance(default.get("entry_points"), dict):
+            default["entry_points"] = {}
+        return default
+
+    def _save_insights_state(self, state: Dict[str, Any]) -> None:
+        try:
+            state["updated_at_local"] = datetime.now().isoformat(timespec="seconds")
+            self.insights_path.write_text(json.dumps(state, indent=2, ensure_ascii=True), encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Failed to save learning insights: %s", exc)
+
+    def _apply_instructional_signal(
+        self,
+        *,
+        text: str,
+        themes: List[str],
+        source: str,
+        event_date: str,
+        dry_run: bool,
+        insights_state: Dict[str, Any],
+    ) -> bool:
+        source_text = str(text or "").strip()
+        if not source_text:
+            return False
+
+        interpreted = self._instruction_interpretation(source_text)
+        if not interpreted:
+            return False
+
+        if not dry_run:
+            sample_value = (
+                interpreted[:200]
+                if bool(self.manager.store_raw_text)
+                else self._content_hash(interpreted)
+            )
+            theme_totals = insights_state.setdefault("theme_totals", {})
+            for theme in themes:
+                bucket = theme_totals.get(theme, {"count": 0, "last_seen": "", "sample": ""})
+                bucket["count"] = int(bucket.get("count", 0)) + 1
+                bucket["last_seen"] = event_date
+                if sample_value:
+                    bucket["sample"] = sample_value
+                theme_totals[theme] = bucket
+
+            self.manager.observe(
+                raw_text=source_text,
+                final_text=interpreted,
+                metadata={
+                    "source": "daily_instruction_pass",
+                    "entry_point": source,
+                    "event_date": event_date,
+                    "themes": themes,
+                },
+            )
+        return True
+
     def run(
         self,
         days_back: int = 1,
@@ -268,6 +469,17 @@ class DailyLearningJob:
         observed_auto = 0
         used_history = 0
         used_corrections = 0
+        instructional_total = 0
+        instructional_used = 0
+        observed_instruction = 0
+        instructional_theme_counts: Counter[str] = Counter()
+        insights_state = self._load_insights_state()
+        entry_point_counts: Counter[str] = Counter(
+            {
+                "correction_items": int(len(corrections)),
+                "history_items": int(len(history_rows)),
+            }
+        )
 
         for item in corrections:
             original = item["original_text"]
@@ -292,6 +504,24 @@ class DailyLearningJob:
                 )
             observed_user += 1
 
+            feedback_text = corrected if len(corrected) >= len(original) else original
+            themes = self._instruction_themes(feedback_text)
+            if themes:
+                instructional_total += 1
+                instructional_used += 1
+                entry_point_counts["instruction_from_corrections"] += 1
+                for theme in themes:
+                    instructional_theme_counts[theme] += 1
+                if self._apply_instructional_signal(
+                    text=feedback_text,
+                    themes=themes,
+                    source="correction_feedback",
+                    event_date=item["event_date"],
+                    dry_run=dry_run,
+                    insights_state=insights_state,
+                ):
+                    observed_instruction += 1
+
         for item in history_rows:
             raw_text = item["full_text"]
             improved = self._auto_analyze_text(raw_text)
@@ -315,6 +545,23 @@ class DailyLearningJob:
                 )
             observed_auto += 1
 
+            themes = self._instruction_themes(raw_text)
+            if themes:
+                instructional_total += 1
+                instructional_used += 1
+                entry_point_counts["instruction_from_history"] += 1
+                for theme in themes:
+                    instructional_theme_counts[theme] += 1
+                if self._apply_instructional_signal(
+                    text=raw_text,
+                    themes=themes,
+                    source="recent_history",
+                    event_date=item["event_date"],
+                    dry_run=dry_run,
+                    insights_state=insights_state,
+                ):
+                    observed_instruction += 1
+
         top_pairs: List[Dict[str, Any]] = []
         for key, count in pair_counts.most_common(24):
             src, dst = key.split("->", 1)
@@ -333,6 +580,20 @@ class DailyLearningJob:
 
         user_pair_total = int(sum(int(source.get("user", 0)) for source in pair_sources.values()))
         auto_pair_total = int(sum(int(source.get("auto", 0)) for source in pair_sources.values()))
+        top_instruction_themes = [
+            {
+                "theme": theme,
+                "count": int(count),
+                "recommendation": THEME_RECOMMENDATIONS.get(theme, ""),
+            }
+            for theme, count in instructional_theme_counts.most_common(10)
+        ]
+
+        if not dry_run and instructional_used > 0:
+            entry_map = insights_state.setdefault("entry_points", {})
+            for key, value in entry_point_counts.items():
+                entry_map[key] = int(entry_map.get(key, 0)) + int(value)
+            self._save_insights_state(insights_state)
 
         run_ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         report_path = self.report_dir / f"daily_learning_{target_date.isoformat()}_{run_ts}.json"
@@ -346,6 +607,9 @@ class DailyLearningJob:
             correction_items_used=int(used_corrections),
             observed_from_user_corrections=int(observed_user),
             observed_from_auto_analysis=int(observed_auto),
+            instructional_items_total=int(instructional_total),
+            instructional_items_used=int(instructional_used),
+            observed_from_instruction_pass=int(observed_instruction),
             replacement_pairs_from_user=user_pair_total,
             replacement_pairs_from_auto=auto_pair_total,
             report_path=str(report_path),
@@ -358,6 +622,11 @@ class DailyLearningJob:
             "dry_run": bool(dry_run),
             "stats": stats.__dict__,
             "top_replacement_pairs": top_pairs,
+            "instructional_insights": {
+                "top_themes": top_instruction_themes,
+                "entry_point_counts": {k: int(v) for k, v in entry_point_counts.items()},
+                "insights_path": str(self.insights_path),
+            },
             "paths": {
                 "base_dir": str(self.base_dir),
                 "corrections_path": str(self.corrections_path),
@@ -412,15 +681,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     stats = report.get("stats", {})
     print(
         "[DAILY-LEARNING] date={date} dry_run={dry_run} corrections={corr_used}/{corr_total} "
-        "history={hist_used}/{hist_total} user_obs={uobs} auto_obs={aobs}".format(
+        "history={hist_used}/{hist_total} instr={instr_used}/{instr_total} "
+        "user_obs={uobs} auto_obs={aobs} instr_obs={iobs}".format(
             date=report.get("target_date", ""),
             dry_run=report.get("dry_run", False),
             corr_used=stats.get("correction_items_used", 0),
             corr_total=stats.get("correction_items_total", 0),
             hist_used=stats.get("history_items_used", 0),
             hist_total=stats.get("history_items_total", 0),
+            instr_used=stats.get("instructional_items_used", 0),
+            instr_total=stats.get("instructional_items_total", 0),
             uobs=stats.get("observed_from_user_corrections", 0),
             aobs=stats.get("observed_from_auto_analysis", 0),
+            iobs=stats.get("observed_from_instruction_pass", 0),
         )
     )
     print(f"[DAILY-LEARNING] report={stats.get('report_path', '')}")
