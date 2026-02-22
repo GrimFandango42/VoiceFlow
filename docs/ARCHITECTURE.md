@@ -5,7 +5,7 @@
 This document describes the current VoiceFlow runtime architecture in this repository:
 
 - Python application
-- Windows-first desktop workflow
+- Windows-first desktop workflow (primary validated path)
 - push-to-talk recording with release-time transcription and text injection
 
 It intentionally does not describe archived/legacy Tauri, React, or Rust designs.
@@ -14,7 +14,7 @@ It intentionally does not describe archived/legacy Tauri, React, or Rust designs
 
 VoiceFlow is a process-local pipeline with five major layers:
 
-1. `ui`: tray + overlay + runtime orchestration
+1. `ui`: setup wizard + tray + overlay + runtime orchestration
 2. `integrations`: global hotkeys and text injection
 3. `core`: audio capture, ASR, streaming preview, text processing
 4. `utils`: config persistence, logging, validation, monitoring
@@ -47,9 +47,14 @@ Release PTT
   - top-level app lifecycle
   - transcription manager and session tracking
   - startup/shutdown handling and monitoring
+- `src/voiceflow/ui/setup_wizard.py`
+  - first-run defaults wizard before runtime boot
+  - hardware-aware default recommendations
+  - advanced override toggles for power users
 - `src/voiceflow/ui/enhanced_tray.py`
   - tray icon status and menu actions
   - toggles for code mode, injection mode, dock visibility, PTT presets
+  - setup/defaults re-entry action for post-install tuning
 - `src/voiceflow/ui/visual_indicators.py`
   - overlay status rendering
   - audio-reactive indicator updates
@@ -66,6 +71,23 @@ Release PTT
   - clipboard paste and keyboard typing injection paths
   - sanitization and rate limiting
   - optional target-window capture/focus protection
+
+## Platform Adapter Boundaries
+
+These modules are the highest-value seams for macOS/Linux forks:
+
+- Hotkey backend seam:
+  - `src/voiceflow/integrations/hotkeys_enhanced.py`
+  - Replace global key hook implementation while preserving start/stop callback contract.
+- Injection backend seam:
+  - `src/voiceflow/integrations/inject.py`
+  - Replace target-window/focus capture and text insertion primitives.
+- Tray/menu seam:
+  - `src/voiceflow/ui/enhanced_tray.py`
+  - Replace tray runtime integration for native menu-bar/tray behavior.
+- Launch/packaging seam:
+  - `scripts/setup/*`, `packaging/windows/*`, `.github/workflows/build-release.yml`
+  - Keep core runtime unchanged; fork setup/packaging path per OS.
 
 ### Core Layer
 
@@ -123,9 +145,13 @@ State transitions are reflected in both tray and overlay to keep behavior transp
 
 ## Configuration and Persistence
 
-Windows paths:
-- config: `%LOCALAPPDATA%\LocalFlow\config.json`
-- logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+Default runtime data paths:
+- Windows:
+  - config: `%LOCALAPPDATA%\LocalFlow\config.json`
+  - logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+- Non-Windows fallback:
+  - config: `~/.localflow/config.json`
+  - logs: `~/.localflow/logs/localflow.log`
 
 `settings.py` includes migration logic for legacy performance values to reduce medium/long dictation latency regressions.
 
@@ -146,7 +172,14 @@ Windows paths:
 ## Platform Notes
 
 - This architecture is validated for Windows.
-- Linux/macOS ports need platform-specific replacements for:
-  - global hotkeys
-  - text injection semantics
-  - tray/menu bar behavior
+- Linux/macOS ports should preserve core ASR/audio/text pipeline and swap integration seams first.
+
+## Porting Flow For Forks
+
+1. Confirm baseline in terminal mode (`core` + `ui/cli_enhanced.py`) before any native UI work.
+2. Implement hotkey backend replacement (`integrations/hotkeys_enhanced.py` seam).
+3. Implement injection backend replacement (`integrations/inject.py` seam).
+4. Add tray/menu replacement (`ui/enhanced_tray.py` seam) or run trayless first.
+5. Run runtime tests (`pytest -q tests/runtime`) and add OS-specific integration tests.
+6. Validate short/medium/long dictation manually against release-to-text latency targets.
+7. Create OS-native bootstrap/build scripts, keeping core runtime unchanged.

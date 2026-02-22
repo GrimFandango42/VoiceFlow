@@ -161,6 +161,26 @@ class TrayController:
                     pass
                 print(f"[Tray] Correction Review open failed: {e}")
 
+        def open_setup_defaults(icon, item):  # noqa: ARG001
+            def _run():
+                try:
+                    from voiceflow.ui.setup_wizard import launch_setup_wizard
+
+                    saved, restart_required = launch_setup_wizard(self.app.cfg, source="tray")
+                    if saved:
+                        if restart_required:
+                            self._notify("LocalFlow", "Settings saved. Restart VoiceFlow for model/device changes.")
+                        else:
+                            self._notify("LocalFlow", "Settings saved.")
+                except Exception as e:
+                    print(f"[Tray] Setup wizard failed: {e}")
+                    try:
+                        self._notify("LocalFlow", "Setup wizard failed to open.")
+                    except Exception:
+                        pass
+
+            threading.Thread(target=_run, daemon=True).start()
+
         return pystray.Menu(
             pystray.MenuItem(
                 lambda item: f"Code Mode: {'ON' if self.app.code_mode else 'OFF'}",
@@ -179,6 +199,7 @@ class TrayController:
             ),
             pystray.MenuItem("PTT Hotkey", ptt_menu),
             pystray.MenuItem("Set Ctrl+Alt as default PTT", set_ctrl_alt_default),
+            pystray.MenuItem("Setup & Defaults", open_setup_defaults),
             pystray.MenuItem("Recent History", show_recent_history, enabled=lambda item: VISUAL_INDICATORS_AVAILABLE),
             pystray.MenuItem("Correction Review", show_correction_review, enabled=lambda item: VISUAL_INDICATORS_AVAILABLE),
             pystray.Menu.SEPARATOR,

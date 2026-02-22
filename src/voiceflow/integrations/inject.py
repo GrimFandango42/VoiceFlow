@@ -6,7 +6,13 @@ from typing import Optional, Any, Dict
 import logging
 import re
 import ctypes
-from ctypes import wintypes
+try:
+    from ctypes import wintypes
+except Exception:  # pragma: no cover
+    class _WinTypesFallback:
+        DWORD = ctypes.c_ulong
+
+    wintypes = _WinTypesFallback()
 
 # Graceful imports for testing environments without system packages
 try:
@@ -44,6 +50,8 @@ try:
     import psutil  # type: ignore
 except Exception:  # pragma: no cover
     psutil = None
+
+_HAS_WIN32_API = bool(getattr(ctypes, "windll", None) and hasattr(ctypes.windll, "user32"))
 
 
 class _RECT(ctypes.Structure):
@@ -212,6 +220,10 @@ class ClipboardInjector:
 
     def capture_target_window(self) -> None:
         """Capture current foreground window as preferred injection target."""
+        if not _HAS_WIN32_API:
+            self._target_hwnd = None
+            self._target_context = {}
+            return
         try:
             hwnd = ctypes.windll.user32.GetForegroundWindow()
             if hwnd:
@@ -240,6 +252,8 @@ class ClipboardInjector:
         return dict(self._target_context)
 
     def _focus_target_window(self) -> None:
+        if not _HAS_WIN32_API:
+            return
         if not self._target_hwnd:
             return
         try:
@@ -289,6 +303,8 @@ class ClipboardInjector:
         return False
 
     def _foreground_window(self) -> Optional[int]:
+        if not _HAS_WIN32_API:
+            return None
         try:
             hwnd = ctypes.windll.user32.GetForegroundWindow()
             return int(hwnd) if hwnd else None
@@ -305,6 +321,8 @@ class ClipboardInjector:
             "window_height": 0,
         }
         if not hwnd:
+            return context
+        if not _HAS_WIN32_API:
             return context
         try:
             title_buffer = ctypes.create_unicode_buffer(512)

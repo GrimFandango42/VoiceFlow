@@ -143,6 +143,9 @@ class Config:
     ultra_fast_mode: bool = False  # Enable experimental optimizations
     preload_model_on_startup: bool = False  # Load model during startup vs on-demand
     transcription_worker_timeout_seconds: float = 45.0  # hard timeout for hung worker callbacks
+    setup_completed: bool = False  # first-run setup gate for visual defaults wizard
+    show_setup_on_startup: bool = True  # allow users to re-open setup automatically on launch
+    setup_profile: str = "recommended"  # last selected setup profile
 
     # Long sentence optimizations (for 3+ second recordings)
     chunk_size_seconds: float = 5.0  # Process in 5-second chunks for long audio

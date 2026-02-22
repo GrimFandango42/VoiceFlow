@@ -11,6 +11,7 @@
 
 VoiceFlow is intentionally tray-first:
 
+- Setup wizard: first-run defaults and advanced overrides.
 - Tray menu: primary settings and actions.
 - Overlay + dock: status and recent transcript visibility.
 - Recent History + Correction Review: fast correction loop.
@@ -23,6 +24,7 @@ Use this as a visual click-path map:
 
 | Goal | Click Path | Persists In Config |
 |---|---|---|
+| Open setup wizard | Tray -> `Setup & Defaults` | `setup_*` fields + selected defaults |
 | Toggle code mode | Tray -> `Code Mode` | Session toggle (runtime state) |
 | Choose paste vs type injection | Tray -> `Injection` | `paste_injection` |
 | Auto-press Enter after paste | Tray -> `Auto-Enter` | `press_enter_after_paste` |
@@ -37,6 +39,21 @@ Also available via hotkeys:
 - `Ctrl+Alt+C`: toggle code mode
 - `Ctrl+Alt+P`: toggle paste/type injection
 - `Ctrl+Alt+Enter`: toggle auto-enter
+
+## Setup Wizard
+
+At startup, VoiceFlow can show a setup wizard before the main runtime starts.
+
+- Recommended mode: chooses defaults based on hardware detection.
+- CPU-compatible mode: safest fallback for broad compatibility.
+- GPU-balanced mode: optimized for CUDA-capable systems.
+- Advanced section: device/compute/model/injection overrides.
+
+You can reopen the same wizard from tray:
+
+- `Setup & Defaults`
+
+For existing installs, startup prompting is not forced; use the tray entry point when you want to re-tune defaults.
 
 ## Accent and Personalization
 

@@ -8,94 +8,77 @@ This guide is the practical handoff for developers who want to fork VoiceFlow an
 - Current strengths: short/medium/long dictation speed, stable release-to-text flow, good practical accuracy for LLM-assisted coding workflows.
 - Current weak spots: cross-platform parity, some visual polish details, and deeper CI coverage for UI/integration behavior.
 
-## What Worked Well
+## Architecture Seams You Will Replace First
 
-- Keeping ASR/transcription separate from animation logic.
-- CUDA migration for compatible systems (`device=cuda`, `compute_type=float16`).
-- Pause compaction for medium/long utterances.
-- Fast-path preview shutdown to reduce post-release delay.
-- Conservative post-processing to preserve transcription quality while improving readability.
+These are the code areas most forks should touch:
 
-## What Did Not Work Well
+1. Hotkeys:
+   - `src/voiceflow/integrations/hotkeys_enhanced.py`
+2. Injection/focus behavior:
+   - `src/voiceflow/integrations/inject.py`
+3. Tray/menu runtime:
+   - `src/voiceflow/ui/enhanced_tray.py`
+4. OS bootstrap/packaging:
+   - `scripts/setup/*`
+   - `.github/workflows/build-release.yml`
+   - `packaging/windows/*`
 
-- Mixing too many visual effects made animation feel random and reduced clarity.
-- Intermediate flush injection during hold was fragile in some editors (focus and key-event side effects).
-- Legacy config values (CPU + conservative long-audio settings) can silently cap performance if not migrated.
+Keep these areas stable while porting:
 
-## Platform Support
+- `src/voiceflow/core/*` (audio/asr/streaming/text)
+- `src/voiceflow/ai/*` (optional enhancement layer)
+- `src/voiceflow/utils/*` (config/logging/monitoring)
 
-## Windows (recommended)
+## Windows Baseline (Current Known-Good Path)
 
-- This is the main tested path.
-- Hotkey capture and injection behavior are tuned for Windows interactions.
-- Config defaults and launch scripts are Windows-first.
-- If you have NVIDIA CUDA available, this repo now auto-migrates suitable legacy configs to GPU mode.
+- This is the primary validated runtime.
+- Setup wizard + tray controls are tuned around this flow.
+- If CUDA is available, runtime can use GPU defaults automatically.
 
-## Linux
+## Linux And macOS Porting Strategy
 
-- Possible, but not currently validated end-to-end.
-- Key risks:
-  - Global hotkey hooks vary by desktop environment.
-  - Injection behavior differs between X11 and Wayland.
-  - Tray/dock UX may not map directly.
-- Recommended fork strategy:
-  - First stabilize audio capture + ASR in terminal mode.
-  - Then implement platform-native hotkeys/injection/tray path.
+### WSL note
 
-## macOS
+- WSL is useful for development tooling, tests, and model/runtime experimentation.
+- For full desktop hotkey/injection/tray behavior, run a native desktop path (Windows/macOS/Linux host), not pure headless WSL.
 
-- Possible, but not currently validated end-to-end.
-- Key risks:
-  - Accessibility/input permissions for text injection.
-  - Global hotkey implementation differences.
-  - Tray/menu bar behavior differences.
-- Recommended fork strategy:
-  - Start with terminal dictation + clipboard injection.
-  - Add native integration after reliability is proven.
+### Step 1: Bring up core runtime in terminal mode
 
-## Hardware Guidance
+- Start with `voiceflow.ui.cli_enhanced` and disable tray/injection assumptions as needed.
+- Validate ASR, audio capture, and text processing before native UX work.
 
-## Minimum practical
+### Step 2: Replace hotkey backend
 
-- CPU-only: works, but medium/long utterances will be slower.
-- RAM: 8 GB recommended.
-- Any stable microphone works; headset mics reduce room-noise variance.
+- Implement global hotkey behavior for target platform/desktop environment.
+- Keep callback contract intact: start recording on hold, stop on release.
 
-## Recommended
+### Step 3: Replace injection backend
 
-- NVIDIA GPU with CUDA runtime available.
-- 16 GB+ RAM for smoother multitasking.
-- Dedicated microphone/headset for better consistency.
+- Implement platform-native insertion and target-focus semantics.
+- Expect OS-specific permission constraints (macOS Accessibility, Wayland restrictions, etc.).
 
-## Runtime Configuration Notes
+### Step 4: Rebuild tray/menu integration
 
-- Config file: `%LOCALAPPDATA%\\LocalFlow\\config.json` (Windows).
-- Important fields for speed:
-  - `device`
-  - `compute_type`
-  - `pause_compaction_*`
-  - `latency_boost_*`
-- Force CPU when needed:
-  - `VOICEFLOW_FORCE_CPU=1`
+- Map tray actions to native menu bar/status item conventions.
+- Preserve core actions:
+  - setup/defaults
+  - code mode toggle
+  - injection mode toggle
+  - history/review entry points
 
-## Fast Fork Bootstrap (Windows)
+### Step 5: Add platform packaging
 
-- One-step setup helper:
-  - `Bootstrap_Windows.bat`
-- Under the hood this runs:
-  - `scripts/setup/bootstrap_windows.ps1`
-- It creates a venv, installs dependencies, and runs smoke validation.
+- Create bootstrap/build scripts for your OS.
+- Keep runtime config format stable to reduce fork drift.
 
 ## Testing Guidance For Forks
 
-## Fast checks
+### Quick runtime checks
 
-- Syntax sanity:
-  - `python -m py_compile src/voiceflow/ui/visual_indicators.py src/voiceflow/ui/cli_enhanced.py src/voiceflow/core/streaming.py src/voiceflow/utils/settings.py`
-- Unit slice:
-  - `pytest -q tests/runtime/test_textproc.py tests/runtime/test_injector_logic.py tests/runtime/test_sanitization_and_rate.py`
+- `pytest -q tests/runtime`
+- `pytest -q tests/runtime/test_injector_logic.py tests/runtime/test_hotkeys_enhanced.py`
 
-## Behavioral checks
+### Manual behavior checks
 
 - Short dictation: 3-5 seconds.
 - Medium dictation: 8-12 seconds.
@@ -104,20 +87,33 @@ This guide is the practical handoff for developers who want to fork VoiceFlow an
   - no text loss
   - release-to-text latency
   - acceptable punctuation/formatting
-  - hotkey start/stop stability
+  - start/stop stability
+  - focus/injection reliability
 
-## Forking Checklist
+### Platform-specific checks
 
-1. Decide platform target first (Windows vs Linux vs macOS).
-2. Validate ASR model/device path on your hardware.
-3. Stabilize hotkey + injection before visual enhancements.
-4. Keep visuals decoupled from ASR critical path.
-5. Add platform-specific tests for injection and global hotkeys.
-6. Publish your own launcher scripts and setup notes for your OS.
+- Linux:
+  - test X11 and Wayland separately
+  - verify global hotkeys under your desktop environment
+- macOS:
+  - verify Accessibility/Input Monitoring permission flow
+  - verify menu bar app lifecycle and clipboard behavior
 
-## Suggested Next Improvements
+## Config Notes For Forks
 
-- Add explicit runtime metrics panel (release latency, RTF, per-session averages).
-- Add optional style presets for visuals (`minimal`, `classic`, `experimental`).
-- Expand CI test matrix by platform and feature category.
-- Improve long-utterance regression tests with fixture audio.
+- Windows config path:
+  - `%LOCALAPPDATA%\\LocalFlow\\config.json`
+- Non-Windows fallback config path:
+  - `~/.localflow/config.json`
+
+Performance-critical fields:
+
+- `device`
+- `compute_type`
+- `model_tier`
+- `pause_compaction_*`
+- `latency_boost_*`
+
+Compatibility override:
+
+- `VOICEFLOW_FORCE_CPU=1`

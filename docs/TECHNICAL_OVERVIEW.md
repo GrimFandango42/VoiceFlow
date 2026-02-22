@@ -4,6 +4,7 @@
 
 - `voiceflow.py` -> `voiceflow.ui.cli_enhanced:main`
 - `src/voiceflow/ui/cli_enhanced.py` (main app loop)
+- `src/voiceflow/ui/setup_wizard.py` (first-run setup + tray settings surface)
 - `src/voiceflow/core/asr_engine.py` (ASR backend + model/device routing)
 
 ## Runtime Pipeline
@@ -35,6 +36,9 @@ Stability and behavior fields:
 - `press_enter_after_paste`
 - `live_caption_enabled`
 - `visual_indicators_enabled`
+- `setup_completed`
+- `show_setup_on_startup`
+- `setup_profile`
 
 ## Tray vs Advanced Controls
 

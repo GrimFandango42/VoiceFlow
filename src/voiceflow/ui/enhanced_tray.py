@@ -256,6 +256,28 @@ class EnhancedTrayController(ITrayManager):
                 set_dock_enabled(new_state)
             except Exception:
                 pass
+
+        def open_setup_defaults(icon, item):
+            """Open setup/defaults wizard."""
+
+            def _run():
+                try:
+                    from voiceflow.ui.setup_wizard import launch_setup_wizard
+
+                    saved, restart_required = launch_setup_wizard(self.app.cfg, source="tray")
+                    if saved:
+                        if restart_required:
+                            self._notify("VoiceFlow", "Settings saved. Restart VoiceFlow to apply model/device changes.")
+                        else:
+                            self._notify("VoiceFlow", "Settings saved.")
+                except Exception as e:
+                    print(f"[Tray] Setup wizard failed: {e}")
+                    try:
+                        self._notify("VoiceFlow", "Setup wizard failed to open.")
+                    except Exception:
+                        pass
+
+            threading.Thread(target=_run, daemon=True).start()
             try:
                 from voiceflow.utils.settings import save_config
                 save_config(self.app.cfg)
@@ -393,6 +415,7 @@ class EnhancedTrayController(ITrayManager):
                 toggle_dock,
                 checked=lambda item: getattr(self.app.cfg, 'visual_dock_enabled', True),
             ),
+            pystray.MenuItem("Setup & Defaults", open_setup_defaults),
             pystray.MenuItem("Recent History", show_recent_history),
             pystray.MenuItem("Correction Review", show_correction_review),
             pystray.Menu.SEPARATOR,

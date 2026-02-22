@@ -6,6 +6,7 @@ Use these first before editing config files manually.
 
 | Need | Click Path |
 |---|---|
+| Open setup wizard | Tray -> `Setup & Defaults` |
 | Change push-to-talk key | Tray -> `PTT Hotkey` |
 | Toggle code formatting mode | Tray -> `Code Mode` |
 | Switch paste vs typing injection | Tray -> `Injection` |
@@ -63,7 +64,7 @@ For deep tuning, see `docs/USER_GUIDE.md` and `docs/TECHNICAL_OVERVIEW.md`.
 
 A:
 
-Not in the current active runtime. Configuration is intentionally tray-first, plus overlay/dock and history/review panels.
+Not in the current active runtime. Configuration is setup-wizard + tray-first, plus overlay/dock and history/review panels.
 
 ## Q: Where are config, logs, and user-learning files?
 

@@ -103,6 +103,9 @@ def load_config(defaults: Config) -> Config:
         if _apply_performance_migrations(defaults):
             save_config(defaults)
         return defaults
+    if "setup_completed" not in data:
+        # Existing installs should keep current behavior and opt into the wizard manually from tray.
+        defaults.setup_completed = True
     # Apply known fields only
     for field in asdict(defaults).keys():
         if field in data:

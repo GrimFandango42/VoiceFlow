@@ -40,6 +40,7 @@ from voiceflow.core.textproc import (
 import keyboard
 from voiceflow.ui.tray import TrayController
 from voiceflow.ui.enhanced_tray import EnhancedTrayController, update_tray_status
+from voiceflow.ui.setup_wizard import maybe_run_startup_setup
 from voiceflow.utils.logging_setup import AsyncLogger, default_log_dir
 from voiceflow.utils.settings import config_dir, load_config, save_config
 from voiceflow.utils.idle_aware_monitor import (
@@ -2006,6 +2007,9 @@ def main(argv=None):
     _start_bootstrap_parent_watchdog()
 
     cfg = load_config(Config())
+    setup_saved, _setup_restart_required = maybe_run_startup_setup(cfg)
+    if setup_saved:
+        print("[SETUP] Saved startup defaults from setup wizard.")
 
     gpu_mode = (
         str(getattr(cfg, "device", "")).strip().lower() == "cuda"
