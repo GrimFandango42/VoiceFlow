@@ -30,6 +30,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup\build_windows_exe.ps1 -
 .\dist\VoiceFlow\VoiceFlow.exe
 ```
 
+## CI/CD Release Automation
+
+- Workflow: `.github/workflows/build-release.yml`
+- On every push to `main`:
+  - Builds portable + one-file executable
+  - Publishes rolling prerelease tag `latest-main`
+  - Uploads `VoiceFlow-win64.exe` and `VoiceFlow-portable-win64.zip`
+- On tag push `v*`:
+  - Publishes versioned release
+  - Uploads the same stable asset names + `SHA256SUMS.txt`
+
 ## Fast Regression Slice
 
 ```powershell

@@ -1,263 +1,154 @@
-name: Build and Release VoiceFlow
+name: Windows Executable CI/CD
 
 on:
   push:
+    branches:
+      - main
     tags:
-      - 'v*'
-    branches:
-      - main
-      - develop
-  pull_request:
-    branches:
-      - main
+      - "v*"
   workflow_dispatch:
     inputs:
-      create_release:
-        description: 'Create a new release'
-        required: false
-        default: false
+      publish_rolling_release:
+        description: "Publish/update rolling latest-main release"
+        required: true
+        default: true
         type: boolean
-      build_type:
-        description: 'Build type'
-        required: false
-        default: 'standard'
-        type: choice
-        options:
-        - standard
-        - debug
-        - release
+      publish_tag_release:
+        description: "Publish tag release when ref is v*"
+        required: true
+        default: true
+        type: boolean
 
-env:
-  PYTHON_VERSION: '3.11'
-  NODE_VERSION: '18'
+permissions:
+  contents: write
 
 jobs:
   build-windows:
     runs-on: windows-latest
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller pillow
-        pip install -r requirements_windows.txt
-    
-    - name: Build Windows executable
-      run: |
-        # Ensure icon exists
-        if (!(Test-Path "icon.ico")) {
-          echo "Creating placeholder icon..."
-          echo "icon" > icon.ico
-        }
-        python setup_exe.py
-    
-    - name: Upload Windows artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: voiceflow-windows
-        path: |
-          dist/VoiceFlow.exe
-          dist/VoiceFlow-Setup-*.exe
-        retention-days: 30
 
-  build-unix:
-    runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y portaudio19-dev python3-dev python3-tk
-    
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller
-        pip install -r requirements_unix.txt
-    
-    - name: Make scripts executable
-      run: |
-        chmod +x install_unix.sh
-        chmod +x voiceflow_unix.py
-    
-    - name: Create Unix package
-      run: |
-        mkdir -p dist/voiceflow-unix
-        cp voiceflow_unix.py dist/voiceflow-unix/
-        cp voiceflow_personal.py dist/voiceflow-unix/
-        cp requirements_unix.txt dist/voiceflow-unix/
-        cp install_unix.sh dist/voiceflow-unix/
-        cp -r core dist/voiceflow-unix/ || echo "core directory not found"
-        cp -r utils dist/voiceflow-unix/ || echo "utils directory not found"
-        cp README.md LICENSE dist/voiceflow-unix/
-        
-        cd dist
-        tar -czf voiceflow-unix.tar.gz voiceflow-unix/
-    
-    - name: Upload Unix artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: voiceflow-unix
-        path: |
-          dist/voiceflow-unix.tar.gz
-        retention-days: 30
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  security-scan:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install security tools
-      run: |
-        python -m pip install --upgrade pip
-        pip install bandit safety
-    
-    - name: Run Bandit security scan
-      run: |
-        bandit -r . -f json -o bandit-report.json || true
-        bandit -r . --skip B101,B601
-    
-    - name: Run Safety dependency scan
-      run: |
-        safety check --json --output safety-report.json || true
-        safety check
-    
-    - name: Upload security reports
-      uses: actions/upload-artifact@v3
-      with:
-        name: security-reports
-        path: |
-          bandit-report.json
-          safety-report.json
-        retention-days: 30
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: |
+            scripts/setup/requirements_windows.txt
+            pyproject.toml
 
-  mcp-integration:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Node.js for MCP
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-    
-    - name: Install MCP CLI tools
-      run: |
-        npm install -g @modelcontextprotocol/cli || echo "MCP CLI not available"
-    
-    - name: Configure MCP GitHub Server
-      run: |
-        echo "MCP GitHub integration configured successfully"
-        echo "Repository: ${{ github.repository }}"
-        echo "Event: ${{ github.event_name }}"
-    
-    - name: Test MCP GitHub Integration
-      run: |
-        echo "✅ MCP integration test completed"
-        echo "Available tools: workflow management, repository automation"
-    
-    - name: Create MCP Integration Report
-      run: |
-        echo "# MCP GitHub Actions Integration Report" > mcp-report.md
-        echo "" >> mcp-report.md
-        echo "## Configuration" >> mcp-report.md
-        echo "- MCP GitHub server configured successfully" >> mcp-report.md
-        echo "- Token authentication: $([ -n "${{ secrets.MCP_GITHUB_TOKEN }}" ] && echo "Custom token" || echo "Default GITHUB_TOKEN")" >> mcp-report.md
-        echo "- Repository: ${{ github.repository }}" >> mcp-report.md
-        echo "- Event: ${{ github.event_name }}" >> mcp-report.md
-        echo "" >> mcp-report.md
-        echo "## Available MCP Skills" >> mcp-report.md
-        echo "- GitHub repository management" >> mcp-report.md
-        echo "- Issue and PR automation" >> mcp-report.md
-        echo "- Release management" >> mcp-report.md
-        echo "- Actions workflow control" >> mcp-report.md
-    
-    - name: Upload MCP Report
-      uses: actions/upload-artifact@v3
-      with:
-        name: mcp-integration-report
-        path: mcp-report.md
-        retention-days: 30
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/setup/requirements_windows.txt
+          pip install pyinstaller pyinstaller-hooks-contrib
 
-  create-release:
-    needs: [build-windows, build-unix, security-scan, mcp-integration]
+      - name: Build portable bundle
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/build_windows_exe.ps1 -Clean
+
+      - name: Build one-file executable
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/build_windows_exe.ps1 -OneFile
+
+      - name: Prepare stable release assets
+        shell: pwsh
+        run: |
+          $portable = Get-ChildItem "dist/packages" -Filter "*-portable.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $portable) { throw "Portable zip not found in dist/packages." }
+          Copy-Item -Path $portable.FullName -Destination "dist/packages/VoiceFlow-portable-win64.zip" -Force
+
+          if (-not (Test-Path "dist/VoiceFlow.exe")) { throw "One-file executable not found at dist/VoiceFlow.exe." }
+          Copy-Item -Path "dist/VoiceFlow.exe" -Destination "dist/packages/VoiceFlow-win64.exe" -Force
+
+          $portableHash = (Get-FileHash "dist/packages/VoiceFlow-portable-win64.zip" -Algorithm SHA256).Hash.ToLower()
+          $exeHash = (Get-FileHash "dist/packages/VoiceFlow-win64.exe" -Algorithm SHA256).Hash.ToLower()
+
+          @(
+            "$portableHash  VoiceFlow-portable-win64.zip"
+            "$exeHash  VoiceFlow-win64.exe"
+          ) | Set-Content -Path "dist/packages/SHA256SUMS.txt" -Encoding UTF8
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: voiceflow-windows-release-assets
+          path: |
+            dist/packages/VoiceFlow-portable-win64.zip
+            dist/packages/VoiceFlow-win64.exe
+            dist/packages/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  release-latest-main:
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
-    
+    needs: build-windows
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish_rolling_release == 'true')
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Download Windows artifacts
-      uses: actions/download-artifact@v3
-      with:
-        name: voiceflow-windows
-        path: ./artifacts/windows
-    
-    - name: Download Unix artifacts
-      uses: actions/download-artifact@v3
-      with:
-        name: voiceflow-unix
-        path: ./artifacts/unix
-    
-    - name: Download security reports
-      uses: actions/download-artifact@v3
-      with:
-        name: security-reports
-        path: ./artifacts/security
-    
-    - name: Generate release notes
-      id: generate_notes
-      run: |
-        echo "## VoiceFlow Release" > release_notes.md
-        echo "" >> release_notes.md
-        echo "### Downloads" >> release_notes.md
-        echo "- **Windows**: VoiceFlow.exe (standalone) or VoiceFlow-Setup-*.exe (installer)" >> release_notes.md
-        echo "- **Linux/macOS**: voiceflow-unix.tar.gz" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "### Installation" >> release_notes.md
-        echo "- **Windows**: Run installer or execute VoiceFlow.exe directly" >> release_notes.md
-        echo "- **Unix**: Extract tar.gz and run ./install_unix.sh" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "### Security" >> release_notes.md
-        echo "All builds include security scanning and validation." >> release_notes.md
-        
-        echo "release_body<<EOF" >> $GITHUB_OUTPUT
-        cat release_notes.md >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-    
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ github.ref_name || 'v3.0.0' }}
-        name: VoiceFlow ${{ github.ref_name || 'v3.0.0' }}
-        body: ${{ steps.generate_notes.outputs.release_body }}
-        draft: false
-        prerelease: false
-        files: |
-          ./artifacts/windows/VoiceFlow.exe
-          ./artifacts/windows/VoiceFlow-Setup-*.exe
-          ./artifacts/unix/voiceflow-unix.tar.gz
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: voiceflow-windows-release-assets
+          path: release-assets
+
+      - name: Publish rolling main release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-main
+          name: VoiceFlow Latest (main)
+          prerelease: true
+          draft: false
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          body: |
+            Rolling build from `main`.
+
+            Commit: `${{ github.sha }}`
+            Branch: `${{ github.ref_name }}`
+          files: |
+            release-assets/VoiceFlow-portable-win64.zip
+            release-assets/VoiceFlow-win64.exe
+            release-assets/SHA256SUMS.txt
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-tag:
+    runs-on: ubuntu-latest
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish_tag_release == 'true')
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: voiceflow-windows-release-assets
+          path: release-assets
+
+      - name: Publish tag release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: VoiceFlow ${{ github.ref_name }}
+          prerelease: false
+          draft: false
+          make_latest: true
+          body: |
+            Windows release artifacts for VoiceFlow:
+
+            - `VoiceFlow-win64.exe` (single-file executable)
+            - `VoiceFlow-portable-win64.zip` (portable bundle)
+            - `SHA256SUMS.txt` (checksums)
+          files: |
+            release-assets/VoiceFlow-portable-win64.zip
+            release-assets/VoiceFlow-win64.exe
+            release-assets/SHA256SUMS.txt
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
