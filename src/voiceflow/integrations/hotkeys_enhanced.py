@@ -46,7 +46,9 @@ class EnhancedPTTHotkeyListener:
         self.on_start = on_start
         self.on_stop = on_stop
         self._recording = False
-        self._lock = threading.Lock()
+        # Reentrant lock is required because some release paths call
+        # _actual_stop_recording() while already holding this lock.
+        self._lock = threading.RLock()
         self._hook: Optional[Callable] = None
         self._poll_thread: Optional[threading.Thread] = None
         self._poll_stop = threading.Event()

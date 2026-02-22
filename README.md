@@ -53,7 +53,7 @@ This runs `scripts/setup/bootstrap_windows.ps1`, installs dependencies, runs smo
 ### Option C: Manual source install
 
 ```powershell
-git clone https://github.com/yourusername/voiceflow.git
+git clone https://github.com/GrimFandango42/VoiceFlow.git
 cd voiceflow
 python -m venv venv
 .\venv\Scripts\activate
@@ -61,6 +61,13 @@ pip install --upgrade pip
 pip install -r scripts\setup\requirements_windows.txt
 .\VoiceFlow_Quick.bat
 ```
+
+## Fast Start (2 Minutes)
+
+1. Install using Option A (installer) or Option B (one-click source install).
+2. Launch `VoiceFlow_Quick.bat` (or Start Menu shortcut if installed via EXE).
+3. Hold `Ctrl+Shift`, speak, then release to transcribe.
+4. Use tray menu `Recent History` to review transcript output and `Correction Review` to compare/edit text.
 
 ## Daily Learning (Self-Improvement Batch Job)
 
