@@ -14,10 +14,15 @@ on:
         default: true
         type: boolean
       publish_tag_release:
-        description: "Publish tag release when ref is v*"
+        description: "Publish stable release for a tag"
         required: true
         default: true
         type: boolean
+      release_version:
+        description: "Stable release tag (example: v3.1.4). Leave empty to skip stable release."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -122,7 +127,16 @@ jobs:
   release-tag:
     runs-on: ubuntu-latest
     needs: build-windows
-    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish_tag_release == 'true')
+    if: |
+      (
+        startsWith(github.ref, 'refs/tags/v')
+        && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish_tag_release == 'true')
+      )
+      || (
+        github.event_name == 'workflow_dispatch'
+        && github.event.inputs.publish_tag_release == 'true'
+        && github.event.inputs.release_version != ''
+      )
 
     steps:
       - name: Download build artifacts
@@ -131,14 +145,30 @@ jobs:
           name: voiceflow-windows-release-assets
           path: release-assets
 
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && -n "${{ github.event.inputs.release_version }}" ]]; then
+            TAG="${{ github.event.inputs.release_version }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $TAG"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Publish tag release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: VoiceFlow ${{ github.ref_name }}
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: VoiceFlow ${{ steps.release_tag.outputs.tag }}
           prerelease: false
           draft: false
           make_latest: true
+          target_commitish: ${{ github.sha }}
           body: |
             Windows release artifacts for VoiceFlow:
 

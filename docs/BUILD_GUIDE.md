@@ -56,3 +56,27 @@ Use:
 - `packaging/windows/VoiceFlowSetup.iss`
 
 Detailed release flow is in `docs/guides/WINDOWS_SETUP_EXECUTABLE.md`.
+
+## GitHub Release Pipeline (One-Click)
+
+Workflow: `.github/workflows/build-release.yml`
+
+What it does:
+
+- Builds Windows artifacts on `main` and `v*` tags.
+- Publishes rolling prerelease assets to `latest-main`.
+- Publishes stable release assets (`make_latest: true`) for tagged versions.
+
+Manual stable release from GitHub UI:
+
+1. Open `Actions` -> `Windows Executable CI/CD` -> `Run workflow`.
+2. Set:
+   - `publish_tag_release=true`
+   - `release_version=vX.Y.Z` (example: `v3.1.4`)
+3. Run on `main`.
+
+Published stable asset names (used by README download links):
+
+- `VoiceFlow-win64.exe`
+- `VoiceFlow-portable-win64.zip`
+- `SHA256SUMS.txt`

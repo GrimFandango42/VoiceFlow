@@ -70,10 +70,19 @@ If Inno Setup is not installed:
    - dock/overlay appear
    - hotkey hold/release works
    - injection works in Notepad and VS Code
-3. Upload:
-   - `VoiceFlow-Setup-<version>.exe`
-   - optional portable zip from `dist\packages`
-4. Update release notes with known limitations (Windows-first, unsigned binary warnings if applicable).
+3. Publish release assets via CI/CD (`.github/workflows/build-release.yml`):
+   - push a `v*` tag, or
+   - run workflow manually with:
+     - `publish_tag_release=true`
+     - `release_version=vX.Y.Z`
+4. Confirm assets on the release:
+   - `VoiceFlow-win64.exe`
+   - `VoiceFlow-portable-win64.zip`
+   - `SHA256SUMS.txt`
+5. Verify README links:
+   - `https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-win64.exe`
+   - `https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-portable-win64.zip`
+6. Update release notes with known limitations (Windows-first, unsigned binary warnings if applicable).
 
 ## Notes
 
