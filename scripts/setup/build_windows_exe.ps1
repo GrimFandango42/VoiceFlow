@@ -52,6 +52,32 @@ function Test-IcoHeader {
     }
 }
 
+function Remove-ConflictingRuntimeDlls {
+    param([string]$BundleRoot)
+
+    $internalRoot = Join-Path $BundleRoot "_internal"
+    if (-not (Test-Path $internalRoot)) {
+        return
+    }
+
+    # The PyInstaller-collected MSVCP runtime can crash at startup on some systems
+    # (APPCRASH in _internal\MSVCP140.dll). Prefer the system-installed VC runtime.
+    $conflictingDlls = @(
+        "MSVCP140.dll",
+        "msvcp140.dll",
+        "MSVCP140_1.dll",
+        "msvcp140_1.dll"
+    )
+
+    foreach ($dll in $conflictingDlls) {
+        $candidate = Join-Path $internalRoot $dll
+        if (Test-Path $candidate) {
+            Remove-Item -Path $candidate -Force -ErrorAction SilentlyContinue
+            Write-Host "[build_windows_exe] Removed conflicting runtime: $candidate"
+        }
+    }
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $pythonExe = Resolve-PythonExe -RepoRoot $repoRoot -ExplicitPython $PythonExe
 
@@ -98,8 +124,13 @@ $args = @(
     "--hidden-import", "sounddevice",
     "--hidden-import", "faster_whisper",
     "--hidden-import", "ctranslate2",
-    "--hidden-import", "torch",
     "--hidden-import", "pyperclip",
+    "--exclude-module", "torch",
+    "--exclude-module", "torchvision",
+    "--exclude-module", "torchaudio",
+    "--exclude-module", "onnxruntime",
+    "--exclude-module", "triton",
+    "--exclude-module", "xformers",
     "--add-data", ((Join-Path $repoRoot "docs\examples\engineering_terms.json") + ";defaults"),
     "--add-data", ((Join-Path $repoRoot "docs\examples\technical_terms.json") + ";defaults"),
     "--distpath", $distPath,
@@ -145,6 +176,7 @@ if ($OneFile) {
     if (-not (Test-Path $bundleRoot)) {
         throw "Expected output bundle not found: $bundleRoot"
     }
+    Remove-ConflictingRuntimeDlls -BundleRoot $bundleRoot
     $zipOut = Join-Path $packagePath "$OutputName-$timestamp-portable.zip"
     Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $zipOut -Force
     Write-Host "[build_windows_exe] Built bundled executable: $(Join-Path $bundleRoot "$OutputName.exe")"

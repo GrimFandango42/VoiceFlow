@@ -7,6 +7,7 @@ This index points to the current, maintained documentation set for the Python-ba
 - Project overview: `../README.md`
 - Launch guide: `HOW_TO_LAUNCH.md`
 - End-user workflow: `USER_GUIDE.md`
+- AI companion technical playbook: `AI_COMPANION_TECHNICAL.md`
 
 ## Core Technical Docs
 
@@ -15,6 +16,7 @@ This index points to the current, maintained documentation set for the Python-ba
 - Testing notes: `TESTING_NOTES.md`
 - Build and packaging notes: `BUILD_GUIDE.md`
 - Contribution workflow: `CONTRIBUTING.md`
+- Repository structure review: `REPO_STRUCTURE_REVIEW.md`
 
 ## Platform and Forking
 

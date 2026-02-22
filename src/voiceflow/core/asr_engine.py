@@ -15,6 +15,7 @@ Model Tiers:
 
 import logging
 import os
+import sys
 import time
 import threading
 from abc import ABC, abstractmethod
@@ -39,6 +40,80 @@ def _find_dll_in_path(dll_name: str) -> bool:
     return False
 
 
+def _add_dll_search_path(path: Path) -> None:
+    lib_path = str(path)
+    path_entries = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    if lib_path not in path_entries:
+        os.environ["PATH"] = lib_path + os.pathsep + os.environ.get("PATH", "")
+
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    if add_dll_directory is not None:
+        try:
+            add_dll_directory(lib_path)
+        except Exception:
+            # PATH fallback above is usually sufficient.
+            pass
+
+
+def _probe_external_torch_lib_dirs() -> list[Path]:
+    """Find torch/lib candidates without importing torch (safe for packaged builds)."""
+    candidates: list[Path] = []
+
+    env_dir = os.environ.get("VOICEFLOW_TORCH_LIB_DIR", "").strip()
+    if env_dir:
+        candidates.append(Path(env_dir))
+
+    # Active interpreter environment (source mode).
+    candidates.append(Path(sys.prefix) / "Lib" / "site-packages" / "torch" / "lib")
+
+    probe_roots: list[Path] = []
+    try:
+        exe_dir = Path(sys.executable).resolve().parent
+        probe_roots.extend([exe_dir, exe_dir.parent, exe_dir.parent.parent])
+    except Exception:
+        pass
+
+    try:
+        repo_root = Path(__file__).resolve().parents[3]
+        probe_roots.append(repo_root)
+    except Exception:
+        pass
+
+    probe_roots.append(Path.cwd())
+
+    for root in probe_roots:
+        for venv_name in (".venv-gpu", "venv", ".venv"):
+            candidates.append(root / venv_name / "Lib" / "site-packages" / "torch" / "lib")
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _register_external_cuda_runtime_path(required_dlls: list[str]) -> bool:
+    """
+    Register CUDA runtime DLL directory without importing torch.
+    Returns True if a suitable directory was found and registered.
+    """
+    for candidate in _probe_external_torch_lib_dirs():
+        try:
+            if not candidate.exists():
+                continue
+            if not all((candidate / dll).exists() for dll in required_dlls):
+                continue
+            _add_dll_search_path(candidate)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def _register_torch_cuda_path(required_dlls: list[str]) -> None:
     """Expose torch CUDA DLLs to PATH/on-dll search when using venv installs on Windows."""
     try:
@@ -53,22 +128,41 @@ def _register_torch_cuda_path(required_dlls: list[str]) -> None:
     if not all((torch_lib / dll).exists() for dll in required_dlls):
         return
 
-    lib_path = str(torch_lib)
-    path_entries = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
-    if lib_path not in path_entries:
-        os.environ["PATH"] = lib_path + os.pathsep + os.environ.get("PATH", "")
-
-    add_dll_directory = getattr(os, "add_dll_directory", None)
-    if add_dll_directory is not None:
-        try:
-            add_dll_directory(lib_path)
-        except Exception:
-            # PATH fallback above is usually sufficient.
-            pass
+    _add_dll_search_path(torch_lib)
 
 
 def _cuda_runtime_ready() -> bool:
     """Best-effort CUDA runtime check for faster-whisper/ctranslate2 on Windows."""
+    required_dlls = ["cudnn_ops64_9.dll", "cublas64_12.dll"]
+    _register_external_cuda_runtime_path(required_dlls)
+
+    # Prefer ctranslate2 capability checks because packaged builds may intentionally
+    # exclude torch to avoid DLL init crashes.
+    try:
+        import ctranslate2
+
+        get_cuda_device_count = getattr(ctranslate2, "get_cuda_device_count", None)
+        if callable(get_cuda_device_count):
+            try:
+                if int(get_cuda_device_count()) > 0:
+                    return True
+            except Exception:
+                pass
+
+        get_supported_compute_types = getattr(ctranslate2, "get_supported_compute_types", None)
+        if callable(get_supported_compute_types):
+            try:
+                supported = get_supported_compute_types("cuda")
+                if supported:
+                    return True
+            except Exception:
+                pass
+    except Exception:
+        # Fall back to torch-based probing when ctranslate2 probing is unavailable.
+        pass
+
+    # Source/venv fallback path: keep torch probing for environments that depend on
+    # torch-provided CUDA runtime DLL discovery.
     try:
         import torch
     except Exception:
@@ -77,7 +171,6 @@ def _cuda_runtime_ready() -> bool:
     if not torch.cuda.is_available():
         return False
 
-    required_dlls = ["cudnn_ops64_9.dll", "cublas64_12.dll"]
     _register_torch_cuda_path(required_dlls)
     return all(_find_dll_in_path(name) for name in required_dlls)
 
