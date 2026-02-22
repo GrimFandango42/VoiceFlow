@@ -303,6 +303,26 @@ def validate_config(cfg: Config) -> Config:
             )
             cfg.pause_compaction_retry_min_raw_audio_seconds = 4.0
 
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_max_raw_audio_seconds')
+            or cfg.pause_compaction_retry_max_raw_audio_seconds < 4.0
+            or cfg.pause_compaction_retry_max_raw_audio_seconds > 300.0
+        ):
+            logger.warning(
+                f"Invalid pause_compaction_retry_max_raw_audio_seconds {getattr(cfg, 'pause_compaction_retry_max_raw_audio_seconds', 'None')}, defaulting to 20.0"
+            )
+            cfg.pause_compaction_retry_max_raw_audio_seconds = 20.0
+
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_fast_path_max_raw_audio_seconds')
+            or cfg.pause_compaction_retry_fast_path_max_raw_audio_seconds < 2.0
+            or cfg.pause_compaction_retry_fast_path_max_raw_audio_seconds > 120.0
+        ):
+            logger.warning(
+                f"Invalid pause_compaction_retry_fast_path_max_raw_audio_seconds {getattr(cfg, 'pause_compaction_retry_fast_path_max_raw_audio_seconds', 'None')}, defaulting to 18.0"
+            )
+            cfg.pause_compaction_retry_fast_path_max_raw_audio_seconds = 18.0
+
         if not hasattr(cfg, 'non_speech_min_peak') or cfg.non_speech_min_peak < 0.01 or cfg.non_speech_min_peak > 1.0:
             logger.warning(
                 f"Invalid non_speech_min_peak {getattr(cfg, 'non_speech_min_peak', 'None')}, defaulting to 0.16"

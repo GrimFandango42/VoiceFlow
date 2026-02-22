@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "voiceflow"
 version = "2.0.0"
-description = "AI Voice Transcription System with Real-time Processing"
+description = "Local-first push-to-talk transcription for Windows"
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
@@ -70,16 +70,14 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/voiceflow"
-Repository = "https://github.com/yourusername/voiceflow.git"
-Documentation = "https://voiceflow.readthedocs.io"
-Issues = "https://github.com/yourusername/voiceflow/issues"
-Changelog = "https://github.com/yourusername/voiceflow/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/GrimFandango42/VoiceFlow"
+Repository = "https://github.com/GrimFandango42/VoiceFlow.git"
+Issues = "https://github.com/GrimFandango42/VoiceFlow/issues"
 
 [project.scripts]
-voiceflow = "voiceflow.ui.cli:main"
+voiceflow = "voiceflow.ui.cli_enhanced:main"
 voiceflow-tray = "voiceflow.ui.tray:main"
-voiceflow-setup = "voiceflow.utils.setup:main"
+voiceflow-daily-learning = "voiceflow.ai.daily_learning:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/voiceflow"]
@@ -94,7 +92,6 @@ include = [
     "/docs",
     "/README.md",
     "/LICENSE",
-    "/CHANGELOG.md",
 ]
 
 # Ruff configuration
@@ -156,17 +153,13 @@ ignore_missing_imports = true
 
 # Pytest configuration
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/runtime"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
     "--strict-markers",
     "--strict-config",
-    "--cov=src/voiceflow",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-report=xml",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

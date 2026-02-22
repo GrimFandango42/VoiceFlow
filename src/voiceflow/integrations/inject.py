@@ -60,7 +60,7 @@ def _preserve_clipboard(enabled: bool):
     prev: Optional[str] = None
     if enabled:
         try:
-            prev = pyperclip.paste()
+            prev = _clipboard_paste_with_retry()
         except Exception:
             prev = None
     try:
@@ -68,9 +68,36 @@ def _preserve_clipboard(enabled: bool):
     finally:
         if enabled and prev is not None:
             try:
-                pyperclip.copy(prev)
+                _clipboard_copy_with_retry(prev)
             except Exception:
                 pass
+
+
+def _clipboard_copy_with_retry(text: str, attempts: int = 6, base_delay: float = 0.03) -> None:
+    """Retry clipboard writes to tolerate transient OpenClipboard contention on Windows."""
+    last_error: Optional[Exception] = None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            pyperclip.copy(text)
+            return
+        except Exception as exc:
+            last_error = exc
+            time.sleep(base_delay * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+
+
+def _clipboard_paste_with_retry(attempts: int = 4, base_delay: float = 0.02) -> str:
+    last_error: Optional[Exception] = None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            return str(pyperclip.paste() or "")
+        except Exception as exc:
+            last_error = exc
+            time.sleep(base_delay * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+    return ""
 
 
 class ClipboardInjector:
@@ -109,13 +136,29 @@ class ClipboardInjector:
             time.sleep(wait)
         self._last_inject_ts = time.time()
 
+    def copy_text_to_clipboard(self, text: str) -> bool:
+        """Best-effort fallback so users can manually paste if live injection misses."""
+        text = self._sanitize(text)
+        if not text.strip():
+            return False
+        try:
+            _clipboard_copy_with_retry(text)
+            return True
+        except Exception as e:
+            self._log.warning("clipboard_fallback_copy_failed error=%s", e)
+            return False
+
     def paste_text(self, text: str) -> bool:
         text = self._sanitize(text)
         if not text.strip():
             return False
 
         with _preserve_clipboard(self.cfg.restore_clipboard):
-            pyperclip.copy(text)
+            try:
+                _clipboard_copy_with_retry(text)
+            except Exception as e:
+                self._log.warning("clipboard_copy_failed error=%s", e)
+                return False
             time.sleep(0.03)  # allow clipboard to settle
             keyboard.send(self.cfg.paste_shortcut)
             # Some apps read clipboard asynchronously; avoid restoring too quickly.
@@ -136,6 +179,15 @@ class ClipboardInjector:
 
     def inject(self, text: str) -> bool:
         self._throttle()
+        if not self._ensure_target_focus_for_release():
+            fg = self._foreground_window()
+            self._log.warning(
+                "inject_focus_drift target_hwnd=%s foreground_hwnd=%s",
+                str(self._target_hwnd),
+                str(fg),
+            )
+            return False
+
         # Optional switch: for short payloads, prefer typing to avoid clipboard exposure
         if self.cfg.type_if_len_le > 0 and len(text) <= self.cfg.type_if_len_le:
             method = 'type'
@@ -195,6 +247,46 @@ class ClipboardInjector:
             time.sleep(0.01)
         except Exception:
             pass
+
+    def _is_target_foreground(self) -> bool:
+        if not self._target_hwnd:
+            return True
+        fg = self._foreground_window()
+        if not fg:
+            return False
+        return int(fg) == int(self._target_hwnd)
+
+    def _ensure_target_focus_for_release(self) -> bool:
+        """
+        Guardrail for release-time injection.
+        If focus drifted away from the captured target window, attempt bounded re-focus.
+        """
+        require_focus = bool(getattr(self.cfg, "inject_require_target_focus", True))
+        if not require_focus or not self._target_hwnd:
+            return True
+        if self._is_target_foreground():
+            return True
+
+        allow_refocus = bool(getattr(self.cfg, "inject_refocus_on_miss", True))
+        if not allow_refocus:
+            return False
+
+        attempts = max(1, int(getattr(self.cfg, "inject_refocus_attempts", 3)))
+        delay_s = max(0, int(getattr(self.cfg, "inject_refocus_delay_ms", 90))) / 1000.0
+
+        for attempt in range(attempts):
+            self._focus_target_window()
+            if delay_s > 0:
+                time.sleep(delay_s)
+            if self._is_target_foreground():
+                if attempt > 0:
+                    self._log.info(
+                        "inject_refocus_recovered attempts=%d target_hwnd=%s",
+                        attempt + 1,
+                        str(self._target_hwnd),
+                    )
+                return True
+        return False
 
     def _foreground_window(self) -> Optional[int]:
         try:

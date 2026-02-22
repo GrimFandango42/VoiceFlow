@@ -349,12 +349,13 @@ class EnhancedTranscriptionManager:
         with self.lock:
             self.job_counter += 1
             job_id = f"job_{self.job_counter}"
+        submitted_at = time.perf_counter()
         
         # Clean up completed jobs
         self._cleanup_completed_jobs()
         
         # Submit new job
-        future = self.executor.submit(self._transcription_worker, audio_data, callback, job_id)
+        future = self.executor.submit(self._transcription_worker, audio_data, callback, job_id, submitted_at)
         
         with self.lock:
             self.active_jobs[job_id] = future
@@ -362,13 +363,23 @@ class EnhancedTranscriptionManager:
         print(f"[TranscriptionManager] Started {job_id} (active jobs: {len(self.active_jobs)})")
         return job_id
     
-    def _transcription_worker(self, audio_data: np.ndarray, callback: callable, job_id: str):
+    def _transcription_worker(
+        self,
+        audio_data: np.ndarray,
+        callback: callable,
+        job_id: str,
+        submitted_at: float,
+    ):
         """Enhanced transcription worker with error handling"""
         try:
             start_time = time.perf_counter()
             duration = len(audio_data) / 16000.0  # Assuming 16kHz
+            queue_wait_ms = max(0.0, (start_time - float(submitted_at)) * 1000.0)
 
-            print(f"[TranscriptionManager] {job_id}: Processing {duration:.2f}s of audio...")
+            print(
+                f"[TranscriptionManager] {job_id}: Processing {duration:.2f}s of audio... "
+                f"(queue_wait={queue_wait_ms:.1f}ms)"
+            )
 
             # Perform transcription with timeout
             import signal
@@ -1423,6 +1434,13 @@ class EnhancedApp:
         """Perform actual transcription with enhanced error handling and timeout protection"""
         # Ensure logger is available (fix for scoping issue)
         logger = logging.getLogger(__name__)
+        stage_ms: Dict[str, float] = {}
+        asr_model_id = ""
+        asr_model_name = ""
+        asr_device = ""
+        asr_compute = ""
+        asr_path = "primary"
+        retry_used = False
 
         try:
             original_samples = len(audio_data)
@@ -1449,7 +1467,9 @@ class EnhancedApp:
 
             start_time = time.perf_counter()
             raw_audio_duration = len(audio_data) / self.cfg.sample_rate if len(audio_data) > 0 else 0.0
+            stage_start = time.perf_counter()
             compacted_audio = self._compact_pauses(audio_data)
+            stage_ms["pause_compaction"] = (time.perf_counter() - stage_start) * 1000.0
             audio_duration = len(compacted_audio) / self.cfg.sample_rate if len(compacted_audio) > 0 else 0.0
             compaction_reduction_pct = 0.0
             if len(compacted_audio) != len(audio_data):
@@ -1471,7 +1491,9 @@ class EnhancedApp:
             non_speech_soft_trigger = False
             non_speech_reason = ""
             non_speech_metrics: Dict[str, float] = {}
+            stage_start = time.perf_counter()
             is_non_speech, non_speech_reason, non_speech_metrics = self._detect_likely_non_speech(compacted_audio)
+            stage_ms["non_speech_guard"] = (time.perf_counter() - stage_start) * 1000.0
             if is_non_speech:
                 self._log.info(
                     "transcription_filtered reason=%s duration=%.2f peak=%.3f rms=%.5f crest=%.2f voiced=%.3f zcr=%.3f flatness=%.3f",
@@ -1529,29 +1551,61 @@ class EnhancedApp:
             timeout_seconds = max(60, max(audio_duration, raw_audio_duration) * 3)  # 3x audio duration or 60s minimum
 
             try:
+                active_asr = self.asr
+                asr_path = "primary"
                 with OperationTimeout(timeout_seconds, f"transcription_{audio_duration:.1f}s"):
                     active_asr, asr_path = self._pick_asr_engine(audio_duration)
+                    model_cfg = getattr(active_asr, "model_config", None)
+                    if model_cfg is not None:
+                        asr_model_name = str(getattr(model_cfg, "name", "") or "")
+                        asr_model_id = str(getattr(model_cfg, "model_id", "") or "")
+                        asr_device = str(getattr(model_cfg, "device", "") or "")
+                        asr_compute = str(getattr(model_cfg, "compute_type", "") or "")
+                    self._log.info(
+                        "transcription_engine path=%s model=%s model_id=%s device=%s compute=%s",
+                        asr_path,
+                        asr_model_name,
+                        asr_model_id,
+                        asr_device,
+                        asr_compute,
+                    )
                     self._log.info("transcription_path path=%s duration=%.2f", asr_path, audio_duration)
+                    stage_start = time.perf_counter()
                     text = active_asr.transcribe(compacted_audio)
+                    stage_ms["asr_decode"] = (time.perf_counter() - stage_start) * 1000.0
                 raw_transcript = text
 
                 # Easy quality fallback: if pause compaction removed a lot and output is too short,
                 # retry once on raw audio to recover clipped latter-half speech.
+                retry_max_raw_seconds = float(
+                    getattr(self.cfg, "pause_compaction_retry_max_raw_audio_seconds", 20.0)
+                )
                 if (
                     bool(getattr(self.cfg, "pause_compaction_retry_on_short_output", True))
                     and len(audio_data) > len(compacted_audio)
                     and raw_audio_duration >= float(getattr(self.cfg, "pause_compaction_retry_min_raw_audio_seconds", 4.0))
+                    and raw_audio_duration <= retry_max_raw_seconds
                 ):
                     retry_min_reduction = float(getattr(self.cfg, "pause_compaction_retry_min_reduction_pct", 38.0))
                     retry_max_words = int(getattr(self.cfg, "pause_compaction_retry_max_words", 8))
                     initial_words = len((text or "").split())
                     if compaction_reduction_pct >= retry_min_reduction and initial_words <= retry_max_words:
-                        retry_asr, retry_path = self._pick_asr_engine(raw_audio_duration)
+                        fast_retry_max_raw = float(
+                            getattr(self.cfg, "pause_compaction_retry_fast_path_max_raw_audio_seconds", 18.0)
+                        )
+                        if asr_path == "fast" and raw_audio_duration <= fast_retry_max_raw:
+                            retry_asr = active_asr
+                            retry_path = "fast-retry"
+                        else:
+                            retry_asr, retry_path = self._pick_asr_engine(raw_audio_duration)
+                        stage_start = time.perf_counter()
                         retry_text = retry_asr.transcribe(audio_data)
+                        stage_ms["asr_retry"] = (time.perf_counter() - stage_start) * 1000.0
                         retry_words = len((retry_text or "").split())
                         retry_chars = len((retry_text or "").strip())
                         initial_chars = len((text or "").strip())
                         if retry_words >= (initial_words + 2) or retry_chars >= (initial_chars + 12):
+                            retry_used = True
                             self._log.info(
                                 "pause_compaction_retry_applied initial_words=%d retry_words=%d reduction=%.1f%% path=%s",
                                 initial_words,
@@ -1570,6 +1624,16 @@ class EnhancedApp:
                                 retry_words,
                                 compaction_reduction_pct,
                             )
+                elif (
+                    bool(getattr(self.cfg, "pause_compaction_retry_on_short_output", True))
+                    and len(audio_data) > len(compacted_audio)
+                    and raw_audio_duration > retry_max_raw_seconds
+                ):
+                    self._log.info(
+                        "pause_compaction_retry_skipped raw_duration=%.2f max_raw=%.2f",
+                        raw_audio_duration,
+                        retry_max_raw_seconds,
+                    )
 
                 # Simple hallucination detection - fast and reliable
                 if text and len(text.strip()) > 0:
@@ -1607,8 +1671,9 @@ class EnhancedApp:
                 # Return to idle state after timeout
                 mark_idle()
                 return ""
-            
+
             # Apply basic processing
+            postprocess_start = time.perf_counter()
             text = normalize_context_terms(text)
             destination_context = self._destination_format_context()
             destination_profile = infer_destination_profile(destination_context)
@@ -1696,6 +1761,7 @@ class EnhancedApp:
                     )
                 except Exception:
                     text = format_transcript_text(text)
+            stage_ms["postprocess"] = (time.perf_counter() - postprocess_start) * 1000.0
 
             # Performance tracking
             transcription_time = time.perf_counter() - start_time
@@ -1742,16 +1808,52 @@ class EnhancedApp:
                 visual_record_transcription_event(text, audio_duration, transcription_time)
 
             # Inject text
+            inject_start = time.perf_counter()
             if text.strip():
                 # Mark as injecting
                 mark_injecting()
 
-                self.injector.inject(text)
+                inject_ok = bool(self.injector.inject(text))
+                if not inject_ok:
+                    clipboard_ok = bool(self.injector.copy_text_to_clipboard(text))
+                    target_context = self.injector.get_target_context()
+                    target_name = (
+                        str(target_context.get("process_name", "") or "").strip()
+                        or str(target_context.get("window_title", "") or "").strip()
+                        or "target window"
+                    )
+                    if clipboard_ok:
+                        print(
+                            f"[INJECT] Focus changed before paste. Transcript copied to clipboard for manual paste in {target_name}."
+                        )
+                    else:
+                        print(
+                            f"[INJECT] Focus changed before paste and clipboard fallback failed. Verify focus and retry in {target_name}."
+                        )
+                    self._log.warning(
+                        "inject_failed clipboard_fallback=%s target=%s chars=%d",
+                        str(clipboard_ok),
+                        target_name,
+                        len(text),
+                    )
+                    if self.visual_indicators_enabled:
+                        update_tray_status(
+                            self.tray_controller,
+                            "error",
+                            False,
+                            "Focus changed; transcript copied to clipboard" if clipboard_ok else "Focus changed; injection failed",
+                        )
+                        if VISUAL_INDICATORS_AVAILABLE:
+                            if clipboard_ok:
+                                show_error("Focus changed; copied to clipboard")
+                            else:
+                                show_error("Focus changed; injection failed")
+
                 self._log.info("transcribed chars=%d words=%d seconds=%.3f",
                              len(text), len(text.split()), transcription_time)
 
                 # Update visual indicators - completion with transcription result
-                if self.visual_indicators_enabled:
+                if self.visual_indicators_enabled and inject_ok:
                     truncated_text = text[:50] + "..." if len(text) > 50 else text
                     update_tray_status(self.tray_controller, "complete", False, f"Transcribed: {truncated_text}")
                     if VISUAL_INDICATORS_AVAILABLE:
@@ -1759,6 +1861,27 @@ class EnhancedApp:
 
                     # CRITICAL: Schedule delayed reset to idle via tray auto-reset timer
                     # Don't immediately go to idle - let the tray controller handle the 2s auto-reset
+            stage_ms["inject"] = (time.perf_counter() - inject_start) * 1000.0
+
+            self._log.info(
+                (
+                    "transcription_timing total_ms=%.1f path=%s model_id=%s device=%s compute=%s "
+                    "retry_used=%s compaction_ms=%.1f guard_ms=%.1f asr_ms=%.1f retry_ms=%.1f "
+                    "post_ms=%.1f inject_ms=%.1f"
+                ),
+                transcription_time * 1000.0,
+                asr_path,
+                asr_model_id,
+                asr_device,
+                asr_compute,
+                str(retry_used),
+                stage_ms.get("pause_compaction", 0.0),
+                stage_ms.get("non_speech_guard", 0.0),
+                stage_ms.get("asr_decode", 0.0),
+                stage_ms.get("asr_retry", 0.0),
+                stage_ms.get("postprocess", 0.0),
+                stage_ms.get("inject", 0.0),
+            )
 
             if text.strip():
                 self._observe_adaptive_async(

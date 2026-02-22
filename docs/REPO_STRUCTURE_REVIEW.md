@@ -1,50 +1,34 @@
-# Repository Structure Review
+# Repository Structure
 
-Date: 2026-02-21
+Date: 2026-02-22
 
-## Current Root-Level Findings
+## Active Surface (kept lean)
 
-The root contains user-facing launchers, build helpers, dev scripts, and historical artifacts together.
-This increases noise for new users and reviewers.
+- `src/voiceflow/` - runtime package
+  - `core/` audio + ASR pipeline
+  - `integrations/` hotkeys + injection
+  - `ui/` tray + CLI runtime
+  - `utils/` config/logging/guardrails
+  - `ai/` optional local enhancement layer
+- `scripts/setup/` - bootstrap/build/install automation
+- `scripts/dev/` - active lightweight checks
+- `tests/runtime/` - maintained regression suite
+- `docs/` - current onboarding + technical docs
 
-Examples of root-level files that are not part of the normal user install experience:
+## Archived/Removed Surface
 
-- `quality_monitor.py`
-- `test_quick_transcription.py`
-- `tasks.md`
-- multiple launch wrappers (`VoiceFlow*.bat`, `VoiceFlow_Tray.vbs`)
+The following categories were moved out of the active development path:
 
-There are also local/dev artifacts that commonly appear in working copies:
+- Assistant/framework scaffolding files
+- Spec-planning artifacts (`specs/`)
+- Legacy runtime/test scripts and deprecated docs
+- Unused model/stability modules not referenced by active runtime
 
-- virtual environments (`venv`, `.venv-gpu`, `whisper_env`)
-- build outputs (`build`, `dist`, `htmlcov`)
-- local test/log directories (`logs`, `test_results`)
+Historical material remains under `archive/`.
 
-## Recommendation
+## Why this structure
 
-Keep the runtime stable first, then do a staged cleanup in a separate pass:
-
-1. Keep root focused on install and entry points:
-- `README.md`
-- `LICENSE`
-- `Install_VoiceFlow.bat`
-- `Bootstrap_Windows.bat`
-- optionally one primary launcher wrapper
-
-2. Move developer-only scripts to structured folders:
-- diagnostics to `tools/diagnostics/`
-- ad-hoc tests to `scripts/dev/` or `tests/manual/`
-- planning docs (like `tasks.md`) to `docs/archive/`
-
-3. Keep advanced operational details in docs:
-- main user flow stays in `README.md`
-- deep technical and AI-assistant guidance stays in `docs/AI_COMPANION_TECHNICAL.md`
-
-## Why This Is Deferred
-
-A full root cleanup can break local habits and existing shortcuts if done in the same pass as runtime fixes.
-For this cycle, the safer path is:
-
-- keep behavior stable
-- improve onboarding docs now
-- run structural cleanup as a dedicated follow-up change
+- Faster onboarding for contributors
+- Lower maintenance overhead
+- Reduced risk of leaking local/assistant-specific tooling
+- Clear separation between active runtime and historical reference content

@@ -53,7 +53,7 @@ class Notification:
 class TrayState:
     """
     System tray state management with Windows-specific optimizations.
-    Manages status, icons, menus, and notifications with constitutional compliance.
+    Manages status, icons, menus, and notifications with performance guardrails.
     """
     status: TrayStatus = TrayStatus.IDLE
     icon_path: str = ""
@@ -287,7 +287,7 @@ class TrayState:
 
     def validate(self) -> None:
         """
-        Validate and fix state to meet constitutional requirements.
+        Validate and fix state to meet runtime requirements.
         Raises ValueError if state cannot be fixed.
         """
         # Fix tooltip length (Windows limitation)
@@ -312,7 +312,7 @@ class TrayState:
 
     def get_performance_impact(self) -> Dict[str, Any]:
         """
-        Get performance impact metrics for constitutional compliance.
+        Get estimated performance impact metrics.
 
         Returns:
             Dictionary with performance metrics
@@ -325,5 +325,7 @@ class TrayState:
             ) / 1024,
             "cpu_impact": "low",  # State operations are fast
             "thread_safe": True,
-            "constitutional_compliant": self.is_valid()
+            "performance_target_compliant": self.is_valid(),
+            # Legacy compatibility key for older tooling.
+            "constitutional_compliant": self.is_valid(),
         }

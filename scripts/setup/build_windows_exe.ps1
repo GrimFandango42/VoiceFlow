@@ -4,7 +4,8 @@ param(
     [switch]$Clean,
     [switch]$OneFile,
     [switch]$Console,
-    [switch]$InstallPackagingDeps
+    [switch]$InstallPackagingDeps,
+    [switch]$SkipCudaRuntime
 )
 
 Set-StrictMode -Version Latest
@@ -78,6 +79,146 @@ function Remove-ConflictingRuntimeDlls {
     }
 }
 
+function Remove-DuplicateCudaDlls {
+    param([string]$BundleRoot)
+
+    $internalRoot = Join-Path $BundleRoot "_internal"
+    $torchLib = Join-Path $internalRoot "torch\lib"
+    if (-not (Test-Path $internalRoot) -or -not (Test-Path $torchLib)) {
+        return
+    }
+
+    $patterns = @(
+        "cudnn*.dll",
+        "cublas*.dll",
+        "cudart*.dll",
+        "cufft*.dll",
+        "curand*.dll",
+        "cusolver*.dll",
+        "cusparse*.dll",
+        "nvrtc*.dll",
+        "nvJitLink*.dll",
+        "zlibwapi.dll"
+    )
+
+    $removed = 0
+    foreach ($pattern in $patterns) {
+        Get-ChildItem -Path $internalRoot -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
+            $rootDll = $_
+            $torchDll = Join-Path $torchLib $rootDll.Name
+            if (Test-Path $torchDll) {
+                $rootLen = (Get-Item $rootDll.FullName).Length
+                $torchLen = (Get-Item $torchDll).Length
+                if ($rootLen -eq $torchLen) {
+                    Remove-Item -Path $rootDll.FullName -Force -ErrorAction SilentlyContinue
+                    $removed += 1
+                    Write-Host "[build_windows_exe] Removed duplicate CUDA runtime: $($rootDll.Name)"
+                }
+            }
+        }
+    }
+
+    if ($removed -gt 0) {
+        Write-Host ("[build_windows_exe] Removed duplicate CUDA DLL copies: {0}" -f $removed)
+    }
+}
+
+function Get-CudaRuntimeDlls {
+    param(
+        [string]$RepoRoot,
+        [string]$PythonExe
+    )
+
+    $candidates = @()
+    if ($env:VOICEFLOW_TORCH_LIB_DIR) {
+        $candidates += $env:VOICEFLOW_TORCH_LIB_DIR
+    }
+
+    try {
+        $pyPrefix = (& $PythonExe -c "import sys; print(sys.prefix)" 2>$null | Select-Object -First 1)
+        if ($pyPrefix) {
+            $prefixPath = $pyPrefix.ToString().Trim()
+            if ($prefixPath) {
+                $candidates += (Join-Path $prefixPath "Lib\site-packages\torch\lib")
+            }
+        }
+    } catch {
+        # no-op
+    }
+
+    $candidates += (Join-Path $RepoRoot ".venv-gpu\Lib\site-packages\torch\lib")
+    $candidates += (Join-Path $RepoRoot "venv\Lib\site-packages\torch\lib")
+    $candidates += (Join-Path $RepoRoot ".venv\Lib\site-packages\torch\lib")
+
+    $patterns = @(
+        "cudnn*.dll",
+        "cublas64_*.dll",
+        "cublasLt64_*.dll",
+        "cudart64_*.dll",
+        "cufft64_*.dll",
+        "curand64_*.dll",
+        "cusolver64_*.dll",
+        "cusparse64_*.dll",
+        "nvrtc64_*.dll",
+        "zlibwapi.dll"
+    )
+
+    $files = New-Object System.Collections.Generic.List[string]
+    $seenDirs = @{}
+    foreach ($dir in $candidates) {
+        if (-not $dir) {
+            continue
+        }
+        $full = [System.IO.Path]::GetFullPath($dir)
+        $key = $full.ToLowerInvariant()
+        if ($seenDirs.ContainsKey($key)) {
+            continue
+        }
+        $seenDirs[$key] = $true
+        if (-not (Test-Path $full)) {
+            continue
+        }
+        foreach ($pattern in $patterns) {
+            Get-ChildItem -Path $full -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
+                $files.Add($_.FullName)
+            }
+        }
+    }
+
+    return $files | Sort-Object -Unique
+}
+
+function Compress-ArchiveWithRetry {
+    param(
+        [string[]]$Path,
+        [string]$DestinationPath,
+        [int]$MaxAttempts = 6,
+        [int]$DelaySeconds = 2
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            if (Test-Path $DestinationPath) {
+                Remove-Item -Path $DestinationPath -Force -ErrorAction SilentlyContinue
+            }
+            Compress-Archive -Path $Path -DestinationPath $DestinationPath -Force -ErrorAction Stop
+            return $true
+        } catch {
+            $message = $_.Exception.Message
+            if ($attempt -lt $MaxAttempts) {
+                Write-Warning ("[build_windows_exe] Zip attempt {0}/{1} failed: {2}" -f $attempt, $MaxAttempts, $message)
+                Write-Host ("[build_windows_exe] Retrying zip in {0}s..." -f $DelaySeconds)
+                Start-Sleep -Seconds $DelaySeconds
+            } else {
+                Write-Warning ("[build_windows_exe] Failed to create zip after {0} attempts: {1}" -f $MaxAttempts, $message)
+                return $false
+            }
+        }
+    }
+
+    return $false
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $pythonExe = Resolve-PythonExe -RepoRoot $repoRoot -ExplicitPython $PythonExe
 
@@ -111,7 +252,12 @@ $args = @(
     "--noconfirm",
     "--name", $OutputName,
     "--paths", $srcPath,
-    "--collect-submodules", "voiceflow",
+    "--collect-submodules", "voiceflow.core",
+    "--collect-submodules", "voiceflow.ui",
+    "--collect-submodules", "voiceflow.integrations",
+    "--collect-submodules", "voiceflow.utils",
+    "--collect-submodules", "voiceflow.ai",
+    "--collect-submodules", "voiceflow.models",
     "--collect-data", "voiceflow",
     "--hidden-import", "PIL._tkinter_finder",
     "--hidden-import", "win32api",
@@ -155,6 +301,21 @@ if (Test-IcoHeader -Path $iconPath) {
     Write-Warning "[build_windows_exe] icon.ico exists but is not a valid ICO; building without custom icon."
 }
 
+if (-not $SkipCudaRuntime) {
+    $cudaDlls = Get-CudaRuntimeDlls -RepoRoot $repoRoot -PythonExe $pythonExe
+    if ($cudaDlls -and $cudaDlls.Count -gt 0) {
+        foreach ($dll in $cudaDlls) {
+            # Bundle CUDA runtime DLLs when available so packaged builds can run GPU path
+            # without depending on system-wide torch installs.
+            # Keep them under torch/lib to avoid duplicate giant DLL copies at bundle root.
+            $args += @("--add-binary", ($dll + ";torch/lib"))
+        }
+        Write-Host ("[build_windows_exe] Bundling CUDA runtime DLLs: {0}" -f $cudaDlls.Count)
+    } else {
+        Write-Host "[build_windows_exe] No CUDA runtime DLLs found; package will run CPU-only unless host provides them."
+    }
+}
+
 $args += $entryScript
 
 Write-Host "[build_windows_exe] Running PyInstaller..."
@@ -169,16 +330,23 @@ if ($OneFile) {
         throw "Expected output not found: $oneFileExe"
     }
     $zipOut = Join-Path $packagePath "$OutputName-$timestamp-onefile.zip"
-    Compress-Archive -Path $oneFileExe -DestinationPath $zipOut -Force
     Write-Host "[build_windows_exe] Built one-file executable: $oneFileExe"
-    Write-Host "[build_windows_exe] Zip artifact: $zipOut"
+    if (Compress-ArchiveWithRetry -Path @($oneFileExe) -DestinationPath $zipOut) {
+        Write-Host "[build_windows_exe] Zip artifact: $zipOut"
+    } else {
+        Write-Warning "[build_windows_exe] Continuing without zip artifact. One-file EXE is still available."
+    }
 } else {
     if (-not (Test-Path $bundleRoot)) {
         throw "Expected output bundle not found: $bundleRoot"
     }
     Remove-ConflictingRuntimeDlls -BundleRoot $bundleRoot
+    Remove-DuplicateCudaDlls -BundleRoot $bundleRoot
     $zipOut = Join-Path $packagePath "$OutputName-$timestamp-portable.zip"
-    Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $zipOut -Force
     Write-Host "[build_windows_exe] Built bundled executable: $(Join-Path $bundleRoot "$OutputName.exe")"
-    Write-Host "[build_windows_exe] Zip artifact: $zipOut"
+    if (Compress-ArchiveWithRetry -Path @((Join-Path $bundleRoot "*")) -DestinationPath $zipOut) {
+        Write-Host "[build_windows_exe] Zip artifact: $zipOut"
+    } else {
+        Write-Warning "[build_windows_exe] Continuing without zip artifact. Bundled build directory is still available."
+    }
 }

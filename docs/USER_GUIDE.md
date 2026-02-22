@@ -1,152 +1,93 @@
 # VoiceFlow User Guide
 
-## Who This Is For
-
-This guide is for users running VoiceFlow as a desktop push-to-talk transcriber on Windows.
-
-## First Run
-
-1. Install dependencies (`scripts\setup\requirements_windows.txt`).
-2. Start with `VoiceFlow_Quick.bat`.
-3. Confirm tray icon appears.
-4. Test a short dictation into Notepad.
-
 ## Core Workflow
 
-1. Focus your target app (editor/chat/browser).
-2. Hold push-to-talk (default: `Ctrl+Shift`).
+1. Focus your target app.
+2. Hold push-to-talk (`Ctrl+Shift` by default).
 3. Speak.
-4. Release.
-5. VoiceFlow injects the transcript into the active target.
+4. Release to transcribe and insert text.
 
-## Tray Menu Controls
+## Tray Features
 
-Primary toggles:
+The tray menu controls:
+
 - Code mode
-- Injection mode (paste vs type)
-- Auto-enter
-- Visual indicators
-- Dock visibility
-- Recent history panel
-- Push-to-talk preset selector
+- Injection mode (`Paste` vs `Type`)
+- Auto-enter after paste
+- Visual indicators and dock visibility
+- Hotkey presets
+- Recent history
+- Correction review
 
-## Recent History Recovery
+## Model and Hardware Guidance
 
-Use `Recent History` from the dock or tray to review the latest transcriptions.
+Default config is designed to work out of the box:
 
-For each item you can:
-- `More` / `Less` to expand or collapse full transcript text
-- `⧉` copy icon to copy the full transcript
+- `device=auto`
+- `model_tier=quick`
 
-This is useful when audio was successfully transcribed but injection into the target app did not complete.
+Runtime behavior:
 
-## Daily Continual Learning
+- CUDA available: GPU path with `float16`
+- No CUDA: CPU path with `int8`
 
-VoiceFlow can run a daily offline learning pass that reviews previous-day transcriptions and saved correction-review edits.
+Optional tier overrides:
 
-Manual run:
+- `tiny`: lowest latency
+- `quick`: default adaptive tier
+- `balanced`: better quality with good speed (best on GPU)
+- `quality`: best recognition, slower
+
+## Personalization Features
+
+VoiceFlow keeps personalized behavior enabled:
+
+- Recent transcript history
+- Correction review workflow
+- Daily learning job from previous corrections
+- Local engineering terms dictionary support
+
+Daily learning commands:
 
 ```powershell
 .\VoiceFlow_DailyLearning.bat
-```
-
-Dry run:
-
-```powershell
 .\VoiceFlow_DailyLearning.bat --dry-run
 ```
 
-Schedule once per day:
+Schedule daily learning:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup\register_daily_learning_task.ps1 -StartTime "08:00" -Force
 ```
 
-Outputs:
-- Reports: `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\`
-- Adaptive audit: `%LOCALAPPDATA%\LocalFlow\adaptive_audit.jsonl`
-- Adaptive patterns: `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json`
+## Config and Logs
 
-## Hotkeys
+- Config: `%LOCALAPPDATA%\LocalFlow\config.json`
+- Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
 
-Default push-to-talk:
-- `Ctrl+Shift` (modifiers only)
+Injection reliability defaults:
 
-Common presets available in tray:
-- `Ctrl+Shift+Space`
-- `Ctrl+Alt+Space`
-- `Ctrl+Alt`
-- `Ctrl+Space`
-- `Alt+Space`
+- `inject_require_target_focus=true`
+- `inject_refocus_on_miss=true`
+- `inject_refocus_attempts=3`
+- If final injection misses due focus drift, transcript is copied to clipboard for manual paste.
 
-Additional runtime toggles:
-- `Ctrl+Alt+C` (code mode)
-- `Ctrl+Alt+P` (paste/type mode)
-- `Ctrl+Alt+Enter` (auto-enter)
+## Quick Troubleshooting
 
-## Understanding Status
-
-Typical status progression:
-- `idle`
-- `listening` (while holding)
-- `processing` / `transcribing` (after release)
-- `complete` (then auto-return to idle)
-
-Tray and overlay both reflect these states.
-
-## Accuracy and Speed Tuning
-
-If you want lower latency:
-- keep `latency_boost_enabled=true`
-- keep pause compaction enabled
-- prefer CUDA if available and stable
-
-If you want higher consistency:
-- reduce aggressive custom post-processing
-- keep code mode enabled for technical dictation workflows
-
-Config file:
-- `%LOCALAPPDATA%\LocalFlow\config.json`
-
-Technical vocabulary tuning:
-- Default technical normalization already handles common terms like `OAuth`, `CLI`, `API`, `JSON`, `SQL`, `AWS`, and `MQTT`.
-- VoiceFlow also uses engineering-context hints (for example sprint/ticket/incident/release/PR language) to apply context-aware corrections more safely.
-- Add a local custom dictionary at `%LOCALAPPDATA%\LocalFlow\engineering_terms.json` to bias toward your own stack and team vocabulary.
-- Use `docs/examples/engineering_terms.json` as a starter template.
-- Optional override for testing: set `VOICEFLOW_TERMS_PATH` (or legacy `VOICEFLOW_TECHNICAL_TERMS_PATH`) to another dictionary file path.
-
-## Reliability Tips
-
-- Keep one VoiceFlow runtime instance active.
-- For long dictation, keep speaking naturally with short pauses.
-- Use quiet mic input when possible.
-- If text lands in the wrong app, re-focus target before release.
-
-## Troubleshooting
-
-Audio/device checks:
+List audio devices:
 
 ```powershell
 python scripts\list_audio_devices.py
 ```
 
-Debug tools:
+If performance is unexpectedly slow:
 
-```powershell
-python scripts\debugging\debug_hang_issue.py
-python scripts\debugging\debug_nonetype_issue.py
-```
+1. Restart VoiceFlow.
+2. Check `localflow.log` for `device=` and `compute=` values.
+3. Confirm no older executable build is still running.
 
-Run with console logs:
+If transcription appears in terminal but not in your app:
 
-```powershell
-.\VoiceFlow.bat
-```
-
-## Known Platform Scope
-
-- Fully tuned/tested path: Windows.
-- Linux/macOS: possible via fork, but not production-validated in this repo.
-
-Forking notes:
-- `docs/guides/FORKING_AND_PLATFORM_GUIDE.md`
+1. Bring the target app back to foreground and paste (`Ctrl+V`).
+2. Check for focus-stealing popups/notifications during key release.
+3. Review `localflow.log` for `inject_focus_drift` events.

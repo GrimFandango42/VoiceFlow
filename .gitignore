@@ -13,7 +13,9 @@ python/venv/
 venv/
 .venv/
 .venv-gpu/
+whisper_env/
 python/__pycache__/
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
@@ -96,6 +98,8 @@ python/models/
 *.bin
 *.pt
 *.onnx
+whisper-writer/
+srcvoiceflowcorearchive/
 
 # User data
 user_data/

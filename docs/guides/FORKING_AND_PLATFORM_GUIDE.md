@@ -93,7 +93,7 @@ This guide is the practical handoff for developers who want to fork VoiceFlow an
 - Syntax sanity:
   - `python -m py_compile src/voiceflow/ui/visual_indicators.py src/voiceflow/ui/cli_enhanced.py src/voiceflow/core/streaming.py src/voiceflow/utils/settings.py`
 - Unit slice:
-  - `pytest -q tests/test_textproc.py tests/test_injector_logic.py tests/test_sanitization_and_rate.py`
+  - `pytest -q tests/runtime/test_textproc.py tests/runtime/test_injector_logic.py tests/runtime/test_sanitization_and_rate.py`
 
 ## Behavioral checks
 

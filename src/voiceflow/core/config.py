@@ -43,6 +43,8 @@ class Config:
     pause_compaction_retry_min_reduction_pct: float = 38.0  # Trigger raw retry only after heavy compaction
     pause_compaction_retry_max_words: int = 8  # Treat very short result as likely clipped output
     pause_compaction_retry_min_raw_audio_seconds: float = 4.0  # Only retry for medium/long dictation
+    pause_compaction_retry_max_raw_audio_seconds: float = 20.0  # Avoid expensive second-pass decode on very long clips
+    pause_compaction_retry_fast_path_max_raw_audio_seconds: float = 18.0  # Keep retry on fast model for short-medium clips
     enable_non_speech_guard: bool = True  # Reject likely sneeze/cough/throat-clear bursts before ASR
     non_speech_guard_soft_mode: bool = True  # Prefer salvage/retry over hard drop on suspected bursts
     non_speech_max_audio_seconds: float = 1.25  # Only run non-speech filter on short clips
@@ -58,13 +60,13 @@ class Config:
     # ASR - Hardware-appropriate configuration (Constitutional Principle: optimize for available hardware)
     # Model tier selection (VoiceFlow 3.0): "tiny", "quick", "balanced", "quality", "voxtral"
     # - tiny: Fastest, lowest accuracy (tiny.en) - good for testing
-    # - quick: Distil-Large-v3, 6x faster than large-v3, within 1% WER (recommended)
+    # - quick: Adaptive quick tier (small.en on CPU, distil-large-v3 on CUDA)
     # - balanced: Distil-Large-v3.5, best speed/quality ratio (March 2025)
     # - quality: Large-v3, highest accuracy, slower
     # - voxtral: Voxtral-3B (Mistral AI), beats Whisper benchmarks
-    model_tier: str = "quick"  # Default to quick tier (distil-large-v3)
-    model_name: str = "distil-large-v3"  # Updated default - 6x faster than tiny.en with better accuracy
-    device: str = "cpu"   # Default to CPU for compatibility - auto-detect GPU if available
+    model_tier: str = "quick"  # Default to adaptive quick tier
+    model_name: str = "distil-large-v3"  # Used when tier is not set; tier routing is preferred
+    device: str = "auto"   # Prefer CUDA when available, otherwise use CPU
     compute_type: str = "int8"    # int8 for CPU, float16 for GPU
     cpu_threads: int = 0  # 0 = auto-tune based on available CPU cores
     asr_num_workers: int = 1  # Keep 1 for predictable latency with a single active dictation
@@ -181,6 +183,10 @@ class Config:
     max_inject_chars: int = 4000  # safety limit to avoid huge payloads
     min_inject_interval_ms: int = 100  # simple rate limit to avoid spam
     type_if_len_le: int = 0  # if >0, use typing (not clipboard) for short texts
+    inject_require_target_focus: bool = True  # prevent typing into unintended foreground windows
+    inject_refocus_on_miss: bool = True  # try to restore captured target before final injection
+    inject_refocus_attempts: int = 3  # bounded retries for transient popup/focus steals
+    inject_refocus_delay_ms: int = 90  # short settle time between refocus attempts
 
     # AI Enhancement Layer (VoiceFlow 3.0)
     enable_ai_enhancement: bool = False  # Speed-first default: skip LLM cleanup overhead

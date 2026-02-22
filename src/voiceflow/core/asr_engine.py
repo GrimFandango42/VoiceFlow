@@ -7,7 +7,7 @@ A unified speech recognition engine supporting multiple backends and models:
 - Voxtral (Mistral AI's new open-source model)
 
 Model Tiers:
-- Quick: distil-large-v3 (6x faster, same accuracy)
+- Quick: adaptive low-latency tier (small.en on CPU, distil-large-v3 on CUDA)
 - Balanced: distil-large-v3.5 (best speed/quality ratio)
 - Quality: large-v3 or Voxtral-3B (highest accuracy)
 - Tiny: tiny.en (fastest, lower accuracy - good for testing)
@@ -62,6 +62,21 @@ def _probe_external_torch_lib_dirs() -> list[Path]:
     env_dir = os.environ.get("VOICEFLOW_TORCH_LIB_DIR", "").strip()
     if env_dir:
         candidates.append(Path(env_dir))
+
+    if getattr(sys, "frozen", False):
+        # PyInstaller one-dir layout.
+        try:
+            exe_dir = Path(sys.executable).resolve().parent
+            candidates.extend(
+                [
+                    exe_dir / "_internal" / "torch" / "lib",
+                    exe_dir / "torch" / "lib",
+                    exe_dir / "_internal",
+                    exe_dir,
+                ]
+            )
+        except Exception:
+            pass
 
     # Active interpreter environment (source mode).
     candidates.append(Path(sys.prefix) / "Lib" / "site-packages" / "torch" / "lib")
@@ -178,7 +193,7 @@ def _cuda_runtime_ready() -> bool:
 class ModelTier(Enum):
     """Model tiers for easy selection"""
     TINY = "tiny"           # Fastest, lowest accuracy
-    QUICK = "quick"         # Fast with good accuracy (distil-large-v3)
+    QUICK = "quick"         # Fast with good accuracy (adaptive by hardware)
     BALANCED = "balanced"   # Best ratio (distil-large-v3.5)
     QUALITY = "quality"     # Highest accuracy (large-v3)
     VOXTRAL = "voxtral"     # Mistral's new model
@@ -294,11 +309,30 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
 # Tier to model mapping
 TIER_MODELS: Dict[ModelTier, str] = {
     ModelTier.TINY: "tiny.en",
+    # QUICK is resolved dynamically per hardware in resolve_tier_model_key().
     ModelTier.QUICK: "distil-large-v3",
     ModelTier.BALANCED: "distil-large-v3.5",
     ModelTier.QUALITY: "large-v3",
     ModelTier.VOXTRAL: "voxtral-3b",
 }
+
+
+def resolve_tier_model_key(tier: ModelTier, device: str = "cpu") -> str:
+    """
+    Resolve model key for a tier using hardware-aware routing.
+
+    QUICK tier is intentionally adaptive:
+    - CPU: `small.en` for lower end-to-end dictation latency
+    - CUDA: `distil-large-v3` for stronger accuracy with good speed
+    """
+    if tier == ModelTier.QUICK:
+        device_norm = str(device or "cpu").strip().lower()
+        if device_norm == "auto":
+            device_norm = "cuda" if _cuda_runtime_ready() else "cpu"
+        if device_norm != "cuda":
+            return "small.en"
+        return "distil-large-v3"
+    return TIER_MODELS.get(tier, "tiny.en")
 
 
 @dataclass
@@ -408,6 +442,11 @@ class FasterWhisperBackend(ASRBackend):
                 "CUDA model init failed (%s). Falling back to CPU int8.",
                 primary_exc,
             )
+            logging.getLogger("localflow").warning(
+                "asr_cuda_init_failed error=%s fallback=cpu_int8 model=%s",
+                primary_exc,
+                model_ref,
+            )
             self.config.device = "cpu"
             self.config.compute_type = "int8"
             return model_cls(
@@ -514,6 +553,7 @@ class FasterWhisperBackend(ASRBackend):
             self.config.device = "cpu"
             self.config.compute_type = "int8"
             self._retried_cpu_fallback = True
+            logging.getLogger("localflow").warning("asr_runtime_fallback device=cpu compute=int8")
         self.load()
 
 
@@ -796,7 +836,7 @@ class ASREngine:
         self,
         tier: Optional[ModelTier] = None,
         model_name: Optional[str] = None,
-        device: str = "cpu",
+        device: str = "auto",
         compute_type: str = "int8",
         sample_rate: int = 16000,
         enable_diarization: bool = False,
@@ -815,7 +855,7 @@ class ASREngine:
         Args:
             tier: Model tier (TINY, QUICK, BALANCED, QUALITY, VOXTRAL)
             model_name: Specific model name (overrides tier)
-            device: "cpu" or "cuda"
+            device: "cpu", "cuda", or "auto"
             compute_type: "int8", "float16", or "float32"
             sample_rate: Audio sample rate (default 16000)
             enable_diarization: Enable speaker diarization
@@ -828,10 +868,27 @@ class ASREngine:
             temperature: Decoding temperature (0.0 deterministic)
             condition_on_previous_text: Whether to chain previous text context
         """
-        if str(device).lower() == "cuda" and not _cuda_runtime_ready():
+        requested_device = str(device or "auto").strip().lower()
+        if requested_device not in {"cpu", "cuda", "auto"}:
+            requested_device = "auto"
+
+        if requested_device == "auto":
+            requested_device = "cuda" if _cuda_runtime_ready() else "cpu"
+
+        if requested_device == "cuda" and not _cuda_runtime_ready():
             logger.warning("CUDA requested but runtime dependencies are missing. Falling back to CPU int8.")
-            device = "cpu"
-            compute_type = "int8"
+            requested_device = "cpu"
+
+        resolved_compute = str(compute_type or "int8").strip().lower()
+        if requested_device == "cuda":
+            if resolved_compute in {"int8", "auto", ""}:
+                resolved_compute = "float16"
+        else:
+            if resolved_compute in {"float16", "int8_float16", "int8_bfloat16", "auto", ""}:
+                resolved_compute = "int8"
+
+        device = requested_device
+        compute_type = resolved_compute
 
         # Determine model to use
         if model_name:
@@ -847,11 +904,11 @@ class ASREngine:
             else:
                 self.model_config = MODEL_CONFIGS[model_name]
         elif tier:
-            model_key = TIER_MODELS.get(tier, "tiny.en")
+            model_key = resolve_tier_model_key(tier, device)
             self.model_config = MODEL_CONFIGS[model_key]
         else:
             # Default to QUICK tier
-            self.model_config = MODEL_CONFIGS["distil-large-v3"]
+            self.model_config = MODEL_CONFIGS[resolve_tier_model_key(ModelTier.QUICK, device)]
 
         # Update device and compute type
         self.model_config.device = device
@@ -877,8 +934,18 @@ class ASREngine:
         self.total_processing_time = 0.0
         self.total_audio_duration = 0.0
 
-        logger.info(f"ASR Engine initialized - model: {self.model_config.name}, "
-                   f"backend: {self.model_config.backend}, device: {device}")
+        logger.info(
+            f"ASR Engine initialized - model: {self.model_config.name}, "
+            f"backend: {self.model_config.backend}, device: {device}"
+        )
+        logging.getLogger("localflow").info(
+            "asr_engine_initialized model=%s model_id=%s backend=%s device=%s compute=%s",
+            self.model_config.name,
+            self.model_config.model_id,
+            self.model_config.backend,
+            self.model_config.device,
+            self.model_config.compute_type,
+        )
 
     def _create_backend(self) -> None:
         """Create the appropriate backend"""
@@ -994,7 +1061,7 @@ class ASREngine:
                     compute_type=self.model_config.compute_type,
                 )
         elif tier:
-            model_key = TIER_MODELS.get(tier, "tiny.en")
+            model_key = resolve_tier_model_key(tier, self.model_config.device)
             self.model_config = MODEL_CONFIGS[model_key]
 
         # Create new backend
@@ -1029,7 +1096,7 @@ class ASREngine:
         """List model tiers with descriptions"""
         return {
             "tiny": "Fastest, lowest accuracy - good for testing",
-            "quick": "Distil-Large-v3: 6x faster, within 1% WER",
+            "quick": "Adaptive quick tier: small.en on CPU, distil-large-v3 on CUDA",
             "balanced": "Distil-Large-v3.5: Best speed/quality (recommended)",
             "quality": "Large-v3: Highest accuracy, slower",
             "voxtral": "Voxtral-3B: Mistral's new model, beats Whisper",
@@ -1042,7 +1109,7 @@ class ModernWhisperASR(ASREngine):
 
     def __init__(self, cfg):
         # Extract settings from legacy Config object
-        device = getattr(cfg, 'device', 'cpu')
+        device = getattr(cfg, 'device', 'auto')
         compute_type = getattr(cfg, 'compute_type', 'int8')
         model_name = getattr(cfg, 'model_name', 'tiny.en')
         model_tier = getattr(cfg, 'model_tier', None)
@@ -1053,6 +1120,14 @@ class ModernWhisperASR(ASREngine):
         beam_size = getattr(cfg, 'beam_size', 1)
         temperature = getattr(cfg, 'temperature', 0.0)
         condition_on_previous_text = getattr(cfg, 'condition_on_previous_text', False)
+        force_cpu = str(os.environ.get("VOICEFLOW_FORCE_CPU", "")).strip().lower() in {"1", "true", "yes"}
+        gpu_enabled = bool(getattr(cfg, "enable_gpu_acceleration", True))
+
+        device_normalized = str(device or "auto").strip().lower()
+        if not force_cpu and gpu_enabled and device_normalized == "cpu":
+            # Respect legacy "cpu" config values while still allowing automatic CUDA promotion
+            # when users opt in to GPU acceleration.
+            device = "auto"
 
         # If model_tier is specified, use it to select the model
         tier = None

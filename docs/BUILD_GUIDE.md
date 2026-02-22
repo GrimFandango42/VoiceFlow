@@ -1,95 +1,58 @@
-# VoiceFlow Build and Setup Guide
-
-## Scope
-
-VoiceFlow in this repository is a Python runtime (Windows-first), not a Tauri/Electron build pipeline.
-
-This guide covers:
-- environment setup
-- dependency installation
-- launch validation
-- optional packaging direction for fork maintainers
+# VoiceFlow Build Guide (Windows)
 
 ## Prerequisites
 
 - Python 3.9+
-- Windows 10/11 (primary validated target)
-- microphone device available
+- Windows 10/11
+- Microphone device
 
-Optional for better performance:
-- NVIDIA GPU + working CUDA runtime
+Optional:
 
-## Environment Setup
+- NVIDIA GPU with CUDA runtime for highest transcription speed
 
-```powershell
-python -m venv venv
-.\venv\Scripts\activate
-pip install --upgrade pip
-pip install -r scripts\setup\requirements_windows.txt
-```
+## Bootstrap Environment
 
-One-step option:
+CPU-focused:
 
 ```powershell
-.\Bootstrap_Windows.bat
+powershell -ExecutionPolicy Bypass -File scripts\setup\bootstrap_windows.ps1
 ```
 
-Optional installer script:
+GPU-focused:
 
 ```powershell
-python scripts\setup\setup_voiceflow.py
+powershell -ExecutionPolicy Bypass -File scripts\setup\bootstrap_windows.ps1 -GpuVenv
 ```
 
-## Verify Build/Runtime Readiness
+## Validate Local Runtime
 
 ```powershell
 python scripts\dev\quick_smoke_test.py
-python scripts\list_audio_devices.py
+pytest -q tests\runtime
 ```
 
-If both pass, launch:
+## Build Windows Executable
 
 ```powershell
-.\VoiceFlow_Quick.bat
+powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -OutputName VoiceFlow -Clean
 ```
 
-## Editable Install (Optional)
+Output:
 
-If you prefer package-style imports while developing:
+- Bundle: `dist\VoiceFlow\`
+- Package zip: `dist\packages\VoiceFlow-*-portable.zip`
+
+## Build One-File Executable
 
 ```powershell
-pip install -e .
+powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -OutputName VoiceFlow -OneFile -Clean
 ```
 
-## Runtime Artifacts
+## Installer Pipeline
 
-- Config: `%LOCALAPPDATA%\LocalFlow\config.json`
-- Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+Use:
 
-## Test Commands
+- `scripts/setup/build_windows_installer.ps1`
+- `packaging/windows/VoiceFlowSetup.iss`
 
-Fast slice:
-
-```powershell
-pytest -q tests\test_textproc.py tests\test_injector_logic.py tests\test_sanitization_and_rate.py
-```
-
-Broader run:
-
-```powershell
-pytest -q
-```
-
-## Packaging Notes For Forks
-
-No single official installer pipeline is maintained in this branch.
-
-If you need distributable artifacts, common fork strategies are:
-- PyInstaller (`onefile` or directory mode)
-- signed internal launcher + managed Python runtime
-- OS-specific packaging in a downstream repo
-
-Before packaging, validate:
-- global hotkey reliability
-- injection behavior on your target apps
-- long-dictation latency and memory profile
+Detailed release flow is in `docs/guides/WINDOWS_SETUP_EXECUTABLE.md`.

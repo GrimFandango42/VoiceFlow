@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """
-Enhanced Tray Controller with Visual Indicators and ITrayManager Implementation
-==============================================================================
-Improved system tray with dynamic status icons, visual feedback integration,
-and constitutional compliance monitoring.
+Enhanced tray controller with visual indicators.
 """
 
 from __future__ import annotations
@@ -15,8 +12,8 @@ from datetime import datetime
 
 # Import our models and interfaces
 try:
-    from src.voiceflow.models.tray_state import TrayState, TrayStatus, TrayMenuItem, Notification
-    from src.voiceflow.models.system_performance import SystemPerformance
+    from voiceflow.models.tray_state import TrayState, TrayStatus, TrayMenuItem, Notification
+    from voiceflow.models.system_performance import SystemPerformance
 except ImportError:
     # Fallback for existing code compatibility
     TrayState = None
@@ -25,23 +22,10 @@ except ImportError:
     Notification = None
     SystemPerformance = None
 
-# Import contract interfaces
-try:
-    import sys
-    from pathlib import Path
-    spec_contracts_path = Path(__file__).parent.parent.parent.parent / "specs" / "clean-tray-tests-installer-enh" / "contracts"
-    if spec_contracts_path.exists():
-        sys.path.insert(0, str(spec_contracts_path))
-        from tray_interface import ITrayManager, ITrayStatusProvider
-        CONTRACT_INTERFACES_AVAILABLE = True
-    else:
-        ITrayManager = object
-        ITrayStatusProvider = object
-        CONTRACT_INTERFACES_AVAILABLE = False
-except ImportError:
-    ITrayManager = object
-    ITrayStatusProvider = object
-    CONTRACT_INTERFACES_AVAILABLE = False
+# Historical interface names kept as no-op base classes for compatibility.
+ITrayManager = object
+ITrayStatusProvider = object
+CONTRACT_INTERFACES_AVAILABLE = False
 
 try:
     import pystray

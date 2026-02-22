@@ -1,105 +1,36 @@
-# VoiceFlow Launch Guide (Windows)
+# Launch VoiceFlow (Windows)
 
-## Recommended Order
+## Recommended Launchers
 
-1. `VoiceFlow_Quick.bat` for normal day-to-day use.
-2. `VoiceFlow.bat` when you want visible console logs.
-3. `VoiceFlow_Silent.bat` for background/tray-first mode.
-4. `tools\launchers\LAUNCH_CONTROL_CENTER.bat` for guided setup and diagnostics.
+- `VoiceFlow_Quick.bat` (default)
+- `VoiceFlow.bat` (console visible)
+- `VoiceFlow_Silent.bat` (tray-first)
 
-## One-Time Setup
-
-```powershell
-python -m venv venv
-.\venv\Scripts\activate
-pip install --upgrade pip
-pip install -r scripts\setup\requirements_windows.txt
-```
-
-Optional health check:
+## First-Time Setup
 
 ```powershell
-python scripts\dev\quick_smoke_test.py
+powershell -ExecutionPolicy Bypass -File scripts\setup\bootstrap_windows.ps1 -GpuVenv
 ```
 
-One-step bootstrap option:
-
-```powershell
-.\Bootstrap_Windows.bat
-```
-
-## Launch Commands
-
-### Standard (console visible)
-
-```powershell
-.\VoiceFlow.bat
-```
-
-### Quick (recommended)
+## Run
 
 ```powershell
 .\VoiceFlow_Quick.bat
 ```
 
-### Silent tray mode
+## Basic Verification
 
-```powershell
-.\VoiceFlow_Silent.bat
-```
-
-### Control Center
-
-```powershell
-tools\launchers\LAUNCH_CONTROL_CENTER.bat
-```
-
-Or:
-
-```powershell
-python tools\VoiceFlow_Control_Center.py
-```
-
-## Manual Python Launch
-
-From repo root:
-
-```powershell
-$env:PYTHONPATH = "$pwd\src"
-python -m voiceflow.ui.cli_enhanced
-```
-
-Terminal/no-tray variant:
-
-```powershell
-$env:PYTHONPATH = "$pwd\src"
-python -m voiceflow.ui.cli_enhanced --no-tray
-```
-
-## Basic Operation
-
-1. Hold the push-to-talk hotkey (default: `Ctrl+Shift`).
-2. Speak while holding.
-3. Release to transcribe and inject text.
+1. Tray icon appears.
+2. Hold `Ctrl+Shift`, speak, release.
+3. Text appears in Notepad.
 
 ## If Launch Fails
 
-Run:
-
 ```powershell
 python scripts\list_audio_devices.py
-python scripts\debugging\debug_hang_issue.py
-python scripts\debugging\debug_nonetype_issue.py
+python scripts\dev\quick_smoke_test.py
 ```
 
-Then relaunch with `VoiceFlow.bat` to capture console logs.
+Runtime log:
 
-## Runtime Paths
-
-- Config: `%LOCALAPPDATA%\LocalFlow\config.json`
-- Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
-
-## Notes
-
-- If elevated apps do not receive injected text, run VoiceFlow with matching permissions.
-- If GPU behaves unexpectedly, set `VOICEFLOW_FORCE_CPU=1` and compare latency/stability.
+- `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`

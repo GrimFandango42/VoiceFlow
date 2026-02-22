@@ -52,19 +52,38 @@ def _apply_performance_migrations(cfg: Config) -> bool:
             changed = True
 
     # Prefer GPU automatically when runtime is confirmed healthy and user did not force CPU.
+    # This also repairs legacy CPU-only configs persisted by earlier builds.
     force_cpu = str(os.environ.get("VOICEFLOW_FORCE_CPU", "")).strip().lower() in {"1", "true", "yes"}
     if not force_cpu:
         try:
             gpu_enabled = bool(getattr(cfg, "enable_gpu_acceleration", False))
             device = str(getattr(cfg, "device", "cpu")).strip().lower()
             compute = str(getattr(cfg, "compute_type", "int8")).strip().lower()
-            if gpu_enabled and device == "cpu" and compute == "int8":
+            model_tier = str(getattr(cfg, "model_tier", "quick")).strip().lower()
+            tiny_cap = float(getattr(cfg, "latency_boost_tiny_max_audio_seconds", 0.0) or 0.0)
+
+            # Heuristic for stale CPU configs from older packaged defaults.
+            legacy_cpu_profile = (
+                (not gpu_enabled)
+                and device == "cpu"
+                and compute == "int8"
+                and model_tier in {"quick", "balanced"}
+                and tiny_cap >= 10.0
+            )
+
+            if gpu_enabled or legacy_cpu_profile:
                 from voiceflow.core.asr_engine import _cuda_runtime_ready
 
                 if _cuda_runtime_ready():
-                    cfg.device = "cuda"
-                    cfg.compute_type = "float16"
-                    changed = True
+                    if not gpu_enabled:
+                        cfg.enable_gpu_acceleration = True
+                        changed = True
+                    if device in {"cpu", "auto"}:
+                        cfg.device = "cuda"
+                        changed = True
+                    if compute in {"int8", "auto", ""}:
+                        cfg.compute_type = "float16"
+                        changed = True
         except Exception:
             # Stay on CPU if runtime checks fail.
             pass

@@ -1,51 +1,29 @@
-# VoiceFlow Documentation
+# VoiceFlow Docs
 
-This index points to the current, maintained documentation set for the Python-based VoiceFlow runtime.
+This is the maintained documentation set for the current runtime.
 
 ## Start Here
 
 - Project overview: `../README.md`
+- User guide: `USER_GUIDE.md`
 - Launch guide: `HOW_TO_LAUNCH.md`
-- End-user workflow: `USER_GUIDE.md`
-- AI companion technical playbook: `AI_COMPANION_TECHNICAL.md`
+- Build and packaging: `BUILD_GUIDE.md`
 
-## Core Technical Docs
+## Technical
 
 - Architecture: `ARCHITECTURE.md`
-- Technical overview: `TECHNICAL_OVERVIEW.md`
-- Testing notes: `TESTING_NOTES.md`
-- Build and packaging notes: `BUILD_GUIDE.md`
+- Runtime details and config: `TECHNICAL_OVERVIEW.md`
 - Contribution workflow: `CONTRIBUTING.md`
-- Repository structure review: `REPO_STRUCTURE_REVIEW.md`
+- Repository layout: `REPO_STRUCTURE_REVIEW.md`
 
-## Platform and Forking
+## Windows Guides
 
-- Forking and platform adaptation: `guides/FORKING_AND_PLATFORM_GUIDE.md`
-- Windows executable evaluation: `guides/WINDOWS_EXECUTABLE_EVALUATION.md`
-- Windows setup executable build/publish guide: `guides/WINDOWS_SETUP_EXECUTABLE.md`
-- Windows launch checklist: `guides/WINDOWS_APP_TEST_CHECKLIST.md`
-- App-specific validation scenarios: `guides/APPLICATION_SPECIFIC_TEST_SCENARIOS.md`
-- Security and privacy operations guide: `guides/SECURITY_AND_PRIVACY.md`
-- UI polish review and backlog: `guides/UI_POLISH_REVIEW.md`
+- Setup executable pipeline: `guides/WINDOWS_SETUP_EXECUTABLE.md`
+- App validation checklist: `guides/WINDOWS_APP_TEST_CHECKLIST.md`
+- Security and privacy operations: `guides/SECURITY_AND_PRIVACY.md`
+- Forking/platform notes: `guides/FORKING_AND_PLATFORM_GUIDE.md`
 
-## Reports and Historical Material
+## Historical Material
 
-- Current reports: `reports/`
-- Performance analyses: `analysis/`
-- Archived historical docs: `archive/`
-- Legacy export artifacts: `VoiceFlow_Architecture_Guide.pdf` and `VoiceFlow_Architecture_Guide.txt` (reference only)
-- Latest cleanup audit: `reports/REPO_AUDIT_2026-02-15.md`
-
-## Repository Layout (Relevant For Onboarding)
-
-- `src/voiceflow/` - runtime code (`core`, `integrations`, `ui`, `utils`, `ai`)
-- `scripts/` - setup, diagnostics, and development tooling
-- `tools/` - launcher utilities and Control Center
-- `tests/` - unit, integration, performance, and stability suites
-
-## Recommended Validation Commands
-
-- Smoke check: `python scripts/dev/quick_smoke_test.py`
-- Fast regression slice: `pytest -q tests/test_textproc.py tests/test_injector_logic.py tests/test_sanitization_and_rate.py`
-- Broader suite: `pytest -q`
-
+- Archived legacy docs: `../archive/legacy-docs/`
+- Additional archived references: `archive/`

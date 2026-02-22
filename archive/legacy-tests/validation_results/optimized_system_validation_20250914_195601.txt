@@ -1,0 +1,37 @@
+VoiceFlow Optimized System Validation Report
+==================================================
+
+Validation Date: 2025-09-14 19:56:01
+Overall Status: FAILED
+
+Current Configuration:
+-------------------------
+enable_lockfree_model_access: True
+enable_fast_audio_validation: True
+audio_validation_sample_rate: 0.05
+ultra_fast_mode: True
+enable_memory_pooling: False
+enable_chunked_long_audio: False
+
+Performance Metrics:
+--------------------
+Average Speed Factor: 5.5x realtime
+Maximum Speed Factor: 9.9x realtime
+Target (12x+) Met: NO
+Average Memory Usage: 1.8MB
+
+Quality Metrics:
+---------------
+Quality Score: 0.0%
+Quality Validation: FAILED
+
+Stability Metrics:
+------------------
+Consecutive Successful Runs: 5/5
+Stability Test: PASSED
+
+System Information:
+-------------------
+CPU Cores: 16
+Total Memory: 31.9GB
+Platform: win32

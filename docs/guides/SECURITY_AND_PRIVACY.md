@@ -46,13 +46,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup\unregister_daily_learni
 ## Recent Hardening Changes
 
 - Launcher cleanup:
-  - `scripts/launcher/START_VOICEFLOW.bat` now launches with `python -m voiceflow.ui.cli_enhanced` instead of `exec(open(...))`.
+  - Active launch paths are `python -m voiceflow.ui.cli_enhanced` and `python voiceflow.py`.
+  - Legacy batch launchers were archived under `archive/old_launchers/`.
 - Daily learning is explicit and auditable:
   - reports are written as local JSON artifacts for review.
 
 ## Related References
 
-- `docs/reports/SECURITY_ASSESSMENT_REPORT.md`
-- `docs/implementation/SECURITY_GUARDRAILS_IMPLEMENTATION.md`
+- `archive/legacy-docs/reports/SECURITY_ASSESSMENT_REPORT.md`
+- `archive/legacy-docs/implementation/SECURITY_GUARDRAILS_IMPLEMENTATION.md`
 - `src/voiceflow/utils/validation.py`
 - `src/voiceflow/integrations/inject.py`

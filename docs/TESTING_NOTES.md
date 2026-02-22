@@ -1,66 +1,41 @@
 # Testing Notes
 
-## Scope
+## Active Suite
 
-These notes describe practical validation for the current Windows-first VoiceFlow runtime.
+Use the maintained runtime suite:
 
-## Recommended Local Validation
+```powershell
+pytest -q tests\runtime
+```
 
-### 1. Environment smoke check
+## Quick Validation Loop
 
 ```powershell
 python scripts\dev\quick_smoke_test.py
+pytest -q tests\runtime\test_transcription_lengths.py
 ```
 
-### 2. Fast regression slice
+## Manual Dictation Matrix
 
-```powershell
-pytest -q tests\test_textproc.py tests\test_injector_logic.py tests\test_sanitization_and_rate.py
-```
+Validate in Notepad and VS Code:
 
-### 3. Broader suite
+1. Short clip (3-6s)
+2. Medium clip (10-20s)
+3. Long clip (40-90s, with pauses/coughs)
 
-```powershell
-pytest -q
-```
+Check:
 
-## Manual Runtime Matrix
+- release-to-text latency
+- transcript quality
+- target-app injection reliability
+- tray state returns to idle
 
-Use these dictation scenarios for release validation:
+## Logs
 
-1. Short utterance: 3-5 seconds.
-2. Medium utterance: 8-12 seconds.
-3. Long utterance: 20-40 seconds with pauses.
-
-For each run, verify:
-- no dropped text
-- stable release-to-text latency
-- correct target-window injection
-- no sticky listening state after release
-- overlay/tray behavior remains responsive
-
-## High-Risk Areas
-
-- hotkey press/release state machine
-- live preview/checkpoint handling during hold
-- focus handling around injection
-- medium/long utterance latency tuning
-
-## Helpful Diagnostics
-
-```powershell
-python scripts\list_audio_devices.py
-python scripts\debugging\debug_hang_issue.py
-python scripts\debugging\debug_nonetype_issue.py
-```
-
-Logs:
 - `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
 
-## Notes For Fork Maintainers
+Look for:
 
-- Windows integration tests are more representative than generic unit tests for hotkey/injection behavior.
-- If you change hotkey or injection internals, run manual validation in at least:
-  - Notepad
-  - VS Code
-  - browser text inputs
+- `transcription_engine`
+- `transcription_timing`
+- `asr_runtime_fallback` (should not appear in normal CUDA runs)

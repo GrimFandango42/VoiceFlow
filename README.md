@@ -1,76 +1,91 @@
 # VoiceFlow
 
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 VoiceFlow is a Windows-first, local push-to-talk transcription app.
-Hold a hotkey, speak, release, and text is inserted into your active app.
+Hold a hotkey, speak, release, and text is injected into your active app.
 
-## Download for Windows
+## Download (Windows)
 
-[![Download VoiceFlow .exe](https://img.shields.io/badge/Download-Windows%20Executable-blue?style=for-the-badge)](https://github.com/GrimFandango42/VoiceFlow/releases/download/latest-main/VoiceFlow-win64.exe)
-[![Download Portable .zip](https://img.shields.io/badge/Download-Windows%20Portable-0A66C2?style=for-the-badge)](https://github.com/GrimFandango42/VoiceFlow/releases/download/latest-main/VoiceFlow-portable-win64.zip)
-
-Direct download:
 - Executable: `https://github.com/GrimFandango42/VoiceFlow/releases/download/latest-main/VoiceFlow-win64.exe`
 - Portable zip: `https://github.com/GrimFandango42/VoiceFlow/releases/download/latest-main/VoiceFlow-portable-win64.zip`
-- Stable release channel: `https://github.com/GrimFandango42/VoiceFlow/releases/latest`
-- All releases: `https://github.com/GrimFandango42/VoiceFlow/releases`
+- Latest releases: `https://github.com/GrimFandango42/VoiceFlow/releases`
 
-## What The App Looks Like
+## Quick Start
 
-<p align="center">
-  <img src="assets/control-center-polished-main.png" width="100%" alt="VoiceFlow Control Center main view"/>
-</p>
+1. Launch `VoiceFlow.exe`.
+2. Hold `Ctrl+Shift`.
+3. Speak, then release.
+4. Confirm text appears in Notepad/your editor.
 
-<p align="center">
-  <img src="assets/control-center-polished-troubleshoot.png" width="100%" alt="VoiceFlow Control Center troubleshooting view"/>
-</p>
+If nothing is inserted, open `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`.
+If a popup steals focus during release, VoiceFlow now copies the transcript to clipboard as a fallback.
 
-## Install (Recommended For Most Users)
+## Hardware + Model Defaults
 
-1. Download the latest Windows release artifact from GitHub Releases.
-2. Use `VoiceFlow-Setup-<version>.exe` if available, or unzip the portable package.
-3. Launch `VoiceFlow` from Start Menu or run `VoiceFlow.exe`.
+VoiceFlow is preconfigured to auto-select sensible runtime settings:
 
-## First 2 Minutes
+- `device=auto`: tries CUDA first, falls back to CPU.
+- `model_tier=quick`: adaptive:
+  - CUDA: `distil-large-v3` (`float16`)
+  - CPU: `small.en` (`int8`)
 
-1. Open the Control Center.
-2. Click `Setup & Install` once.
-3. Click `Launch VoiceFlow`.
-4. Hold `Ctrl+Shift`, speak, release to transcribe.
-5. Use tray menu items `Recent History` and `Correction Review` for review and edits.
+Recommended tiers if you want to override:
 
-## Daily Experience
+| Hardware | Recommended Tier | Why |
+|---|---|---|
+| Older CPU-only laptop | `tiny` or `quick` | Lowest latency |
+| Modern CPU-only desktop | `quick` | Good latency/quality balance |
+| NVIDIA GPU (CUDA) | `quick` or `balanced` | Fast and high quality |
+| Accuracy-first workflows | `quality` | Best recognition, slower |
 
-- Fast release-to-text for short and long dictation.
-- Capitalization and paragraph formatting tuned for readability.
-- Better handling for coughs, sniffles, and longer pauses.
-- Local recent-history and correction review workflows.
-- Optional daily learning pass from your saved correction data.
+Config file:
+- `%LOCALAPPDATA%\LocalFlow\config.json`
 
-## Privacy And Local Data
+Injection guardrail defaults:
+- `inject_require_target_focus=true`
+- `inject_refocus_on_miss=true`
+- `inject_refocus_attempts=3`
 
-VoiceFlow is local-first for core transcription.
+## Personalization Features (Kept)
+
+- Recent history panel
+- Correction review and daily learning
+- Custom engineering terms dictionary
+- Code mode + destination-aware formatting
+
+These are still part of the active runtime; cleanup did not remove them.
+
+## Local Data Paths
 
 - Config: `%LOCALAPPDATA%\LocalFlow\config.json`
 - Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
 - Recent history: `%LOCALAPPDATA%\LocalFlow\recent_history_events.jsonl`
-- Correction review data: `%LOCALAPPDATA%\LocalFlow\transcription_corrections.jsonl`
+- Corrections: `%LOCALAPPDATA%\LocalFlow\transcription_corrections.jsonl`
 - Adaptive patterns: `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json`
 
-## Basic Troubleshooting
+## Developer Setup
 
-1. If no transcription appears, reopen Control Center and run `Setup & Install` once.
-2. If hotkey input fails in elevated apps, run VoiceFlow with matching permissions.
-3. If performance is unexpectedly slow, restart VoiceFlow from Control Center.
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup\bootstrap_windows.ps1 -GpuVenv
+```
 
-## Advanced (Developers And AI Companions)
+Run tests:
 
-- Technical playbook: `docs/AI_COMPANION_TECHNICAL.md`
-- Build and packaging: `docs/BUILD_GUIDE.md`
+```powershell
+pytest -q tests\runtime
+```
+
+## Packaging
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -OutputName VoiceFlow -Clean
+```
+
+## Docs
+
+- Docs index: `docs/README.md`
+- User guide: `docs/USER_GUIDE.md`
+- Build guide: `docs/BUILD_GUIDE.md`
 - Architecture: `docs/ARCHITECTURE.md`
-- Full docs index: `docs/README.md`
 
 ## License
 
