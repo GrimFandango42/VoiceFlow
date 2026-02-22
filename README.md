@@ -5,11 +5,15 @@ Hold a hotkey, speak, release, and text is injected into your active app.
 
 ## Download (Latest Stable)
 
-[Download Windows EXE](https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-win64.exe)
+[![Latest Release](https://img.shields.io/github/v/release/GrimFandango42/VoiceFlow?display_name=tag&style=for-the-badge)](https://github.com/GrimFandango42/VoiceFlow/releases/latest)
+[![Windows EXE](https://img.shields.io/badge/Windows-Download%20EXE-0078D4?style=for-the-badge&logo=windows)](https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-win64.exe)
+[![Windows Portable ZIP](https://img.shields.io/badge/Windows-Portable%20ZIP-005A9C?style=for-the-badge&logo=windows)](https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-portable-win64.zip)
 
-[Download Portable ZIP](https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-portable-win64.zip)
-
-[Open Latest Release Page](https://github.com/GrimFandango42/VoiceFlow/releases/latest)
+| Platform | Status | Download |
+|---|---|---|
+| Windows | Supported | [Latest release assets](https://github.com/GrimFandango42/VoiceFlow/releases/latest) |
+| macOS | Community fork target | [Porting guide](docs/guides/FORKING_AND_PLATFORM_GUIDE.md) |
+| Linux | Community fork target | [Porting guide](docs/guides/FORKING_AND_PLATFORM_GUIDE.md) |
 
 ## 60-Second Start
 
@@ -31,7 +35,7 @@ VoiceFlow is tray-first by design.
 
 ## Stable Baseline
 
-Known good rollback: [`v3.1.5`](https://github.com/GrimFandango42/VoiceFlow/releases/tag/v3.1.5) (published February 22, 2026).
+Known good rollback: [Latest stable release](https://github.com/GrimFandango42/VoiceFlow/releases/latest) (pin specific tags for strict reproducibility).
 
 ## Documentation
 
