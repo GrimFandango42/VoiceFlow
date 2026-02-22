@@ -36,6 +36,12 @@ Stability and behavior fields:
 - `live_caption_enabled`
 - `visual_indicators_enabled`
 
+## Tray vs Advanced Controls
+
+- Primary user configuration surface: tray menu + overlay/dock panels.
+- No separate command-center window is active in the current runtime.
+- Advanced tuning remains available through config/env/script controls below.
+
 ## Hardware Selection Strategy
 
 - `device=auto` selects CUDA when available, otherwise CPU.
@@ -47,6 +53,36 @@ Compatibility switches:
 
 - `VOICEFLOW_FORCE_CPU=1` to force CPU execution.
 - `VOICEFLOW_USE_GPU_VENV=0` to avoid `.venv-gpu` preference in build scripts.
+
+## Command-Line and Environment Controls
+
+Main runtime entrypoint (`voiceflow.ui.cli_enhanced`) currently does not expose user-facing CLI flags.
+Power-user controls are environment-based:
+
+- `VOICEFLOW_FORCE_CPU=1`
+  - Force CPU runtime selection.
+- `VOICEFLOW_USE_GPU_VENV=0`
+  - Launcher/build preference for `venv` over `.venv-gpu`.
+- `VOICEFLOW_TERMS_PATH` / `VOICEFLOW_TECHNICAL_TERMS_PATH`
+  - Override technical terms file path.
+- `VOICEFLOW_KEEP_CODE_MODE_DEFAULT=1`
+  - Preserve default code mode behavior.
+- `VOICEFLOW_FEEDBACK_AUDIO=1`
+  - Enable feedback audio capture for debugging.
+- `VOICEFLOW_FEEDBACK_AUDIO_DIR=<path>`
+  - Override feedback audio output path.
+- `VOICEFLOW_FEEDBACK_AUDIO_MAX_SECONDS=<float>`
+  - Cap per-capture debug audio duration.
+- `VOICEFLOW_FEEDBACK_AUDIO_RETENTION_MINUTES=<int>`
+  - Retention window for debug audio files.
+
+Daily learning script flags (`voiceflow.ai.daily_learning`):
+
+- `--days-back`
+- `--dry-run`
+- `--max-history-items`
+- `--max-correction-items`
+- `--print-json`
 
 ## Observability
 

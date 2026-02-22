@@ -2,50 +2,56 @@
 
 ## Core Workflow
 
-1. Focus your target app.
+1. Focus the target app.
 2. Hold push-to-talk (`Ctrl+Shift` by default).
 3. Speak.
 4. Release to transcribe and insert text.
 
-## Tray Features
+## UI Surfaces
 
-The tray menu controls:
+VoiceFlow is intentionally tray-first:
 
-- Code mode
-- Injection mode (`Paste` vs `Type`)
-- Auto-enter after paste
-- Visual indicators and dock visibility
-- Hotkey presets
-- Recent history
-- Correction review
+- Tray menu: primary settings and actions.
+- Overlay + dock: status and recent transcript visibility.
+- Recent History + Correction Review: fast correction loop.
 
-## Model and Hardware Guidance
+There is currently no separate "Command Center" window in the active runtime.
 
-Default config is designed to work out of the box:
+## Tray Settings Map
 
-- `device=auto`
-- `model_tier=quick`
+Use this as a visual click-path map:
 
-Runtime behavior:
+| Goal | Click Path | Persists In Config |
+|---|---|---|
+| Toggle code mode | Tray -> `Code Mode` | Session toggle (runtime state) |
+| Choose paste vs type injection | Tray -> `Injection` | `paste_injection` |
+| Auto-press Enter after paste | Tray -> `Auto-Enter` | `press_enter_after_paste` |
+| Show/hide visual indicators | Tray -> `Visual Indicators` | `visual_indicators_enabled` |
+| Show/hide dock | Tray -> `Dock` | `visual_dock_enabled` |
+| Change push-to-talk preset | Tray -> `PTT Hotkey` -> pick preset | `hotkey_*` fields |
+| Open transcript history | Tray -> `Recent History` | n/a |
+| Open correction workflow | Tray -> `Correction Review` | n/a |
 
-- CUDA available: GPU path with `float16`
-- No CUDA: CPU path with `int8`
+Also available via hotkeys:
 
-Optional tier overrides:
+- `Ctrl+Alt+C`: toggle code mode
+- `Ctrl+Alt+P`: toggle paste/type injection
+- `Ctrl+Alt+Enter`: toggle auto-enter
 
-- `tiny`: lowest latency
-- `quick`: default adaptive tier
-- `balanced`: better quality with good speed (best on GPU)
-- `quality`: best recognition, slower
+## Accent and Personalization
 
-## Personalization Features
-
-VoiceFlow keeps personalized behavior enabled:
+VoiceFlow keeps personalization enabled:
 
 - Recent transcript history
 - Correction review workflow
-- Daily learning job from previous corrections
+- Daily learning from correction data
 - Local engineering terms dictionary support
+
+Fastest way to improve accent-specific output:
+
+1. Open `Correction Review` from tray.
+2. Correct recurring misses.
+3. Let daily learning process those corrections.
 
 Daily learning commands:
 
@@ -60,7 +66,26 @@ Schedule daily learning:
 powershell -ExecutionPolicy Bypass -File .\scripts\setup\register_daily_learning_task.ps1 -StartTime "08:00" -Force
 ```
 
-## Config and Logs
+## Model and Hardware Defaults
+
+Out-of-box defaults:
+
+- `device=auto`
+- `model_tier=quick`
+
+Runtime behavior:
+
+- CUDA available: GPU path with `float16`
+- No CUDA: CPU path with `int8`
+
+Optional tier overrides:
+
+- `tiny`: lowest latency
+- `quick`: default adaptive tier
+- `balanced`: higher quality with good speed (best on GPU)
+- `quality`: best recognition, slower
+
+## Advanced Config and Logs
 
 - Config: `%LOCALAPPDATA%\LocalFlow\config.json`
 - Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
@@ -72,22 +97,4 @@ Injection reliability defaults:
 - `inject_refocus_attempts=3`
 - If final injection misses due focus drift, transcript is copied to clipboard for manual paste.
 
-## Quick Troubleshooting
-
-List audio devices:
-
-```powershell
-python scripts\list_audio_devices.py
-```
-
-If performance is unexpectedly slow:
-
-1. Restart VoiceFlow.
-2. Check `localflow.log` for `device=` and `compute=` values.
-3. Confirm no older executable build is still running.
-
-If transcription appears in terminal but not in your app:
-
-1. Bring the target app back to foreground and paste (`Ctrl+V`).
-2. Check for focus-stealing popups/notifications during key release.
-3. Review `localflow.log` for `inject_focus_drift` events.
+For troubleshooting and quick issue triage, use [`docs/guides/FAQ.md`](guides/FAQ.md).
