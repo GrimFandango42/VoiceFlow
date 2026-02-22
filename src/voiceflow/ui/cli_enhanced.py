@@ -389,7 +389,9 @@ class EnhancedTranscriptionManager:
             thread.start()
 
             # Wait with timeout to keep app responsive even if backend hangs.
-            timeout_seconds = max(5.0, min(self.worker_timeout_seconds, max(15.0, duration * 3.0)))
+            # Keep a generous floor for first-run model warmup/download paths.
+            expected_timeout = max(15.0, duration * 3.0)
+            timeout_seconds = max(float(self.worker_timeout_seconds), min(180.0, expected_timeout))
             thread.join(timeout=timeout_seconds)
 
             if thread.is_alive():
@@ -600,6 +602,12 @@ class EnhancedApp:
         if progress.state == PreloadState.READY:
             self._fast_model_ready = True
             print(f"[MODEL] Fast path ready ({getattr(self.cfg, 'latency_boost_model_tier', 'tiny')})")
+        elif progress.state == PreloadState.FAILED:
+            self._fast_model_ready = False
+            self._fast_preloader = None
+            self.asr_fast = None
+            logger.warning("Fast ASR preload failed; falling back to primary model path: %s", progress.message)
+            print("[MODEL] Fast path unavailable; using primary model only")
 
     def _init_fast_asr_path(self) -> None:
         """Optional low-latency ASR path for short utterances."""
@@ -627,7 +635,9 @@ class EnhancedApp:
 
     def _pick_asr_engine(self, audio_duration: float):
         """Pick fast engine for short audio to reduce perceived latency."""
-        if not self.asr_fast:
+        # Only route to fast path after successful preload.
+        # Fresh installs may still be downloading tiny model assets.
+        if not self.asr_fast or not self._fast_model_ready:
             return self.asr, "primary"
         threshold = float(getattr(self.cfg, "latency_boost_max_audio_seconds", 12.0))
         fast_tier = str(getattr(self.cfg, "latency_boost_model_tier", "tiny")).strip().lower()
