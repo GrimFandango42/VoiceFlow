@@ -146,10 +146,32 @@ def _register_torch_cuda_path(required_dlls: list[str]) -> None:
     _add_dll_search_path(torch_lib)
 
 
+def _missing_cuda_dlls(required_dlls: list[str]) -> list[str]:
+    return [dll for dll in required_dlls if not _find_dll_in_path(dll)]
+
+
 def _cuda_runtime_ready() -> bool:
     """Best-effort CUDA runtime check for faster-whisper/ctranslate2 on Windows."""
     required_dlls = ["cudnn_ops64_9.dll", "cublas64_12.dll"]
     _register_external_cuda_runtime_path(required_dlls)
+
+    # Source/venv fallback path: keep torch probing for environments that depend on
+    # torch-provided CUDA runtime DLL discovery.
+    try:
+        import torch
+        if torch.cuda.is_available():
+            _register_torch_cuda_path(required_dlls)
+    except Exception:
+        # torch is optional for packaged runtime checks.
+        pass
+
+    missing = _missing_cuda_dlls(required_dlls)
+    if missing:
+        logging.getLogger("localflow").info(
+            "cuda_runtime_unavailable missing_dlls=%s",
+            ",".join(missing),
+        )
+        return False
 
     # Prefer ctranslate2 capability checks because packaged builds may intentionally
     # exclude torch to avoid DLL init crashes.
@@ -159,35 +181,29 @@ def _cuda_runtime_ready() -> bool:
         get_cuda_device_count = getattr(ctranslate2, "get_cuda_device_count", None)
         if callable(get_cuda_device_count):
             try:
-                if int(get_cuda_device_count()) > 0:
-                    return True
+                if int(get_cuda_device_count()) <= 0:
+                    return False
             except Exception:
-                pass
+                return False
 
         get_supported_compute_types = getattr(ctranslate2, "get_supported_compute_types", None)
         if callable(get_supported_compute_types):
             try:
                 supported = get_supported_compute_types("cuda")
-                if supported:
-                    return True
+                if not supported:
+                    return False
+                return True
             except Exception:
-                pass
+                return False
     except Exception:
-        # Fall back to torch-based probing when ctranslate2 probing is unavailable.
+        # Fall back to torch probing when ctranslate2 probing is unavailable.
         pass
 
-    # Source/venv fallback path: keep torch probing for environments that depend on
-    # torch-provided CUDA runtime DLL discovery.
     try:
         import torch
+        return bool(torch.cuda.is_available())
     except Exception:
         return False
-
-    if not torch.cuda.is_available():
-        return False
-
-    _register_torch_cuda_path(required_dlls)
-    return all(_find_dll_in_path(name) for name in required_dlls)
 
 
 class ModelTier(Enum):

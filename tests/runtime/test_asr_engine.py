@@ -13,6 +13,8 @@ import numpy as np
 import pytest
 import logging
 import time
+import types
+import sys
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -87,6 +89,26 @@ class TestASREngineBasics:
         engine = ASREngine(device="cpu", compute_type="int8")
         # Default is QUICK tier routed for CPU latency.
         assert engine.model_config.model_id == "small.en"
+
+    def test_cuda_runtime_probe_requires_runtime_dlls(self, monkeypatch):
+        """CUDA must be considered unavailable when required runtime DLLs are missing."""
+        from voiceflow.core import asr_engine as asr_mod
+
+        monkeypatch.setattr(asr_mod, "_register_external_cuda_runtime_path", lambda required_dlls: False)
+        monkeypatch.setattr(asr_mod, "_register_torch_cuda_path", lambda required_dlls: None)
+        monkeypatch.setattr(asr_mod, "_find_dll_in_path", lambda name: False)
+
+        fake_ct2 = types.SimpleNamespace(
+            get_cuda_device_count=lambda: 1,
+            get_supported_compute_types=lambda device: ["float16"],
+        )
+        fake_torch = types.SimpleNamespace(
+            cuda=types.SimpleNamespace(is_available=lambda: True)
+        )
+        monkeypatch.setitem(sys.modules, "ctranslate2", fake_ct2)
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        assert asr_mod._cuda_runtime_ready() is False
 
 
 class TestASREngineTranscription:
