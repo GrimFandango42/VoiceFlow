@@ -4,129 +4,139 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](https://pytest.org/)
 
-VoiceFlow is a local, push-to-talk transcription app for Windows. It records while a hotkey is held, transcribes on release, and injects text into your active application (editor, terminal, browser, chat client).
+VoiceFlow is a Windows-first, local push-to-talk transcription app for technical work.
+Hold a hotkey to record, release to transcribe, and inject text directly into your active app.
 
-Primary goals:
-- fast release-to-text turnaround
-- stable behavior for short and long dictation
-- local-first privacy (no required cloud service for ASR)
+## Why VoiceFlow
 
-## Current State
+- Fast release-to-text turnaround for short and long dictation.
+- Local-first runtime with no required cloud ASR service.
+- Tray + overlay UX with recent-history recovery and correction review.
+- Adaptive learning from your own correction patterns over time.
 
-- Platform: Windows-first (actively tested and tuned on Windows).
-- Engine: `faster-whisper` with CPU and optional CUDA acceleration.
-- UI: system tray + overlay indicators + optional Control Center.
-- Focus area: reliable dictation workflow for coding and technical writing.
+## UI Preview
 
-For cross-platform forks (Linux/macOS), read `docs/guides/FORKING_AND_PLATFORM_GUIDE.md`.
+<p align="center">
+  <img src="assets/control-center-polished-main.png" width="48%" alt="VoiceFlow Control Center polished main view"/>
+  <img src="assets/control-center-polished-troubleshoot.png" width="48%" alt="VoiceFlow Control Center troubleshooting view"/>
+</p>
 
-## Quick Start (Windows)
+## Core Features
 
-1. Clone and create a virtual environment.
+- Push-to-talk dictation (`Ctrl+Shift` default).
+- Context-aware transcript formatting for editor/chat/terminal destinations.
+- Correction review workflow (compare original vs corrected text).
+- Recent history panel with copy/expand and recovery behavior.
+- Optional adaptive learning with local retention controls.
+- Daily offline learning batch job from previous-day conversation/correction data.
+
+## Install
+
+### Option A: Setup EXE (recommended for non-developers)
+
+1. Download `VoiceFlow-Setup-<version>.exe` from Releases.
+2. Run the installer.
+3. Launch `VoiceFlow` from Start Menu.
+
+Guides:
+- `docs/guides/WINDOWS_SETUP_EXECUTABLE.md`
+- `docs/guides/WINDOWS_EXECUTABLE_EVALUATION.md`
+
+### Option B: One-click source install
+
+```powershell
+.\Install_VoiceFlow.bat
+```
+
+This runs `scripts/setup/bootstrap_windows.ps1`, installs dependencies, runs smoke checks, and launches VoiceFlow.
+
+### Option C: Manual source install
 
 ```powershell
 git clone https://github.com/yourusername/voiceflow.git
 cd voiceflow
 python -m venv venv
 .\venv\Scripts\activate
-```
-
-2. Install dependencies.
-
-```powershell
 pip install --upgrade pip
 pip install -r scripts\setup\requirements_windows.txt
-```
-
-Alternative one-step bootstrap:
-
-```powershell
-.\Bootstrap_Windows.bat
-```
-
-3. Launch VoiceFlow.
-
-```powershell
 .\VoiceFlow_Quick.bat
 ```
 
-## Windows Installer (Download + Run)
+## Daily Learning (Self-Improvement Batch Job)
 
-For non-developer onboarding, use the packaged installer from Releases:
+VoiceFlow includes an offline daily learning job that reviews prior-day transcripts and saved correction edits.
 
-1. Download `VoiceFlow-Setup-<version>.exe`.
-2. Run installer.
-3. Launch `VoiceFlow` from Start Menu.
-
-Installer build/publishing guide for maintainers:
-- `docs/guides/WINDOWS_SETUP_EXECUTABLE.md`
-
-## Launch Options
-
-| Mode | Command | When to use |
-|---|---|---|
-| Standard | `VoiceFlow.bat` | Normal use with visible console output |
-| Quick | `VoiceFlow_Quick.bat` | Daily use, no extra pause on exit |
-| Silent tray | `VoiceFlow_Silent.bat` | Minimized/background workflow |
-| Control Center | `tools\launchers\LAUNCH_CONTROL_CENTER.bat` | Setup, diagnostics, and guided launch |
-
-Manual launch (no batch files):
+Manual run:
 
 ```powershell
-$env:PYTHONPATH = "$pwd\src"
-python -m voiceflow.ui.cli_enhanced
+.\VoiceFlow_DailyLearning.bat
 ```
 
-## Basic Usage
+Dry run:
 
-1. Start VoiceFlow.
-2. Hold the push-to-talk hotkey (default: `Ctrl+Shift`).
-3. Speak while holding.
-4. Release to transcribe and inject text to the active target.
-
-Tray menu includes toggles for:
-- code mode
-- paste vs type injection
-- auto-enter
-- visual indicators/dock
-- push-to-talk preset selection
-
-## Architecture At A Glance
-
-```
-src/voiceflow/
-  core/          audio capture, ASR, streaming preview, text processing
-  integrations/  hotkeys and text injection
-  ui/            tray controller, overlay indicators, CLI runtime
-  utils/         settings, logging, monitoring, validation
-  ai/            optional correction/command/adaptive learning layer
+```powershell
+.\VoiceFlow_DailyLearning.bat --dry-run
 ```
 
-Runtime entrypoint for day-to-day use:
-- `src/voiceflow/ui/cli_enhanced.py`
+Register daily schedule (example: 08:00 every morning):
 
-See:
-- `docs/ARCHITECTURE.md`
-- `docs/TECHNICAL_OVERVIEW.md`
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup\register_daily_learning_task.ps1 -StartTime "08:00" -Force
+```
 
-## Configuration, Logs, and Data Paths (Windows)
+Remove schedule:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup\unregister_daily_learning_task.ps1
+```
+
+## Launch Modes
+
+| Mode | Command | Use Case |
+|---|---|---|
+| Standard | `VoiceFlow.bat` | Console-visible runtime |
+| Quick | `VoiceFlow_Quick.bat` | Daily use, no pause on exit |
+| Silent tray | `VoiceFlow_Silent.bat` | Background startup |
+| Daily learning | `VoiceFlow_DailyLearning.bat` | Previous-day learning pass |
+| Control Center | `tools\launchers\LAUNCH_CONTROL_CENTER.bat` | Guided diagnostics and launch |
+
+## Security and Privacy
+
+- Processing is local-first; no cloud API is required for core ASR.
+- Clipboard injection supports restore-after-paste behavior.
+- Adaptive learning data is stored locally under `%LOCALAPPDATA%\LocalFlow`.
+- Daily learning reports are local JSON artifacts for review/auditing.
+
+Security notes:
+- `docs/guides/SECURITY_AND_PRIVACY.md`
+- `docs/reports/SECURITY_ASSESSMENT_REPORT.md`
+
+## Runtime Paths (Windows)
 
 - Config: `%LOCALAPPDATA%\LocalFlow\config.json`
 - Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
-- Optional engineering terms dictionary: `%LOCALAPPDATA%\LocalFlow\engineering_terms.json`
+- Recent history: `%LOCALAPPDATA%\LocalFlow\recent_history_events.jsonl`
+- Correction review data: `%LOCALAPPDATA%\LocalFlow\transcription_corrections.jsonl`
+- Adaptive patterns: `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json`
+- Adaptive audit: `%LOCALAPPDATA%\LocalFlow\adaptive_audit.jsonl`
+- Daily learning reports: `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\`
 
-Environment overrides:
-- `VOICEFLOW_FORCE_CPU=1` to force CPU mode
-- `VOICEFLOW_USE_GPU_VENV=0` to prefer `venv` over `.venv-gpu` in launchers
-- `VOICEFLOW_TERMS_PATH=C:\path\engineering_terms.json` to use a custom dictionary file
-- `VOICEFLOW_TECHNICAL_TERMS_PATH=...` remains supported for backward compatibility
+## Architecture Snapshot
 
-Engineering term dictionary (optional):
-- VoiceFlow includes built-in technical normalization for common terms (`OAuth`, `CLI`, `API`, `JSON`, `YAML`, `SQL`, `AWS`, `GCP`, `MQTT`, etc.).
-- It also detects common engineering conversation context (tickets, sprint/incident/release language, PR/MR/workflow terms) for safer contextual corrections.
-- You can add your own high-priority terms by creating `engineering_terms.json` using `docs/examples/engineering_terms.json` as a template.
+```
+src/voiceflow/
+  core/          audio capture, ASR, streaming, text formatting
+  integrations/  hotkeys and text injection
+  ui/            tray, overlay, CLI runtime
+  ai/            correction, command mode, adaptive + daily learning
+  utils/         settings, logging, guardrails, monitors
+```
 
-## Testing
+Detailed docs:
+- `docs/ARCHITECTURE.md`
+- `docs/TECHNICAL_OVERVIEW.md`
+
+## Validation
 
 Quick checks:
 
@@ -135,17 +145,13 @@ python scripts\dev\quick_smoke_test.py
 pytest -q tests\test_textproc.py tests\test_injector_logic.py tests\test_sanitization_and_rate.py
 ```
 
-Broader run:
+Focused daily-learning checks:
 
 ```powershell
-pytest -q
+pytest -q tests\unit\test_daily_learning.py tests\test_adaptive_memory.py --no-cov
 ```
 
-More testing details: `docs/TESTING_NOTES.md`.
-
 ## Troubleshooting
-
-If audio or transcription is not behaving as expected:
 
 ```powershell
 python scripts\list_audio_devices.py
@@ -153,23 +159,17 @@ python scripts\debugging\debug_hang_issue.py
 python scripts\debugging\debug_nonetype_issue.py
 ```
 
-If tray/overlay state looks stale, restart VoiceFlow and verify only one runtime is active:
-
-```powershell
-.\VoiceFlow_Quick.bat
-```
+If text does not inject into elevated apps, run VoiceFlow with matching permissions.
 
 ## Documentation Map
 
-- `docs/README.md` - full docs index
-- `docs/HOW_TO_LAUNCH.md` - launch modes and diagnostics
-- `docs/USER_GUIDE.md` - usage and settings
-- `docs/ARCHITECTURE.md` - architecture and data flow
-- `docs/TECHNICAL_OVERVIEW.md` - module-level implementation notes
-- `docs/guides/FORKING_AND_PLATFORM_GUIDE.md` - for contributors/fork maintainers
-- `docs/guides/WINDOWS_EXECUTABLE_EVALUATION.md` - executable packaging tradeoffs and plan
-- `docs/guides/WINDOWS_SETUP_EXECUTABLE.md` - build and publish Windows installer artifacts
+- `docs/README.md` - docs index
+- `docs/HOW_TO_LAUNCH.md` - launch and startup modes
+- `docs/USER_GUIDE.md` - workflow and settings
+- `docs/BUILD_GUIDE.md` - build + packaging
+- `docs/CONTRIBUTING.md` - contributor workflow
+- `docs/guides/UI_POLISH_REVIEW.md` - current UI polish baseline + next-step backlog
 
 ## License
 
-MIT License. See `LICENSE`.
+MIT. See `LICENSE`.

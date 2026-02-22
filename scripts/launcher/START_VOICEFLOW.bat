@@ -14,6 +14,6 @@ echo [INFO] Python path: %PYTHONPATH%
 echo [INFO] Starting VoiceFlow Enhanced Tray Application...
 echo.
 
-python -c "import sys; sys.path.insert(0, 'src'); exec(open('src/voiceflow/ui/cli_enhanced.py').read())"
+python -m voiceflow.ui.cli_enhanced
 
 pause

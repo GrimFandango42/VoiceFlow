@@ -11,6 +11,16 @@ except Exception:
     Image = None  # type: ignore
     ImageDraw = None  # type: ignore
 
+try:
+    from voiceflow.ui.visual_indicators import request_open_recent_history, request_open_correction_review
+    VISUAL_INDICATORS_AVAILABLE = True
+except Exception:
+    VISUAL_INDICATORS_AVAILABLE = False
+    def request_open_recent_history():
+        return None
+    def request_open_correction_review():
+        return None
+
 
 def _make_icon(size: int = 16):
     if Image is None:
@@ -131,6 +141,26 @@ class TrayController:
         def set_ctrl_alt_default(icon, item):  # noqa: ARG001
             set_ptt(True, False, True, "")
 
+        def show_recent_history(icon, item):  # noqa: ARG001
+            try:
+                request_open_recent_history()
+            except Exception as e:
+                try:
+                    self._notify("LocalFlow", "Recent History failed to open.")
+                except Exception:
+                    pass
+                print(f"[Tray] Recent History open failed: {e}")
+
+        def show_correction_review(icon, item):  # noqa: ARG001
+            try:
+                request_open_correction_review()
+            except Exception as e:
+                try:
+                    self._notify("LocalFlow", "Correction Review failed to open.")
+                except Exception:
+                    pass
+                print(f"[Tray] Correction Review open failed: {e}")
+
         return pystray.Menu(
             pystray.MenuItem(
                 lambda item: f"Code Mode: {'ON' if self.app.code_mode else 'OFF'}",
@@ -149,6 +179,8 @@ class TrayController:
             ),
             pystray.MenuItem("PTT Hotkey", ptt_menu),
             pystray.MenuItem("Set Ctrl+Alt as default PTT", set_ctrl_alt_default),
+            pystray.MenuItem("Recent History", show_recent_history, enabled=lambda item: VISUAL_INDICATORS_AVAILABLE),
+            pystray.MenuItem("Correction Review", show_correction_review, enabled=lambda item: VISUAL_INDICATORS_AVAILABLE),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", quit_app),
         )

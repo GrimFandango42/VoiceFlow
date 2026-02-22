@@ -12,12 +12,16 @@ import threading
 import time
 import math
 import random
+import json
+import os
 from datetime import datetime
 from collections import deque
 from typing import Optional, Callable, Dict, Any
 from enum import Enum
+from pathlib import Path
 from .visual_config import get_visual_config, VisualConfigManager
 from ..utils.guardrails import safe_visual_update, process_visual_update_queue, with_error_recovery
+from ..utils.settings import config_dir
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,7 @@ class BottomScreenIndicator:
         self.history_items_frame: Optional[tk.Frame] = None
         self.history_feedback_var: Optional[tk.StringVar] = None
         self.history_feedback_job = None
+        self.history_correction_btn: Optional[tk.Button] = None
         self.current_status = TranscriptionStatus.IDLE
         self.auto_hide_timer: Optional[threading.Timer] = None
         self.lock = threading.Lock()
@@ -110,6 +115,19 @@ class BottomScreenIndicator:
         self.history_expanded = False
         self.history_geometry_compact = None
         self.history_geometry_expanded = None
+        self.history_correction_mode = False
+        self.history_correction_target_id: Optional[int] = None
+        self.history_correction_drafts: Dict[int, str] = {}
+        self.history_review_pinned = False
+        self.history_last_saved_corrections: Dict[int, tuple[str, str]] = {}
+        self.history_correction_feedback_path: Path = config_dir() / "transcription_corrections.jsonl"
+        self.history_store_path: Path = config_dir() / "recent_history_events.jsonl"
+        self.history_seen_fingerprints = set()
+        self.history_seen_fingerprint_order = deque(maxlen=1200)
+        self.history_session_started_at = time.time()
+        self.ui_actions_path: Path = config_dir() / "ui_actions.jsonl"
+        self.ui_action_last_processed_ts = time.time()
+        self.ui_action_seen = deque(maxlen=240)
         self.dock_enabled = False
         self.noise_floor = 0.0
         self.wave_energy_history = deque([0.0] * 84, maxlen=84)
@@ -194,6 +212,7 @@ class BottomScreenIndicator:
 
             # Process commands from queue
             self.root.after(50, self._process_command_queue)
+            self.root.after(300, self._poll_ui_action_requests)
 
             # Run mainloop
             self.root.mainloop()
@@ -223,6 +242,59 @@ class BottomScreenIndicator:
             # Schedule next check
             if self.gui_running and self.root:
                 self.root.after(50, self._process_command_queue)
+
+    def _poll_ui_action_requests(self):
+        """Process tray actions forwarded via shared local queue across runtime processes."""
+        if not self.gui_running or not self.root:
+            return
+        try:
+            if not self.ui_actions_path.exists():
+                return
+            try:
+                lines = self.ui_actions_path.read_text(encoding="utf-8").splitlines()[-120:]
+            except Exception:
+                return
+
+            latest_ts = float(self.ui_action_last_processed_ts)
+            for raw in lines:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                action = str(payload.get("action", "")).strip().lower()
+                if not action:
+                    continue
+                try:
+                    event_ts = float(payload.get("ts", 0.0))
+                except Exception:
+                    event_ts = 0.0
+                if event_ts <= self.ui_action_last_processed_ts:
+                    continue
+                src_pid = int(payload.get("pid", 0) or 0)
+                event_key = f"{event_ts:.6f}:{src_pid}:{action}"
+                if event_key in self.ui_action_seen:
+                    continue
+                self.ui_action_seen.append(event_key)
+                latest_ts = max(latest_ts, event_ts)
+
+                # Skip local echo; local caller already invoked the same action directly.
+                if src_pid == os.getpid():
+                    continue
+                if action == "open_recent_history":
+                    self._open_recent_history_ui()
+                elif action == "open_correction_review":
+                    self._open_correction_review_ui()
+            self.ui_action_last_processed_ts = latest_ts
+        except Exception:
+            pass
+        finally:
+            if self.gui_running and self.root:
+                self.root.after(300, self._poll_ui_action_requests)
 
     def _setup_window(self):
         """Initialize the bottom overlay window"""
@@ -916,6 +988,21 @@ class BottomScreenIndicator:
         )
         self.history_toggle_btn.pack(side=tk.LEFT)
 
+        self.history_correction_btn = tk.Button(
+            actions,
+            text="Corrections: Off",
+            command=self._toggle_history_correction_mode,
+            bg="#111827",
+            fg="#D1D5DB",
+            activebackground="#1F2937",
+            activeforeground="#FFFFFF",
+            relief=tk.FLAT,
+            padx=10,
+            pady=2,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.history_correction_btn.pack(side=tk.LEFT, padx=(6, 0))
+
         close_btn = tk.Button(
             actions,
             text="Close",
@@ -991,7 +1078,7 @@ class BottomScreenIndicator:
                 self.dock_window.lift()
             else:
                 self.dock_window.withdraw()
-        if not self.dock_enabled:
+        if not self.dock_enabled and not self.history_review_pinned:
             self.history_visible = False
             if self.history_window:
                 self.history_window.withdraw()
@@ -1002,13 +1089,78 @@ class BottomScreenIndicator:
     def get_dock_enabled(self) -> bool:
         return bool(self.dock_enabled)
 
-    def toggle_recent_history(self):
-        if not self.gui_ready or not self.command_queue:
-            return
+    @staticmethod
+    def _window_exists(window: Optional[tk.Toplevel]) -> bool:
+        if not window:
+            return False
         try:
-            self.command_queue.put((self._toggle_history_panel, (), {}))
+            return bool(window.winfo_exists())
         except Exception:
-            pass
+            return False
+
+    def _ensure_history_panel_ui(self) -> bool:
+        if self._window_exists(self.history_window):
+            return True
+        if not self.root:
+            return False
+        try:
+            screen_width = int(self.root.winfo_screenwidth())
+            screen_height = int(self.root.winfo_screenheight())
+            if not self._window_exists(self.dock_window):
+                self._setup_dock_window(screen_width, screen_height)
+            self._setup_history_panel(screen_width, screen_height)
+            return self._window_exists(self.history_window)
+        except Exception as e:
+            logger.debug(f"Failed to rebuild history panel UI: {e}")
+            return False
+
+    def _queue_ui_action(self, command: Callable, args: tuple = (), kwargs: Optional[Dict[str, Any]] = None) -> None:
+        payload_kwargs = kwargs or {}
+        if self.command_queue is None:
+            return
+        if self.gui_ready:
+            try:
+                self.command_queue.put((command, args, payload_kwargs))
+            except Exception:
+                pass
+            return
+
+        # First tray click can arrive before GUI thread is fully ready; retry briefly.
+        def _deferred_enqueue():
+            deadline = time.time() + 6.0
+            while time.time() < deadline:
+                if self.gui_ready and self.command_queue is not None:
+                    try:
+                        self.command_queue.put((command, args, payload_kwargs))
+                    except Exception:
+                        pass
+                    return
+                time.sleep(0.1)
+
+        threading.Thread(target=_deferred_enqueue, daemon=True).start()
+
+    def toggle_recent_history(self):
+        self._queue_ui_action(self._toggle_history_panel, (), {})
+
+    def open_recent_history(self):
+        """Open history panel without toggle side-effects."""
+        self._queue_ui_action(self._open_recent_history_ui, (), {})
+
+    def _open_recent_history_ui(self):
+        if not self._ensure_history_panel_ui():
+            return
+        if not self.dock_enabled:
+            self._set_dock_enabled_ui(True)
+        self.history_visible = True
+        self._flush_pending_history_events_ui()
+        if self.history_geometry_compact:
+            self.history_window.geometry(self.history_geometry_compact)
+        self.history_expanded = False
+        if hasattr(self, "history_toggle_btn") and self.history_toggle_btn:
+            self.history_toggle_btn.configure(text="Expand")
+        self._render_history_panel()
+        self.history_window.deiconify()
+        self.history_window.lift()
 
     def _start_animation(self, status: TranscriptionStatus):
         if self.animation_job and self.window:
@@ -1091,7 +1243,7 @@ class BottomScreenIndicator:
         self.animation_job = self.window.after(interval, lambda: self._animate_status_icon(status))
 
     def _toggle_history_panel(self):
-        if not self.history_window or not self.dock_enabled:
+        if not self._ensure_history_panel_ui():
             return
         self.history_visible = not self.history_visible
         if self.history_visible:
@@ -1105,10 +1257,12 @@ class BottomScreenIndicator:
             self.history_window.deiconify()
             self.history_window.lift()
         else:
+            # Treat manual close as opt-out from persistent correction review.
+            self.history_review_pinned = False
             self.history_window.withdraw()
 
     def _toggle_history_expanded(self):
-        if not self.history_window:
+        if not self._ensure_history_panel_ui():
             return
         self.history_expanded = not self.history_expanded
         if self.history_expanded and self.history_geometry_expanded:
@@ -1118,6 +1272,315 @@ class BottomScreenIndicator:
         if hasattr(self, "history_toggle_btn") and self.history_toggle_btn:
             self.history_toggle_btn.configure(text=("Compact" if self.history_expanded else "Expand"))
         self._render_history_panel()
+
+    def _toggle_history_correction_mode(self):
+        self.history_correction_mode = not self.history_correction_mode
+        if not self.history_correction_mode:
+            self.history_correction_target_id = None
+            self.history_review_pinned = False
+        if self.history_correction_btn:
+            self.history_correction_btn.configure(
+                text=("Corrections: On" if self.history_correction_mode else "Corrections: Off")
+            )
+        self._render_history_panel()
+
+    def _select_history_correction_item(self, item_id: int):
+        self.history_correction_target_id = int(item_id)
+        self._render_history_panel()
+
+    def _capture_history_correction_draft(self, item_id: int, editor: tk.Text):
+        try:
+            self.history_correction_drafts[int(item_id)] = editor.get("1.0", "end-1c")
+        except Exception:
+            pass
+
+    def _copy_history_text_widget(self, editor: tk.Text):
+        if not self.root:
+            return
+        try:
+            text = editor.get("1.0", "end-1c").strip()
+            if not text:
+                self._show_history_feedback("Nothing to copy.")
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update_idletasks()
+            self._show_history_feedback("Copied corrected text.")
+        except Exception:
+            self._show_history_feedback("Copy failed.")
+
+    def _append_correction_feedback(self, payload: Dict[str, Any]) -> bool:
+        try:
+            self.history_correction_feedback_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.history_correction_feedback_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+            return True
+        except Exception as e:
+            logger.debug(f"Failed to append correction feedback: {e}")
+            return False
+
+    @staticmethod
+    def _history_item_fingerprint(item: Dict[str, Any]) -> str:
+        return json.dumps(
+            {
+                "audio_duration": round(float(item.get("audio_duration", 0.0)), 3),
+                "processing_time": round(float(item.get("processing_time", 0.0)), 3),
+                "full_text": str(item.get("full_text", "")),
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+
+    def _remember_history_fingerprint(self, fingerprint: str) -> None:
+        if not fingerprint:
+            return
+        if fingerprint in self.history_seen_fingerprints:
+            return
+        if len(self.history_seen_fingerprint_order) >= self.history_seen_fingerprint_order.maxlen:
+            try:
+                evicted = self.history_seen_fingerprint_order.popleft()
+                self.history_seen_fingerprints.discard(evicted)
+            except Exception:
+                pass
+        self.history_seen_fingerprints.add(fingerprint)
+        self.history_seen_fingerprint_order.append(fingerprint)
+
+    @staticmethod
+    def _history_preview_text(text: str, max_len: int = 140) -> str:
+        flat = " ".join(str(text or "").replace("\n", " ").split())
+        if len(flat) <= max_len:
+            return flat
+        tail_len = max(12, max_len - 3)
+        return "..." + flat[-tail_len:]
+
+    @staticmethod
+    def _infer_event_epoch(ts_value: Any) -> float:
+        if isinstance(ts_value, (int, float)):
+            ts_num = float(ts_value)
+            if ts_num > 0:
+                return ts_num
+
+        ts_text = str(ts_value or "").strip()
+        if not ts_text:
+            return 0.0
+
+        # ISO timestamps from correction payloads.
+        try:
+            if "T" in ts_text or "-" in ts_text:
+                return datetime.fromisoformat(ts_text).timestamp()
+        except Exception:
+            pass
+
+        return 0.0
+
+    def _get_history_item_by_id(self, item_id: int) -> Optional[Dict[str, Any]]:
+        wanted = int(item_id)
+        for entry in self.recent_transcriptions:
+            try:
+                if int(entry.get("id", -1)) == wanted:
+                    return entry
+            except Exception:
+                continue
+        return None
+
+    def _get_active_correction_target(self) -> Optional[Dict[str, Any]]:
+        if not (self.history_review_pinned and self.history_correction_mode):
+            return None
+        if self.history_correction_target_id is None:
+            candidates = list(self.recent_transcriptions)
+            if not candidates:
+                return None
+            latest = sorted(
+                candidates,
+                key=lambda entry: (
+                    float(entry.get("updated_epoch", 0.0) or 0.0),
+                    int(entry.get("id", 0) or 0),
+                ),
+            )[-1]
+            self.history_correction_target_id = int(latest.get("id", 0))
+        return self._get_history_item_by_id(int(self.history_correction_target_id or 0))
+
+    def _merge_history_item(
+        self,
+        item: Dict[str, Any],
+        incoming_text: str,
+        audio_duration: float,
+        processing_time: float,
+        event_ts: Optional[str] = None,
+        event_epoch: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        base_text = str(item.get("full_text", "")).strip()
+        addition = str(incoming_text or "").strip()
+        if not addition:
+            return item
+
+        merged_text = addition if not base_text else f"{base_text}\n\n{addition}"
+        total_audio = max(0.0, float(item.get("audio_duration", 0.0))) + max(0.0, float(audio_duration))
+        total_processing = max(0.0, float(item.get("processing_time", 0.0))) + max(0.0, float(processing_time))
+        merged_epoch = float(event_epoch if event_epoch is not None else time.time())
+
+        item["full_text"] = merged_text
+        item["preview"] = self._history_preview_text(merged_text)
+        item["audio_duration"] = total_audio
+        item["processing_time"] = total_processing
+        item["rtf"] = total_audio / max(0.001, total_processing) if total_audio > 0 else 0.0
+        item["ts"] = str(event_ts or datetime.now().strftime("%H:%M:%S"))
+        item["updated_epoch"] = merged_epoch
+        item["segments"] = int(item.get("segments", 1) or 1) + 1
+
+        item_id = int(item.get("id", 0))
+        prior_draft = self.history_correction_drafts.get(item_id)
+        if prior_draft is None or prior_draft.strip() == base_text:
+            self.history_correction_drafts[item_id] = merged_text
+
+        return item
+
+    def _append_history_store(self, item: Dict[str, Any]) -> None:
+        try:
+            self.history_store_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "ts": str(item.get("ts", "")),
+                "event_epoch": float(item.get("event_epoch", time.time())),
+                "audio_duration": float(item.get("audio_duration", 0.0)),
+                "processing_time": float(item.get("processing_time", 0.0)),
+                "rtf": float(item.get("rtf", 0.0)),
+                "preview": str(item.get("preview", "")),
+                "full_text": str(item.get("full_text", "")),
+            }
+            with self.history_store_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+        except Exception as e:
+            logger.debug(f"Failed to append history store: {e}")
+
+    def _sync_history_from_store(self) -> None:
+        lines: list[str] = []
+        if self.history_store_path.exists():
+            try:
+                lines.extend(self.history_store_path.read_text(encoding="utf-8").splitlines())
+            except Exception as e:
+                logger.debug(f"Failed to read history store: {e}")
+
+        # Fallback: seed history view from saved correction records.
+        if not lines and self.history_correction_feedback_path.exists():
+            try:
+                lines.extend(self.history_correction_feedback_path.read_text(encoding="utf-8").splitlines())
+            except Exception as e:
+                logger.debug(f"Failed to read correction feedback store: {e}")
+
+        if not lines:
+            return
+
+        # Keep read lightweight while still recovering context across process restarts.
+        window = list(lines[-160:])
+        fallback_base_epoch = float(self.history_session_started_at) - max(1.0, len(window) * 0.01 + 1.0)
+        for idx, raw in enumerate(window):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            full_text = str(
+                payload.get("full_text")
+                or payload.get("corrected_text")
+                or payload.get("original_text")
+                or ""
+            ).strip()
+            if not full_text:
+                continue
+            preview = str(payload.get("preview", "")).strip()
+            try:
+                event_epoch = float(payload.get("event_epoch", 0.0) or 0.0)
+            except Exception:
+                event_epoch = 0.0
+            if event_epoch <= 0.0:
+                event_epoch = self._infer_event_epoch(payload.get("ts"))
+            if event_epoch <= 0.0:
+                # Legacy records without stable timestamps should preserve append order
+                # and remain older than current-session events.
+                event_epoch = fallback_base_epoch + (idx * 0.01)
+            item_like = {
+                "ts": str(payload.get("ts", datetime.now().strftime("%H:%M:%S"))),
+                "event_epoch": event_epoch,
+                "updated_epoch": event_epoch,
+                "audio_duration": float(payload.get("audio_duration", 0.0)),
+                "processing_time": float(payload.get("processing_time", 0.0)),
+                "rtf": float(payload.get("rtf", 0.0)),
+                "preview": preview if preview else self._history_preview_text(full_text),
+                "full_text": full_text,
+            }
+            fingerprint = self._history_item_fingerprint(item_like)
+            if fingerprint in self.history_seen_fingerprints:
+                continue
+            self._remember_history_fingerprint(fingerprint)
+
+            merge_target = self._get_active_correction_target()
+            if merge_target and float(item_like.get("event_epoch", 0.0) or 0.0) >= float(self.history_session_started_at):
+                self._merge_history_item(
+                    merge_target,
+                    full_text,
+                    float(item_like.get("audio_duration", 0.0)),
+                    float(item_like.get("processing_time", 0.0)),
+                    event_ts=str(item_like.get("ts", "")),
+                    event_epoch=float(item_like.get("event_epoch", 0.0) or time.time()),
+                )
+                continue
+
+            self.history_event_seq += 1
+            item_like["id"] = self.history_event_seq
+            item_like["segments"] = 1
+            self.recent_transcriptions.append(item_like)
+
+    def _save_history_correction(self, item: Dict[str, Any], editor: tk.Text):
+        item_id = int(item.get("id", 0))
+        original_text = str(item.get("full_text", "")).strip()
+        corrected_text = str(editor.get("1.0", "end-1c")).strip()
+        self.history_correction_drafts[item_id] = corrected_text
+        if not corrected_text:
+            self._show_history_feedback("Correction is empty.")
+            return
+        if corrected_text == original_text:
+            self._show_history_feedback("No change to save.")
+            return
+
+        previous = self.history_last_saved_corrections.get(item_id)
+        if previous and previous[0] == original_text and previous[1] == corrected_text:
+            self._show_history_feedback("Already saved.")
+            return
+
+        payload = {
+            "ts": time.time(),
+            "local_ts": datetime.now().isoformat(timespec="seconds"),
+            "item_id": item_id,
+            "audio_duration": float(item.get("audio_duration", 0.0)),
+            "processing_time": float(item.get("processing_time", 0.0)),
+            "original_text": original_text,
+            "corrected_text": corrected_text,
+        }
+        if self._append_correction_feedback(payload):
+            self.history_last_saved_corrections[item_id] = (original_text, corrected_text)
+            self._show_history_feedback("Saved correction feedback.")
+        else:
+            self._show_history_feedback("Save failed.")
+
+    def open_correction_review(self):
+        self._queue_ui_action(self._open_correction_review_ui, (), {})
+
+    def _open_correction_review_ui(self):
+        if not self._ensure_history_panel_ui():
+            return
+        self.history_review_pinned = True
+        if not self.dock_enabled:
+            self._set_dock_enabled_ui(True)
+        if not self.history_visible:
+            self._toggle_history_panel()
+        if not self.history_correction_mode:
+            self._toggle_history_correction_mode()
+        else:
+            self._render_history_panel()
 
     def _toggle_history_item_details(self, item_id: int):
         if item_id in self.history_item_expanded_ids:
@@ -1156,7 +1619,14 @@ class BottomScreenIndicator:
 
     def _render_history_panel(self):
         if not self.history_items_frame:
-            return
+            if not self._ensure_history_panel_ui() or not self.history_items_frame:
+                return
+        self._sync_history_from_store()
+
+        if self.history_correction_btn:
+            self.history_correction_btn.configure(
+                text=("Corrections: On" if self.history_correction_mode else "Corrections: Off")
+            )
 
         for child in self.history_items_frame.winfo_children():
             child.destroy()
@@ -1176,9 +1646,21 @@ class BottomScreenIndicator:
             empty.pack(fill=tk.X)
             return
 
-        rows = list(self.recent_transcriptions)[::-1]
+        rows = sorted(
+            list(self.recent_transcriptions),
+            key=lambda entry: (
+                float(entry.get("updated_epoch", 0.0) or 0.0),
+                int(entry.get("id", 0) or 0),
+            ),
+            reverse=True,
+        )
         if not self.history_expanded:
             rows = rows[:8]
+        if self.history_correction_mode:
+            rows = rows[:4]
+            valid_ids = {int(entry.get("id", -1)) for entry in rows}
+            if self.history_correction_target_id not in valid_ids:
+                self.history_correction_target_id = int(rows[0].get("id", 0)) if rows else None
 
         for item in rows:
             item_id = int(item.get("id", 0))
@@ -1187,6 +1669,9 @@ class BottomScreenIndicator:
             show_full = item_id in self.history_item_expanded_ids
             display_text = full_text if show_full else preview
             can_expand = len(full_text) > len(preview)
+            is_correction_target = bool(
+                self.history_correction_mode and self.history_correction_target_id == item_id
+            )
 
             card = tk.Frame(
                 self.history_items_frame,
@@ -1216,6 +1701,25 @@ class BottomScreenIndicator:
             )
             meta.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+            if self.history_correction_mode:
+                edit_btn = tk.Button(
+                    header,
+                    text=("Editing" if is_correction_target else "Correct"),
+                    command=lambda i=item_id: self._select_history_correction_item(i),
+                    bg=("#1D4ED8" if is_correction_target else "#111827"),
+                    fg=("#DBEAFE" if is_correction_target else "#60A5FA"),
+                    activebackground=("#2563EB" if is_correction_target else "#111827"),
+                    activeforeground="#DBEAFE",
+                    relief=tk.FLAT,
+                    bd=0,
+                    highlightthickness=0,
+                    padx=8,
+                    pady=1,
+                    font=("Segoe UI", 8, "bold"),
+                    cursor="hand2",
+                )
+                edit_btn.pack(side=tk.RIGHT, padx=(0, 6))
+
             copy_btn = tk.Button(
                 header,
                 text="Copy",
@@ -1234,21 +1738,127 @@ class BottomScreenIndicator:
             )
             copy_btn.pack(side=tk.RIGHT)
 
-            message = tk.Label(
-                card,
-                text=display_text,
-                bg="#111827",
-                fg="#D1D5DB",
-                font=("Segoe UI", 9),
-                anchor="w",
-                justify=tk.LEFT,
-                wraplength=520,
-                padx=8,
-                pady=(0, 6),
-            )
-            message.pack(fill=tk.X)
+            if is_correction_target:
+                compare = tk.Frame(card, bg="#111827")
+                compare.pack(fill=tk.X, padx=8, pady=(0, 8))
 
-            if can_expand:
+                left_col = tk.Frame(compare, bg="#111827")
+                left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
+                right_col = tk.Frame(compare, bg="#111827")
+                right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
+
+                left_label = tk.Label(
+                    left_col,
+                    text="Original",
+                    bg="#111827",
+                    fg="#9CA3AF",
+                    font=("Segoe UI", 8, "bold"),
+                    anchor="w",
+                )
+                left_label.pack(fill=tk.X, pady=(0, 2))
+
+                original_msg = tk.Label(
+                    left_col,
+                    text=full_text,
+                    bg="#0F172A",
+                    fg="#D1D5DB",
+                    font=("Segoe UI", 9),
+                    anchor="nw",
+                    justify=tk.LEFT,
+                    wraplength=250,
+                    padx=8,
+                    pady=6,
+                )
+                original_msg.pack(fill=tk.BOTH, expand=True)
+
+                right_label = tk.Label(
+                    right_col,
+                    text="Corrected",
+                    bg="#111827",
+                    fg="#9CA3AF",
+                    font=("Segoe UI", 8, "bold"),
+                    anchor="w",
+                )
+                right_label.pack(fill=tk.X, pady=(0, 2))
+
+                draft_text = self.history_correction_drafts.get(item_id, full_text)
+                editor_height = max(6, min(12, (len(draft_text) // 52) + 2))
+                editor = tk.Text(
+                    right_col,
+                    height=editor_height,
+                    wrap=tk.WORD,
+                    bg="#0F172A",
+                    fg="#E5E7EB",
+                    insertbackground="#E5E7EB",
+                    relief=tk.FLAT,
+                    bd=1,
+                    highlightthickness=1,
+                    highlightbackground="#334155",
+                    font=("Segoe UI", 9),
+                    padx=6,
+                    pady=6,
+                )
+                editor.insert("1.0", draft_text)
+                editor.bind(
+                    "<KeyRelease>",
+                    lambda _event, i=item_id, w=editor: self._capture_history_correction_draft(i, w),
+                )
+                editor.pack(fill=tk.BOTH, expand=True)
+
+                correction_actions = tk.Frame(right_col, bg="#111827")
+                correction_actions.pack(fill=tk.X, pady=(4, 0))
+
+                save_btn = tk.Button(
+                    correction_actions,
+                    text="Save Feedback",
+                    command=lambda itm=item, w=editor: self._save_history_correction(itm, w),
+                    bg="#065F46",
+                    fg="#D1FAE5",
+                    activebackground="#047857",
+                    activeforeground="#ECFDF5",
+                    relief=tk.FLAT,
+                    bd=0,
+                    highlightthickness=0,
+                    padx=8,
+                    pady=2,
+                    font=("Segoe UI", 8, "bold"),
+                    cursor="hand2",
+                )
+                save_btn.pack(side=tk.LEFT)
+
+                copy_corrected_btn = tk.Button(
+                    correction_actions,
+                    text="Copy Corrected",
+                    command=lambda w=editor: self._copy_history_text_widget(w),
+                    bg="#1E3A8A",
+                    fg="#DBEAFE",
+                    activebackground="#1D4ED8",
+                    activeforeground="#FFFFFF",
+                    relief=tk.FLAT,
+                    bd=0,
+                    highlightthickness=0,
+                    padx=8,
+                    pady=2,
+                    font=("Segoe UI", 8, "bold"),
+                    cursor="hand2",
+                )
+                copy_corrected_btn.pack(side=tk.LEFT, padx=(6, 0))
+            else:
+                message = tk.Label(
+                    card,
+                    text=display_text,
+                    bg="#111827",
+                    fg="#D1D5DB",
+                    font=("Segoe UI", 9),
+                    anchor="w",
+                    justify=tk.LEFT,
+                    wraplength=520,
+                    padx=8,
+                    pady=0,
+                )
+                message.pack(fill=tk.X, pady=(0, 6))
+
+            if can_expand and not is_correction_target:
                 actions = tk.Frame(card, bg="#111827")
                 actions.pack(fill=tk.X, padx=8, pady=(0, 6))
                 expand_btn = tk.Button(
@@ -1274,6 +1884,22 @@ class BottomScreenIndicator:
         safe_text = (text or "").strip()
         if not safe_text:
             return
+        event_epoch = time.time()
+        preview = self._history_preview_text(safe_text)
+        proc = max(0.001, float(processing_time))
+        rtf = float(audio_duration) / proc if audio_duration > 0 else 0.0
+        self._append_history_store(
+            {
+                "ts": datetime.now().strftime("%H:%M:%S"),
+                "event_epoch": event_epoch,
+                "audio_duration": float(audio_duration),
+                "processing_time": float(processing_time),
+                "rtf": float(rtf),
+                "preview": preview,
+                "full_text": safe_text,
+            }
+        )
+
         event = (safe_text, float(audio_duration), float(processing_time))
         if not self.command_queue or not self.gui_ready:
             self.pending_history_events.append(event)
@@ -1302,27 +1928,76 @@ class BottomScreenIndicator:
         safe_text = (text or "").strip()
         if not safe_text:
             return
-        preview_source = safe_text.replace("\n", " ")
-        preview = preview_source[:140] + ("..." if len(preview_source) > 140 else "")
+        event_epoch = time.time()
+        preview = self._history_preview_text(safe_text)
         proc = max(0.001, float(processing_time))
         rtf = float(audio_duration) / proc if audio_duration > 0 else 0.0
+
+        incoming_fingerprint = self._history_item_fingerprint(
+            {
+                "audio_duration": float(audio_duration),
+                "processing_time": float(processing_time),
+                "full_text": safe_text,
+            }
+        )
+        merge_target = self._get_active_correction_target()
+        if merge_target:
+            self._remember_history_fingerprint(incoming_fingerprint)
+            item = self._merge_history_item(
+                merge_target,
+                safe_text,
+                float(audio_duration),
+                float(processing_time),
+                event_epoch=event_epoch,
+            )
+            self._refresh_dock_text(last_item=item)
+            if self.history_visible:
+                self._render_history_panel()
+            elif self.history_review_pinned and self.history_window:
+                self.history_visible = True
+                if not self.history_correction_mode:
+                    self.history_correction_mode = True
+                if self.history_geometry_compact:
+                    self.history_window.geometry(self.history_geometry_compact)
+                self._render_history_panel()
+                self.history_window.deiconify()
+            return
+
         self.history_event_seq += 1
         item = {
             "id": self.history_event_seq,
             "ts": datetime.now().strftime("%H:%M:%S"),
+            "event_epoch": event_epoch,
+            "updated_epoch": event_epoch,
             "audio_duration": float(audio_duration),
             "processing_time": float(processing_time),
             "rtf": float(rtf),
             "preview": preview,
             "full_text": safe_text,
+            "segments": 1,
         }
+        self._remember_history_fingerprint(incoming_fingerprint)
         self.recent_transcriptions.append(item)
         valid_ids = {int(entry.get("id", -1)) for entry in self.recent_transcriptions}
         self.history_item_expanded_ids.intersection_update(valid_ids)
+        self.history_correction_drafts = {
+            int(k): v for k, v in self.history_correction_drafts.items() if int(k) in valid_ids
+        }
+        if self.history_correction_target_id not in valid_ids:
+            self.history_correction_target_id = None
         self._refresh_dock_text(last_item=item)
 
         if self.history_visible:
             self._render_history_panel()
+        elif self.history_review_pinned and self.history_window:
+            # Keep correction review open across repeated start/stop transcription cycles.
+            self.history_visible = True
+            if not self.history_correction_mode:
+                self.history_correction_mode = True
+            if self.history_geometry_compact:
+                self.history_window.geometry(self.history_geometry_compact)
+            self._render_history_panel()
+            self.history_window.deiconify()
 
     def _refresh_dock_text(self, status: Optional[TranscriptionStatus] = None, last_item: Optional[Dict[str, Any]] = None):
         if not self.dock_var:
@@ -1744,11 +2419,55 @@ def get_dock_enabled() -> bool:
         return indicator.get_dock_enabled()
     return True
 
+def _append_ui_action_request(action: str) -> None:
+    safe_action = str(action or "").strip().lower()
+    if not safe_action:
+        return
+    path = config_dir() / "ui_actions.jsonl"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ts": time.time(),
+            "pid": int(os.getpid()),
+            "action": safe_action,
+        }
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+
+        # Keep queue bounded to avoid unbounded growth in long sessions.
+        if path.stat().st_size > 524288:
+            lines = path.read_text(encoding="utf-8").splitlines()[-240:]
+            path.write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
+    except Exception:
+        pass
+
 def toggle_recent_history():
     """Toggle recent transcription history panel."""
     indicator = get_indicator()
     if indicator:
         indicator.toggle_recent_history()
+
+def open_recent_history():
+    """Open recent transcription history panel."""
+    indicator = get_indicator()
+    if indicator:
+        indicator.open_recent_history()
+
+def open_correction_review():
+    """Open recent history in correction-review mode."""
+    indicator = get_indicator()
+    if indicator:
+        indicator.open_correction_review()
+
+def request_open_recent_history():
+    """Broadcast and open recent history for cross-process tray reliability."""
+    _append_ui_action_request("open_recent_history")
+    open_recent_history()
+
+def request_open_correction_review():
+    """Broadcast and open correction review for cross-process tray reliability."""
+    _append_ui_action_request("open_correction_review")
+    open_correction_review()
 
 # Test function
 def test_visual_indicators():

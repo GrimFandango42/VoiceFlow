@@ -23,6 +23,8 @@ This index points to the current, maintained documentation set for the Python-ba
 - Windows setup executable build/publish guide: `guides/WINDOWS_SETUP_EXECUTABLE.md`
 - Windows launch checklist: `guides/WINDOWS_APP_TEST_CHECKLIST.md`
 - App-specific validation scenarios: `guides/APPLICATION_SPECIFIC_TEST_SCENARIOS.md`
+- Security and privacy operations guide: `guides/SECURITY_AND_PRIVACY.md`
+- UI polish review and backlog: `guides/UI_POLISH_REVIEW.md`
 
 ## Reports and Historical Material
 

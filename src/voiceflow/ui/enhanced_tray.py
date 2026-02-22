@@ -58,14 +58,16 @@ try:
         show_listening, show_processing, show_transcribing,
         show_complete, show_error, hide_status,
         TranscriptionStatus, show_transcription_status,
-        set_dock_enabled, toggle_recent_history
+        set_dock_enabled, request_open_recent_history, request_open_correction_review
     )
     VISUAL_INDICATORS_AVAILABLE = True
 except ImportError:
     VISUAL_INDICATORS_AVAILABLE = False
     def set_dock_enabled(_enabled: bool):
         return None
-    def toggle_recent_history():
+    def request_open_recent_history():
+        return None
+    def request_open_correction_review():
         return None
 
 def _make_status_icon(size: int = 16, status: str = "idle", recording: bool = False):
@@ -278,11 +280,26 @@ class EnhancedTrayController(ITrayManager):
                 pass
 
         def show_recent_history(icon, item):
-            """Open/close recent history panel from tray."""
+            """Open recent history panel from tray."""
             try:
-                toggle_recent_history()
-            except Exception:
-                pass
+                request_open_recent_history()
+            except Exception as e:
+                try:
+                    self._notify("VoiceFlow", "Recent History failed to open.")
+                except Exception:
+                    pass
+                print(f"[Tray] Recent History open failed: {e}")
+
+        def show_correction_review(icon, item):
+            """Open correction review panel from tray."""
+            try:
+                request_open_correction_review()
+            except Exception as e:
+                try:
+                    self._notify("VoiceFlow", "Correction Review failed to open.")
+                except Exception:
+                    pass
+                print(f"[Tray] Correction Review open failed: {e}")
 
         def show_status_test(icon, item):
             """Test the visual indicators"""
@@ -393,6 +410,7 @@ class EnhancedTrayController(ITrayManager):
                 checked=lambda item: getattr(self.app.cfg, 'visual_dock_enabled', True),
             ),
             pystray.MenuItem("Recent History", show_recent_history),
+            pystray.MenuItem("Correction Review", show_correction_review),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("PTT Hotkey", ptt_menu),
             pystray.MenuItem("Test Visual Indicators", show_status_test),

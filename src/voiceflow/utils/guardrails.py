@@ -273,6 +273,36 @@ def validate_config(cfg: Config) -> Config:
             )
             cfg.non_speech_max_audio_seconds = 1.25
 
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_min_reduction_pct')
+            or cfg.pause_compaction_retry_min_reduction_pct < 5.0
+            or cfg.pause_compaction_retry_min_reduction_pct > 95.0
+        ):
+            logger.warning(
+                f"Invalid pause_compaction_retry_min_reduction_pct {getattr(cfg, 'pause_compaction_retry_min_reduction_pct', 'None')}, defaulting to 38.0"
+            )
+            cfg.pause_compaction_retry_min_reduction_pct = 38.0
+
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_max_words')
+            or cfg.pause_compaction_retry_max_words < 1
+            or cfg.pause_compaction_retry_max_words > 40
+        ):
+            logger.warning(
+                f"Invalid pause_compaction_retry_max_words {getattr(cfg, 'pause_compaction_retry_max_words', 'None')}, defaulting to 8"
+            )
+            cfg.pause_compaction_retry_max_words = 8
+
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_min_raw_audio_seconds')
+            or cfg.pause_compaction_retry_min_raw_audio_seconds < 1.0
+            or cfg.pause_compaction_retry_min_raw_audio_seconds > 60.0
+        ):
+            logger.warning(
+                f"Invalid pause_compaction_retry_min_raw_audio_seconds {getattr(cfg, 'pause_compaction_retry_min_raw_audio_seconds', 'None')}, defaulting to 4.0"
+            )
+            cfg.pause_compaction_retry_min_raw_audio_seconds = 4.0
+
         if not hasattr(cfg, 'non_speech_min_peak') or cfg.non_speech_min_peak < 0.01 or cfg.non_speech_min_peak > 1.0:
             logger.warning(
                 f"Invalid non_speech_min_peak {getattr(cfg, 'non_speech_min_peak', 'None')}, defaulting to 0.16"
@@ -290,6 +320,36 @@ def validate_config(cfg: Config) -> Config:
                 f"Invalid non_speech_max_voiced_ratio {getattr(cfg, 'non_speech_max_voiced_ratio', 'None')}, defaulting to 0.24"
             )
             cfg.non_speech_max_voiced_ratio = 0.24
+
+        if (
+            not hasattr(cfg, 'non_speech_max_voiced_run_seconds')
+            or cfg.non_speech_max_voiced_run_seconds < 0.05
+            or cfg.non_speech_max_voiced_run_seconds > 1.0
+        ):
+            logger.warning(
+                f"Invalid non_speech_max_voiced_run_seconds {getattr(cfg, 'non_speech_max_voiced_run_seconds', 'None')}, defaulting to 0.16"
+            )
+            cfg.non_speech_max_voiced_run_seconds = 0.16
+
+        if (
+            not hasattr(cfg, 'non_speech_speech_hint_min_voiced_seconds')
+            or cfg.non_speech_speech_hint_min_voiced_seconds < 0.05
+            or cfg.non_speech_speech_hint_min_voiced_seconds > 1.0
+        ):
+            logger.warning(
+                f"Invalid non_speech_speech_hint_min_voiced_seconds {getattr(cfg, 'non_speech_speech_hint_min_voiced_seconds', 'None')}, defaulting to 0.20"
+            )
+            cfg.non_speech_speech_hint_min_voiced_seconds = 0.20
+
+        if (
+            not hasattr(cfg, 'non_speech_speech_hint_min_voiced_ratio')
+            or cfg.non_speech_speech_hint_min_voiced_ratio < 0.01
+            or cfg.non_speech_speech_hint_min_voiced_ratio > 0.95
+        ):
+            logger.warning(
+                f"Invalid non_speech_speech_hint_min_voiced_ratio {getattr(cfg, 'non_speech_speech_hint_min_voiced_ratio', 'None')}, defaulting to 0.20"
+            )
+            cfg.non_speech_speech_hint_min_voiced_ratio = 0.20
 
         if not hasattr(cfg, 'non_speech_min_flatness') or cfg.non_speech_min_flatness < 0.0 or cfg.non_speech_min_flatness > 1.0:
             logger.warning(

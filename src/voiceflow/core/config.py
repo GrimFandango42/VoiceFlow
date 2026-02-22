@@ -39,11 +39,19 @@ class Config:
     pause_compaction_frame_ms: int = 30  # frame size for pause detection
     pause_compaction_keep_silence_ms: int = 80  # tighter silence retention for better medium/long latency
     pause_compaction_max_reduction_pct: float = 82.0  # allow stronger dead-air removal in long conversations
+    pause_compaction_retry_on_short_output: bool = True  # Retry raw audio when compaction result looks clipped
+    pause_compaction_retry_min_reduction_pct: float = 38.0  # Trigger raw retry only after heavy compaction
+    pause_compaction_retry_max_words: int = 8  # Treat very short result as likely clipped output
+    pause_compaction_retry_min_raw_audio_seconds: float = 4.0  # Only retry for medium/long dictation
     enable_non_speech_guard: bool = True  # Reject likely sneeze/cough/throat-clear bursts before ASR
+    non_speech_guard_soft_mode: bool = True  # Prefer salvage/retry over hard drop on suspected bursts
     non_speech_max_audio_seconds: float = 1.25  # Only run non-speech filter on short clips
     non_speech_min_peak: float = 0.16  # Minimum peak for impulsive-noise consideration
     non_speech_min_crest_factor: float = 9.0  # Peak/RMS threshold for transient noise
     non_speech_max_voiced_ratio: float = 0.24  # Upper bound of voiced-frame ratio for non-speech
+    non_speech_max_voiced_run_seconds: float = 0.16  # Upper bound for sustained voiced run in burst detection
+    non_speech_speech_hint_min_voiced_seconds: float = 0.20  # Keep clip when sustained voicing suggests real speech
+    non_speech_speech_hint_min_voiced_ratio: float = 0.20  # Keep clip when voiced frame ratio suggests speech
     non_speech_min_flatness: float = 0.50  # Spectral flatness threshold for broadband noise
     non_speech_min_zcr: float = 0.10  # Zero-crossing threshold for noisy bursts
 

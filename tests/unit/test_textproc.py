@@ -37,7 +37,7 @@ def test_format_transcript_text():
 
     # Test missing space after period
     result = format_transcript_text("hello.world")
-    assert result.startswith("Hello.") and "world" in result
+    assert result.startswith("Hello.") and "world" in result.lower()
 
     # Test bullet point formatting
     result = format_transcript_text("first, make sure you do it. second, continue listening.")
@@ -46,6 +46,12 @@ def test_format_transcript_text():
     # Test punctuation spacing
     result = format_transcript_text("hello , world")
     assert "Hello," in result and "world" in result
+
+
+def test_format_transcript_text_capitalizes_after_line_break():
+    result = format_transcript_text('"hello world.\nthis should be capitalized next line')
+    assert result.startswith('"Hello world.')
+    assert "\nThis should be" in result
 
 
 def test_technical_term_dictionary_defaults():
@@ -115,4 +121,65 @@ def test_format_transcript_for_destination_chat_wrap():
     )
     assert "\n" in out
     assert "Also" in out or "also" in out
+
+
+def test_format_transcript_for_destination_inserts_paragraph_breaks_for_medium_dictation():
+    src = (
+        "this is a medium length dictation sample that should feel easier to read, also it needs clearer "
+        "paragraph breaks for scanning because otherwise everything lands in one dense block and is hard to review quickly."
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={"process_name": "notepad.exe", "window_width": 780},
+        audio_duration=5.4,
+    )
+    assert "\n\nAlso" in out
+
+
+def test_format_transcript_for_destination_rebalances_long_dense_paragraph():
+    src = (
+        "this is sentence one about planning. this is sentence two with implementation details. "
+        "this is sentence three with risk notes. this is sentence four with rollout steps."
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={"process_name": "notepad.exe", "window_width": 920},
+        audio_duration=8.0,
+    )
+    assert out.count("\n\n") >= 1
+
+
+def test_format_transcript_for_destination_breaks_before_making_that():
+    src = (
+        "the workflow is mostly working now and we are saving corrections. making that easier to keep open "
+        "during repeated dictation cycles would improve speed."
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={"process_name": "notepad.exe", "window_width": 900},
+        audio_duration=7.5,
+    )
+    assert "\n\nMaking that" in out
+
+
+def test_format_transcript_for_destination_splits_unpunctuated_topic_transition():
+    src = (
+        "this is the end of topic one and now let's start topic two and talk through "
+        "option two with a clearer structure for the next section"
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={"process_name": "notepad.exe", "window_width": 900},
+        audio_duration=8.0,
+    )
+    assert "end of topic one.\n\nAnd now" in out
+
+
+def test_format_transcript_text_splits_long_run_on_clause():
+    src = (
+        "we should capture the baseline audio quality and then compare it with the corrected pass "
+        "because otherwise we cannot tell if the latter half was clipped after the cough pause"
+    )
+    out = format_transcript_text(src)
+    assert ". And then" in out or ". Because" in out
 

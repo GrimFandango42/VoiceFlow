@@ -40,6 +40,33 @@ For each item you can:
 
 This is useful when audio was successfully transcribed but injection into the target app did not complete.
 
+## Daily Continual Learning
+
+VoiceFlow can run a daily offline learning pass that reviews previous-day transcriptions and saved correction-review edits.
+
+Manual run:
+
+```powershell
+.\VoiceFlow_DailyLearning.bat
+```
+
+Dry run:
+
+```powershell
+.\VoiceFlow_DailyLearning.bat --dry-run
+```
+
+Schedule once per day:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup\register_daily_learning_task.ps1 -StartTime "08:00" -Force
+```
+
+Outputs:
+- Reports: `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\`
+- Adaptive audit: `%LOCALAPPDATA%\LocalFlow\adaptive_audit.jsonl`
+- Adaptive patterns: `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json`
+
 ## Hotkeys
 
 Default push-to-talk:

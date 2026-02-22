@@ -5,6 +5,9 @@ import traceback
 import sys
 import os
 import re
+import json
+import wave
+from pathlib import Path
 from typing import Optional, Dict, Any, Deque, Tuple
 import logging
 import time
@@ -29,6 +32,7 @@ from voiceflow.integrations.hotkeys_enhanced import EnhancedPTTHotkeyListener
 from voiceflow.utils.utils import is_admin, nvidia_smi_info
 from voiceflow.core.textproc import (
     apply_code_mode,
+    format_transcript_text,
     format_transcript_for_destination,
     infer_destination_profile,
     normalize_context_terms,
@@ -37,7 +41,7 @@ import keyboard
 from voiceflow.ui.tray import TrayController
 from voiceflow.ui.enhanced_tray import EnhancedTrayController, update_tray_status
 from voiceflow.utils.logging_setup import AsyncLogger, default_log_dir
-from voiceflow.utils.settings import load_config, save_config
+from voiceflow.utils.settings import config_dir, load_config, save_config
 from voiceflow.utils.idle_aware_monitor import (
     start_idle_monitoring, stop_idle_monitoring, record_heartbeat,
     mark_idle, mark_recording, mark_processing, mark_injecting, mark_error,
@@ -125,15 +129,15 @@ def _is_primary_cli_process() -> bool:
     return True
 
 
-def _list_cli_processes() -> list[tuple[int, float]]:
-    """Return running VoiceFlow CLI process tuples as (pid, create_time)."""
+def _list_cli_processes() -> list[tuple[int, float, int]]:
+    """Return running VoiceFlow CLI process tuples as (pid, create_time, ppid)."""
     try:
         import psutil  # type: ignore
     except Exception:
         return []
 
-    matches: list[tuple[int, float]] = []
-    for proc in psutil.process_iter(["pid", "create_time", "cmdline", "name"]):
+    matches: list[tuple[int, float, int]] = []
+    for proc in psutil.process_iter(["pid", "create_time", "cmdline", "name", "ppid"]):
         try:
             name = str(proc.info.get("name") or "").lower()
             if name not in {"python.exe", "pythonw.exe", "python"}:
@@ -144,7 +148,13 @@ def _list_cli_processes() -> list[tuple[int, float]]:
             # Strict module match to avoid false positives from arbitrary command text.
             if "voiceflow.ui.cli_enhanced" not in cmd_list:
                 continue
-            matches.append((int(proc.info["pid"]), float(proc.info.get("create_time") or 0.0)))
+            matches.append(
+                (
+                    int(proc.info["pid"]),
+                    float(proc.info.get("create_time") or 0.0),
+                    int(proc.info.get("ppid") or 0),
+                )
+            )
         except Exception:
             continue
     return matches
@@ -153,7 +163,7 @@ def _list_cli_processes() -> list[tuple[int, float]]:
 def _enforce_single_instance() -> bool:
     """
     Keep only one `voiceflow.ui.cli_enhanced` process.
-    Chooses the newest process (ties: highest PID), terminates the others.
+    Prefer the oldest leaf process to avoid churn from short-lived bootstrap helpers.
     """
     try:
         import psutil  # type: ignore
@@ -165,8 +175,12 @@ def _enforce_single_instance() -> bool:
     if not processes:
         return True
 
-    keep_pid = sorted(processes, key=lambda item: (item[1], item[0]))[-1][0]
-    for pid, _ in processes:
+    parent_refs = {ppid for _, _, ppid in processes}
+    leaf_processes = [proc for proc in processes if proc[0] not in parent_refs]
+    target_pool = leaf_processes if leaf_processes else processes
+    keep_pid = sorted(target_pool, key=lambda item: (item[1], item[0]))[0][0]
+
+    for pid, _, _ in processes:
         if pid == keep_pid:
             continue
         try:
@@ -462,6 +476,19 @@ class EnhancedApp:
         self.checkpoint_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="LiveCheckpoint")
 
         self.code_mode = cfg.code_mode_default
+        if self.code_mode and str(os.environ.get("VOICEFLOW_KEEP_CODE_MODE_DEFAULT", "")).strip().lower() not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            # Default to natural-language dictation unless explicitly opted into persistent code mode.
+            self.code_mode = False
+            try:
+                self.cfg.code_mode_default = False
+                save_config(self.cfg)
+            except Exception:
+                pass
         self._log = logging.getLogger("localflow")
 
         # Visual indicators integration
@@ -534,9 +561,28 @@ class EnhancedApp:
         self._checkpoint_committed_sample_idx = 0
         self._checkpoint_live_injected = False
         self.ptt_listener: Optional[EnhancedPTTHotkeyListener] = None
+        self._feedback_audio_enabled = str(os.environ.get("VOICEFLOW_FEEDBACK_AUDIO", "")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self._feedback_audio_max_seconds = max(
+            1.0,
+            float(os.environ.get("VOICEFLOW_FEEDBACK_AUDIO_MAX_SECONDS", "12.0") or 12.0),
+        )
+        self._feedback_audio_retention_minutes = max(
+            1,
+            int(os.environ.get("VOICEFLOW_FEEDBACK_AUDIO_RETENTION_MINUTES", "30") or 30),
+        )
 
         print(f"[EnhancedApp] Initialized with enhanced thread management and visual indicators {'enabled' if self.visual_indicators_enabled else 'disabled'}")
         print(f"[EnhancedApp] Streaming preview: {'Enabled' if self.streaming_enabled else 'Disabled'}")
+        if self._feedback_audio_enabled:
+            print(
+                "[EnhancedApp] Feedback audio capture: ON "
+                f"(max={self._feedback_audio_max_seconds:.1f}s, retention={self._feedback_audio_retention_minutes}m)"
+            )
 
     def _on_preload_progress(self, progress):
         """Handle preload progress updates"""
@@ -744,15 +790,102 @@ class EnhancedApp:
         max_voiced = float(getattr(self.cfg, "non_speech_max_voiced_ratio", 0.24))
         min_flatness = float(getattr(self.cfg, "non_speech_min_flatness", 0.50))
         min_zcr = float(getattr(self.cfg, "non_speech_min_zcr", 0.10))
+        speech_hint_min_voiced_seconds = float(
+            getattr(self.cfg, "non_speech_speech_hint_min_voiced_seconds", 0.20)
+        )
+        speech_hint_min_voiced_ratio = float(
+            getattr(self.cfg, "non_speech_speech_hint_min_voiced_ratio", 0.20)
+        )
+        max_voiced_run_seconds = float(getattr(self.cfg, "non_speech_max_voiced_run_seconds", 0.16))
 
         impulsive = peak >= min_peak and crest_factor >= min_crest
         noise_like = flatness >= min_flatness and zcr >= min_zcr
         short_burst = duration <= 0.55 and peak >= min_peak and zcr >= min_zcr
-        low_voicing = voiced_ratio <= max_voiced and longest_voiced_seconds <= 0.22
+        speech_hint = (
+            longest_voiced_seconds >= speech_hint_min_voiced_seconds
+            or voiced_ratio >= speech_hint_min_voiced_ratio
+        )
+        low_voicing = voiced_ratio <= max_voiced and longest_voiced_seconds <= max_voiced_run_seconds
+        metrics["speech_hint"] = 1.0 if speech_hint else 0.0
 
+        if speech_hint:
+            return False, "speech_hint_present", metrics
         if (impulsive and noise_like and low_voicing) or (short_burst and low_voicing):
             return True, "likely_non_speech_burst", metrics
         return False, "speech_like", metrics
+
+    def _feedback_audio_dir(self) -> Optional[Path]:
+        if not self._feedback_audio_enabled:
+            return None
+        override = str(os.environ.get("VOICEFLOW_FEEDBACK_AUDIO_DIR", "")).strip()
+        if override:
+            base = Path(override).expanduser()
+            if not base.is_absolute():
+                base = config_dir() / base
+        else:
+            base = config_dir() / "feedback_audio"
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            return base
+        except Exception:
+            return None
+
+    def _purge_feedback_audio(self, folder: Path) -> None:
+        if not folder.exists():
+            return
+        cutoff = time.time() - (self._feedback_audio_retention_minutes * 60.0)
+        for candidate in folder.glob("*"):
+            if not candidate.is_file():
+                continue
+            if candidate.suffix.lower() not in {".wav", ".json"}:
+                continue
+            try:
+                if candidate.stat().st_mtime < cutoff:
+                    candidate.unlink(missing_ok=True)
+            except Exception:
+                continue
+
+    def _maybe_capture_feedback_audio(self, audio_data: np.ndarray, metadata: Dict[str, Any]) -> None:
+        if not self._feedback_audio_enabled:
+            return
+        if audio_data is None or len(audio_data) == 0:
+            return
+        sample_rate = max(8000, int(getattr(self.cfg, "sample_rate", 16000)))
+        duration = len(audio_data) / float(sample_rate)
+        if duration <= 0.0 or duration > self._feedback_audio_max_seconds:
+            return
+        folder = self._feedback_audio_dir()
+        if folder is None:
+            return
+
+        self._purge_feedback_audio(folder)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        suffix = f"{int(time.time_ns()) % 1000000:06d}"
+        base_name = f"{stamp}_{suffix}"
+        wav_path = folder / f"{base_name}.wav"
+        meta_path = folder / f"{base_name}.json"
+
+        try:
+            # Store as 16-bit PCM WAV for portable offline analysis.
+            clipped = np.clip(np.asarray(audio_data, dtype=np.float32), -1.0, 1.0)
+            pcm16 = (clipped * 32767.0).astype(np.int16)
+            with wave.open(str(wav_path), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(pcm16.tobytes())
+
+            payload = {
+                "timestamp": time.time(),
+                "sample_rate": sample_rate,
+                "duration_seconds": round(duration, 3),
+                "samples": int(len(audio_data)),
+                "metadata": metadata,
+            }
+            meta_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+            self._log.info("feedback_audio_saved path=%s duration=%.2f", str(wav_path), duration)
+        except Exception as e:
+            self._log.warning("feedback_audio_save_failed error=%s", e)
 
     def _destination_format_context(self) -> Dict[str, Any]:
         context = self.injector.get_target_context()
@@ -830,10 +963,12 @@ class EnhancedApp:
             engine = self.asr_fast if (self.asr_fast and self._fast_model_ready) else self.asr
             text = engine.transcribe(segment)
             text = normalize_context_terms(text)
-            if self.code_mode:
+            destination_context = self._destination_format_context()
+            destination_profile = infer_destination_profile(destination_context)
+            effective_code_mode = bool(self.code_mode and destination_profile in {"editor", "terminal"})
+            if effective_code_mode:
                 text = apply_code_mode(text, lowercase=self.cfg.code_mode_lowercase)
             else:
-                destination_context = self._destination_format_context()
                 text = format_transcript_for_destination(
                     text,
                     destination=destination_context,
@@ -1306,13 +1441,14 @@ class EnhancedApp:
             raw_audio_duration = len(audio_data) / self.cfg.sample_rate if len(audio_data) > 0 else 0.0
             compacted_audio = self._compact_pauses(audio_data)
             audio_duration = len(compacted_audio) / self.cfg.sample_rate if len(compacted_audio) > 0 else 0.0
+            compaction_reduction_pct = 0.0
             if len(compacted_audio) != len(audio_data):
-                reduction_pct = 100.0 * (1.0 - (len(compacted_audio) / max(1, len(audio_data))))
+                compaction_reduction_pct = 100.0 * (1.0 - (len(compacted_audio) / max(1, len(audio_data))))
                 self._log.info(
                     "pause_compaction raw_duration=%.2f compacted_duration=%.2f reduction=%.1f%%",
                     raw_audio_duration,
                     audio_duration,
-                    reduction_pct,
+                    compaction_reduction_pct,
                 )
             self._log.info(
                 "transcription_started duration=%.2f raw_duration=%.2f samples=%d compacted_samples=%d",
@@ -1322,6 +1458,9 @@ class EnhancedApp:
                 len(compacted_audio),
             )
 
+            non_speech_soft_trigger = False
+            non_speech_reason = ""
+            non_speech_metrics: Dict[str, float] = {}
             is_non_speech, non_speech_reason, non_speech_metrics = self._detect_likely_non_speech(compacted_audio)
             if is_non_speech:
                 self._log.info(
@@ -1335,13 +1474,38 @@ class EnhancedApp:
                     non_speech_metrics.get("zcr", 0.0),
                     non_speech_metrics.get("flatness", 0.0),
                 )
-                print("[TRANSCRIPTION] Filtered likely non-speech audio burst.")
-                mark_idle()
-                if self.visual_indicators_enabled:
-                    update_tray_status(self.tray_controller, "idle", False)
-                    if VISUAL_INDICATORS_AVAILABLE:
-                        hide_status()
-                return ""
+                if not bool(getattr(self.cfg, "non_speech_guard_soft_mode", True)):
+                    print("[TRANSCRIPTION] Filtered likely non-speech audio burst.")
+                    mark_idle()
+                    if self.visual_indicators_enabled:
+                        update_tray_status(self.tray_controller, "idle", False)
+                        if VISUAL_INDICATORS_AVAILABLE:
+                            hide_status()
+                    return ""
+
+                non_speech_soft_trigger = True
+                self._log.info(
+                    "transcription_guard_soft_trigger reason=%s action=retry_asr",
+                    non_speech_reason,
+                )
+                # Avoid losing speech around cough/sneeze by retrying on raw (uncompacted) audio.
+                if len(audio_data) > len(compacted_audio):
+                    previous_compacted_duration = audio_duration
+                    compacted_audio = audio_data
+                    audio_duration = raw_audio_duration
+                    self._log.info(
+                        "transcription_guard_retry_raw raw_duration=%.2f compacted_duration=%.2f",
+                        raw_audio_duration,
+                        previous_compacted_duration,
+                    )
+                    self._maybe_capture_feedback_audio(
+                        compacted_audio,
+                        {
+                            "stage": "non_speech_guard_soft_trigger",
+                            "reason": non_speech_reason,
+                            "metrics": non_speech_metrics,
+                        },
+                    )
 
             # Already in processing state from stop_recording
 
@@ -1352,7 +1516,7 @@ class EnhancedApp:
                     show_transcribing()
 
             # Transcribe with timeout protection (60 seconds max)
-            timeout_seconds = max(60, audio_duration * 3)  # 3x audio duration or 60s minimum
+            timeout_seconds = max(60, max(audio_duration, raw_audio_duration) * 3)  # 3x audio duration or 60s minimum
 
             try:
                 with OperationTimeout(timeout_seconds, f"transcription_{audio_duration:.1f}s"):
@@ -1360,6 +1524,42 @@ class EnhancedApp:
                     self._log.info("transcription_path path=%s duration=%.2f", asr_path, audio_duration)
                     text = active_asr.transcribe(compacted_audio)
                 raw_transcript = text
+
+                # Easy quality fallback: if pause compaction removed a lot and output is too short,
+                # retry once on raw audio to recover clipped latter-half speech.
+                if (
+                    bool(getattr(self.cfg, "pause_compaction_retry_on_short_output", True))
+                    and len(audio_data) > len(compacted_audio)
+                    and raw_audio_duration >= float(getattr(self.cfg, "pause_compaction_retry_min_raw_audio_seconds", 4.0))
+                ):
+                    retry_min_reduction = float(getattr(self.cfg, "pause_compaction_retry_min_reduction_pct", 38.0))
+                    retry_max_words = int(getattr(self.cfg, "pause_compaction_retry_max_words", 8))
+                    initial_words = len((text or "").split())
+                    if compaction_reduction_pct >= retry_min_reduction and initial_words <= retry_max_words:
+                        retry_asr, retry_path = self._pick_asr_engine(raw_audio_duration)
+                        retry_text = retry_asr.transcribe(audio_data)
+                        retry_words = len((retry_text or "").split())
+                        retry_chars = len((retry_text or "").strip())
+                        initial_chars = len((text or "").strip())
+                        if retry_words >= (initial_words + 2) or retry_chars >= (initial_chars + 12):
+                            self._log.info(
+                                "pause_compaction_retry_applied initial_words=%d retry_words=%d reduction=%.1f%% path=%s",
+                                initial_words,
+                                retry_words,
+                                compaction_reduction_pct,
+                                retry_path,
+                            )
+                            text = retry_text
+                            raw_transcript = retry_text
+                            compacted_audio = audio_data
+                            audio_duration = raw_audio_duration
+                        else:
+                            self._log.info(
+                                "pause_compaction_retry_rejected initial_words=%d retry_words=%d reduction=%.1f%%",
+                                initial_words,
+                                retry_words,
+                                compaction_reduction_pct,
+                            )
 
                 # Simple hallucination detection - fast and reliable
                 if text and len(text.strip()) > 0:
@@ -1400,13 +1600,14 @@ class EnhancedApp:
             
             # Apply basic processing
             text = normalize_context_terms(text)
-            if self.code_mode:
+            destination_context = self._destination_format_context()
+            destination_profile = infer_destination_profile(destination_context)
+            effective_code_mode = bool(self.code_mode and destination_profile in {"editor", "terminal"})
+            if effective_code_mode:
                 text = apply_code_mode(text, lowercase=self.cfg.code_mode_lowercase)
             else:
                 if self.adaptive_learning and text.strip():
                     text = self.adaptive_learning.apply(text)
-                destination_context = self._destination_format_context()
-                destination_profile = infer_destination_profile(destination_context)
                 text = format_transcript_for_destination(
                     text,
                     destination=destination_context,
@@ -1418,6 +1619,23 @@ class EnhancedApp:
                     str(destination_context.get("process_name", "") or ""),
                     int(destination_context.get("window_width", 0) or 0),
                 )
+                if non_speech_soft_trigger:
+                    self._log.info(
+                        "transcription_guard_soft_result reason=%s words=%d chars=%d",
+                        non_speech_reason,
+                        len(text.split()),
+                        len(text),
+                    )
+                    self._maybe_capture_feedback_audio(
+                        compacted_audio,
+                        {
+                            "stage": "non_speech_guard_soft_result",
+                            "reason": non_speech_reason,
+                            "metrics": non_speech_metrics,
+                            "raw_transcript": str(raw_transcript or "")[:240],
+                            "final_transcript": str(text or "")[:240],
+                        },
+                    )
 
             # AI Enhancement Layer (VoiceFlow 3.0)
             course_corrected = False
@@ -1456,6 +1674,18 @@ class EnhancedApp:
                             correction_type = result.correction_type
                     except Exception as e:
                         print(f"[AI] Course correction error: {e}")
+
+            # Keep capitalization/paragraph structure after AI edits.
+            if text and not effective_code_mode:
+                try:
+                    final_destination = destination_context or self._destination_format_context()
+                    text = format_transcript_for_destination(
+                        text,
+                        destination=final_destination,
+                        audio_duration=audio_duration,
+                    )
+                except Exception:
+                    text = format_transcript_text(text)
 
             # Performance tracking
             transcription_time = time.perf_counter() - start_time
@@ -1636,23 +1866,42 @@ class EnhancedApp:
 
 def main(argv=None):
     """Enhanced main with better error handling and monitoring"""
-    # Single-instance enforcement temporarily disabled: it caused startup exits
-    # before tray/dock initialization in this environment.
+    if not _acquire_single_instance_mutex():
+        return 0
     if _yield_if_bootstrap_parent():
         return 0
     _start_bootstrap_parent_watchdog()
 
     cfg = load_config(Config())
 
+    gpu_mode = (
+        str(getattr(cfg, "device", "")).strip().lower() == "cuda"
+        or bool(getattr(cfg, "enable_gpu_acceleration", False))
+    )
+    model_tier = str(getattr(cfg, "model_tier", "quick")).strip().lower()
+    if gpu_mode:
+        if model_tier in {"quality", "voxtral"}:
+            monitor_memory_warning_mb = 2048.0
+            monitor_memory_critical_mb = 4096.0
+        else:
+            monitor_memory_warning_mb = 1536.0
+            monitor_memory_critical_mb = 3072.0
+    else:
+        monitor_memory_warning_mb = 1024.0
+        monitor_memory_critical_mb = 2048.0
+
     # Initialize async logging to a rotating file
     _alog = AsyncLogger(default_log_dir())
 
     # Start idle-aware monitoring for long-running operation
-    print("[MONITOR] Starting idle-aware monitoring for 24/7 operation...")
+    print(
+        "[MONITOR] Starting idle-aware monitoring for 24/7 operation "
+        f"(warn={monitor_memory_warning_mb:.0f}MB, critical={monitor_memory_critical_mb:.0f}MB)..."
+    )
     monitor = start_idle_monitoring(
         operation_timeout=120.0,        # 2 minutes max for active operations
-        memory_warning_mb=1024.0,       # Warn at 1GB
-        memory_critical_mb=2048.0,      # Critical at 2GB
+        memory_warning_mb=monitor_memory_warning_mb,
+        memory_critical_mb=monitor_memory_critical_mb,
         check_interval=10.0             # Check every 10 seconds
     )
 
@@ -1734,6 +1983,11 @@ def main(argv=None):
     time.sleep(1.0)
     if _has_same_entry_child():
         print(f"[MAIN] Parent process yielding to child runtime (pid={os.getpid()}).")
+        try:
+            if tray:
+                tray.stop()
+        except Exception:
+            pass
         try:
             app.shutdown()
         except Exception:

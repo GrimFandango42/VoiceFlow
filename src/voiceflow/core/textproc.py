@@ -428,6 +428,7 @@ def format_transcript_text(text: str) -> str:
     text = _improve_punctuation(text)
     text = _fix_sentence_breaks(text)
     text = _normalize_numbered_list_layout(text)
+    text = _fix_sentence_capitalization(text)
 
     return text
 
@@ -481,9 +482,12 @@ def format_transcript_for_destination(
         return formatted
 
     profile = infer_destination_profile(destination)
-    long_form = len(formatted) >= 220 or float(audio_duration) >= 7.0
+    # Trigger paragraph shaping earlier so medium-length dictation is easier to scan.
+    long_form = len(formatted) >= 140 or float(audio_duration) >= 5.0
     if long_form and profile != "terminal":
         formatted = _insert_light_paragraph_breaks(formatted)
+        formatted = _rebalance_paragraphs_for_readability(formatted, profile=profile)
+        formatted = _merge_short_paragraphs_for_readability(formatted, profile=profile)
 
     if destination and not bool(destination.get("destination_wrap_enabled", True)):
         return formatted
@@ -544,14 +548,123 @@ def _estimate_wrap_width(destination: Optional[Mapping[str, Any]], profile: str)
 def _insert_light_paragraph_breaks(text: str) -> str:
     updated = text
     updated = re.sub(
-        r"([.!?])\s+(also|however|anyway|next|so|that said|in addition|on the other hand|meanwhile)\b",
+        r"\b(end\s+of\s+(?:topic|option)\s+(?:one|two|three|four|five))\s*[,;:\-]?\s+(and\s+now|now)\b",
+        lambda m: f"{m.group(1)}.\n\n{m.group(2).capitalize()}",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(
+        r"\b(topic\s+(?:one|two|three|four|five)|option\s+(?:one|two|three|four|five))\s+(and\s+now|now\s+let's|let's\s+start)\b",
+        lambda m: f"{m.group(1)}.\n\n{m.group(2).capitalize()}",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(
+        r"([.!?])\s+(also|however|that said|in addition|on the other hand|meanwhile|making that|to make that|that way|and now|now let's|let's start)\b",
+        lambda m: f"{m.group(1)}\n\n{m.group(2).capitalize()}",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(
+        r",\s+(making that|to make that|and now|now let's|let's start)\b",
+        lambda m: f",\n\n{m.group(1).capitalize()}",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(
+        r"\b(next point|another thing|new topic|switching topics)\b[:\s-]*",
+        lambda m: f"\n\n{m.group(1).capitalize()} ",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(
+        r"([.!?])\s+(topic\s+(?:one|two|three|four|five)|option\s+(?:one|two|three|four|five))\b",
         lambda m: f"{m.group(1)}\n\n{m.group(2).capitalize()}",
         updated,
         flags=re.IGNORECASE,
     )
     updated = re.sub(r"\bnew paragraph\b[:\s-]*", "\n\n", updated, flags=re.IGNORECASE)
     updated = re.sub(r"\n{3,}", "\n\n", updated)
-    return updated.strip()
+    # Keep capitalization stable after inserting new blocks.
+    paragraphs = [part.strip() for part in re.split(r"\n{2,}", updated) if part.strip()]
+    if not paragraphs:
+        return updated.strip()
+    paragraphs = [_fix_sentence_capitalization(part) for part in paragraphs]
+    return "\n\n".join(paragraphs)
+
+
+def _rebalance_paragraphs_for_readability(text: str, profile: str) -> str:
+    """Split dense blocks into shorter paragraphs for faster scanning."""
+    parts = [part.strip() for part in re.split(r"\n{2,}", text or "") if part.strip()]
+    if not parts:
+        return (text or "").strip()
+
+    max_sentences = 3 if profile in ("editor", "document") else 2
+    output: list[str] = []
+    for part in parts:
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", part) if s.strip()]
+        if len(sentences) <= max_sentences:
+            output.append(part)
+            continue
+        chunk: list[str] = []
+        for sentence in sentences:
+            chunk.append(sentence)
+            if len(chunk) >= max_sentences:
+                output.append(" ".join(chunk).strip())
+                chunk = []
+        if chunk:
+            output.append(" ".join(chunk).strip())
+    return "\n\n".join(output).strip()
+
+
+def _merge_short_paragraphs_for_readability(text: str, profile: str) -> str:
+    """Merge tiny/connector-only paragraphs back into neighboring blocks."""
+    parts = [part.strip() for part in re.split(r"\n{2,}", text or "") if part.strip()]
+    if len(parts) <= 1:
+        return (text or "").strip()
+
+    short_char_limit = 60 if profile == "chat" else 72
+    short_word_limit = 8
+    preserve_prefixes = (
+        "topic ",
+        "option ",
+        "and now",
+        "now let's",
+        "let's start",
+        "next point",
+        "another thing",
+        "new topic",
+        "switching topics",
+        "making that",
+        "to make that",
+    )
+
+    merged: list[str] = []
+    for part in parts:
+        lower = part.lower()
+        preserve = any(lower.startswith(prefix) for prefix in preserve_prefixes)
+        word_count = len(re.findall(r"\b[\w']+\b", part))
+        connector_start = bool(
+            re.match(r"^(also|so|and|but|then|because|however|meanwhile|that said)\b", lower)
+        )
+        sentence_count = len([s for s in re.split(r"(?<=[.!?])\s+", part) if s.strip()])
+
+        very_short_fragment = len(part) <= short_char_limit and word_count <= short_word_limit
+        tiny_connector_fragment = connector_start and len(part) <= 58 and word_count <= 9
+
+        if merged and not preserve and (very_short_fragment or tiny_connector_fragment):
+            prev = merged[-1]
+            prev_sentence_count = len([s for s in re.split(r"(?<=[.!?])\s+", prev) if s.strip()])
+            # Keep paragraph boundaries when previous block already has multiple sentences.
+            if prev_sentence_count >= 2 and sentence_count >= 1:
+                merged.append(part)
+                continue
+            merged[-1] = f"{prev.rstrip()} {part}".strip()
+            continue
+
+        merged.append(part)
+
+    return "\n\n".join(merged).strip()
 
 
 def _wrap_transcript_blocks(text: str, width: int, profile: str) -> str:
@@ -802,12 +915,19 @@ def _apply_context_corrections(text: str) -> str:
 
 def _fix_sentence_capitalization(text: str) -> str:
     """Ensure sentences start with capital letters."""
-    # Capitalize first word
-    if text:
-        text = text[0].upper() + text[1:]
+    if not text:
+        return text
 
-    # Capitalize after sentence endings
-    text = re.sub(r'([.!?]\s+)([a-z])', lambda m: m.group(1) + m.group(2).upper(), text)
+    # Capitalize first alphabetical character while preserving leading punctuation/quotes.
+    text = re.sub(r"^([^A-Za-z]*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
+
+    # Capitalize after sentence endings (including optional trailing quote/bracket).
+    text = re.sub(r'([.!?][\'"\)\]]*\s+)([a-z])', lambda m: m.group(1) + m.group(2).upper(), text)
+
+    # Capitalize after explicit line breaks.
+    text = re.sub(r'(\n+\s*)([a-z])', lambda m: m.group(1) + m.group(2).upper(), text)
+    # Pronoun normalization.
+    text = re.sub(r"\bi\b", "I", text)
 
     return text
 
@@ -940,7 +1060,39 @@ def _fix_sentence_breaks(text: str) -> str:
     for pattern, replacement in break_patterns:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
 
-    return text
+    return _split_long_run_on_clauses(text)
+
+
+def _split_long_run_on_clauses(text: str) -> str:
+    """Break very long run-on utterances into shorter, readable sentences."""
+    if not text.strip():
+        return text
+
+    cue_re = re.compile(r"(,\s+|\s+)(and then|but|so|because|however|also|then)\b", re.IGNORECASE)
+    rebuilt_parts: list[str] = []
+
+    for part in [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]:
+        words = re.findall(r"\b[\w']+\b", part)
+        # Only split clearly long single-block clauses.
+        interior = part[:-1] if len(part) > 1 else part
+        if len(words) < 24 or re.search(r"[.!?]", interior):
+            rebuilt_parts.append(part)
+            continue
+
+        match = cue_re.search(part)
+        if not match or match.start() < 30:
+            rebuilt_parts.append(part)
+            continue
+
+        head = part[: match.start()].strip(" ,;")
+        tail = part[match.start():].strip(" ,;")
+        if len(re.findall(r"\b[\w']+\b", head)) < 6 or len(re.findall(r"\b[\w']+\b", tail)) < 4:
+            rebuilt_parts.append(part)
+            continue
+        tail = tail[:1].upper() + tail[1:] if tail else tail
+        rebuilt_parts.append(f"{head}. {tail}")
+
+    return "\n\n".join(rebuilt_parts)
 
 
 def _normalize_numbered_list_layout(text: str) -> str:
