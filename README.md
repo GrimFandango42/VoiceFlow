@@ -13,13 +13,15 @@ If a direct link returns `404` right after a release publish, open the latest re
 
 ## Quick Start
 
-1. Launch `VoiceFlow.exe`.
+1. Launch `VoiceFlow-win64.exe` (or `VoiceFlow.exe` inside the portable zip).
 2. Hold `Ctrl+Shift`.
 3. Speak, then release.
 4. Confirm text appears in Notepad/your editor.
 
 If nothing is inserted, open `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`.
 If a popup steals focus during release, VoiceFlow now copies the transcript to clipboard as a fallback.
+
+If transcription stays in `processing/transcribing`, upgrade to the latest release (`v3.1.5+`), which hardens CUDA runtime fallback when required GPU DLLs are missing.
 
 ## Hardware + Model Defaults
 
