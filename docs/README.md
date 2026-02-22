@@ -25,5 +25,5 @@ This is the maintained documentation set for the current runtime.
 
 ## Historical Material
 
-- Archived legacy docs: `../archive/legacy-docs/`
-- Additional archived references: `archive/`
+Historical legacy materials were removed from `main` to keep the open-source surface lean.
+Use git history/tags if you need older implementation references.

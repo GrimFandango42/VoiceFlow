@@ -5,9 +5,11 @@ Hold a hotkey, speak, release, and text is injected into your active app.
 
 ## Download (Windows)
 
-- Executable: `https://github.com/GrimFandango42/VoiceFlow/releases/download/latest-main/VoiceFlow-win64.exe`
-- Portable zip: `https://github.com/GrimFandango42/VoiceFlow/releases/download/latest-main/VoiceFlow-portable-win64.zip`
-- Latest releases: `https://github.com/GrimFandango42/VoiceFlow/releases`
+- Executable (`VoiceFlow-win64.exe`): `https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-win64.exe`
+- Portable zip (`VoiceFlow-portable-win64.zip`): `https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-portable-win64.zip`
+- Latest release page: `https://github.com/GrimFandango42/VoiceFlow/releases/latest`
+
+If a direct link returns `404` right after a release publish, open the latest release page and download the asset manually.
 
 ## Quick Start
 

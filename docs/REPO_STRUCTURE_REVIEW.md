@@ -15,16 +15,16 @@ Date: 2026-02-22
 - `tests/runtime/` - maintained regression suite
 - `docs/` - current onboarding + technical docs
 
-## Archived/Removed Surface
+## Removed Surface
 
-The following categories were moved out of the active development path:
+The following categories were removed from the active development path:
 
 - Assistant/framework scaffolding files
 - Spec-planning artifacts (`specs/`)
 - Legacy runtime/test scripts and deprecated docs
 - Unused model/stability modules not referenced by active runtime
 
-Historical material remains under `archive/`.
+Historical implementation details can be recovered from git history if needed.
 
 ## Why this structure
 
