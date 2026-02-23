@@ -15,6 +15,7 @@ import logging
 import time
 import types
 import sys
+from pathlib import Path
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -109,6 +110,34 @@ class TestASREngineBasics:
         monkeypatch.setitem(sys.modules, "torch", fake_torch)
 
         assert asr_mod._cuda_runtime_ready() is False
+
+    def test_probe_external_torch_dirs_includes_meipass_for_onefile(self, monkeypatch, tmp_path):
+        """Frozen one-file runs should probe sys._MEIPASS torch/lib for CUDA DLL discovery."""
+        from voiceflow.core import asr_engine as asr_mod
+
+        meipass_root = tmp_path / "_MEI12345"
+        meipass_torch_lib = meipass_root / "torch" / "lib"
+        meipass_torch_lib.mkdir(parents=True, exist_ok=True)
+        for dll_name in ("cudnn_ops64_9.dll", "cublas64_12.dll"):
+            (meipass_torch_lib / dll_name).write_bytes(b"")
+
+        fake_exe_dir = tmp_path / "app"
+        fake_exe_dir.mkdir(parents=True, exist_ok=True)
+        fake_exe = fake_exe_dir / "VoiceFlow.exe"
+        fake_exe.write_bytes(b"")
+
+        monkeypatch.setattr(asr_mod.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(asr_mod.sys, "_MEIPASS", str(meipass_root), raising=False)
+        monkeypatch.setattr(asr_mod.sys, "executable", str(fake_exe), raising=False)
+
+        probed = asr_mod._probe_external_torch_lib_dirs()
+        assert meipass_torch_lib in probed
+
+        added_paths: list[Path] = []
+        monkeypatch.setattr(asr_mod, "_add_dll_search_path", lambda path: added_paths.append(path))
+        registered = asr_mod._register_external_cuda_runtime_path(["cudnn_ops64_9.dll", "cublas64_12.dll"])
+        assert registered is True
+        assert meipass_torch_lib in added_paths
 
 
 class TestASREngineTranscription:
@@ -253,6 +282,20 @@ class TestDistilWhisperModel:
 
         config = MODEL_CONFIGS["distil-large-v3"]
         assert "Systran" in config.model_id or "distil" in config.model_id.lower()
+
+        balanced = MODEL_CONFIGS["distil-large-v3.5"]
+        assert balanced.backend == "faster-whisper"
+        assert balanced.model_id == "Systran/faster-distil-whisper-large-v3"
+
+    def test_resolve_model_ref_maps_distil_v35_repo_to_faster_whisper_alias(self, monkeypatch, tmp_path):
+        """Legacy v3.5 model IDs should be mapped to a faster-whisper compatible repo."""
+        from voiceflow.core import asr_engine as asr_mod
+        from voiceflow.core.asr_engine import FasterWhisperBackend
+
+        monkeypatch.setattr(asr_mod.Path, "home", classmethod(lambda cls: tmp_path))
+        resolved = FasterWhisperBackend._resolve_model_ref("distil-whisper/distil-large-v3.5")
+
+        assert resolved == "Systran/faster-distil-whisper-large-v3"
 
     def test_quick_tier_uses_cpu_low_latency_model(self):
         """Test that QUICK tier uses low-latency CPU model routing"""

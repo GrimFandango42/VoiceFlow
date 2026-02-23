@@ -78,6 +78,22 @@ def _probe_external_torch_lib_dirs() -> list[Path]:
         except Exception:
             pass
 
+        # PyInstaller one-file layout extracts binaries into sys._MEIPASS at runtime.
+        # Include this explicitly so CUDA DLL probing works for released one-file EXEs.
+        try:
+            meipass = getattr(sys, "_MEIPASS", None)
+            if meipass:
+                meipass_dir = Path(str(meipass))
+                candidates.extend(
+                    [
+                        meipass_dir / "torch" / "lib",
+                        meipass_dir / "_internal" / "torch" / "lib",
+                        meipass_dir,
+                    ]
+                )
+        except Exception:
+            pass
+
     # Active interpreter environment (source mode).
     candidates.append(Path(sys.prefix) / "Lib" / "site-packages" / "torch" / "lib")
 
@@ -267,9 +283,9 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
     ),
     "distil-large-v3.5": ModelConfig(
         name="Distil Large v3.5",
-        model_id="distil-whisper/distil-large-v3.5",
+        model_id="Systran/faster-distil-whisper-large-v3",
         backend="faster-whisper",
-        description="Latest distil model (March 2025), best speed/quality",
+        description="Balanced distil profile on faster-whisper",
         size_mb=1500,
         languages=["en"],
     ),
@@ -330,6 +346,12 @@ TIER_MODELS: Dict[ModelTier, str] = {
     ModelTier.BALANCED: "distil-large-v3.5",
     ModelTier.QUALITY: "large-v3",
     ModelTier.VOXTRAL: "voxtral-3b",
+}
+
+# Compatibility aliases for model IDs configured before runtime backend constraints changed.
+# faster-whisper requires a CTranslate2 model directory containing model.bin.
+FASTER_WHISPER_MODEL_ALIASES: Dict[str, str] = {
+    "distil-whisper/distil-large-v3.5": "Systran/faster-distil-whisper-large-v3",
 }
 
 
@@ -476,10 +498,16 @@ class FasterWhisperBackend(ASRBackend):
     @staticmethod
     def _resolve_model_ref(model_id: str) -> str:
         """Prefer pre-fetched local model directory when available."""
-        local_prefetch = Path.home() / ".voiceflow" / "models" / model_id.replace("/", "__")
-        if local_prefetch.exists():
-            return str(local_prefetch)
-        return model_id
+        resolved_id = FASTER_WHISPER_MODEL_ALIASES.get(model_id, model_id)
+        candidate_ids = [resolved_id]
+        if resolved_id != model_id:
+            candidate_ids.append(model_id)
+
+        for candidate_id in candidate_ids:
+            local_prefetch = Path.home() / ".voiceflow" / "models" / candidate_id.replace("/", "__")
+            if local_prefetch.exists():
+                return str(local_prefetch)
+        return resolved_id
 
     def transcribe(self, audio: np.ndarray) -> TranscriptionResult:
         if not self.is_loaded():

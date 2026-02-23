@@ -234,6 +234,21 @@ _CHAT_TITLE_HINTS = (
     "discord",
 )
 
+_LIGHT_TYPO_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bteh\b", re.IGNORECASE), "the"),
+    (re.compile(r"\badn\b", re.IGNORECASE), "and"),
+    (re.compile(r"\brecieve\b", re.IGNORECASE), "receive"),
+    (re.compile(r"\bseperate\b", re.IGNORECASE), "separate"),
+    (re.compile(r"\bdefinately\b", re.IGNORECASE), "definitely"),
+    (re.compile(r"\bwierd\b", re.IGNORECASE), "weird"),
+    (re.compile(r"\bthier\b", re.IGNORECASE), "their"),
+    (re.compile(r"\bdont\b", re.IGNORECASE), "don't"),
+    (re.compile(r"\bcant\b", re.IGNORECASE), "can't"),
+    (re.compile(r"\bwont\b", re.IGNORECASE), "won't"),
+    (re.compile(r"\bim\b", re.IGNORECASE), "I'm"),
+    (re.compile(r"\bive\b", re.IGNORECASE), "I've"),
+)
+
 
 def _apply_regex_rules(text: str, rules: tuple[tuple[re.Pattern[str], str], ...]) -> str:
     updated = text
@@ -498,9 +513,14 @@ def format_transcript_for_destination(
     return _wrap_transcript_blocks(formatted, wrap_width, profile)
 
 
-def normalize_context_terms(text: str) -> str:
+def normalize_context_terms(
+    text: str,
+    *,
+    aggressive: bool = True,
+    light: bool = True,
+) -> str:
     """Apply context-aware term normalization without full formatting."""
-    return _apply_context_corrections(text or "")
+    return _apply_context_corrections(text or "", aggressive=aggressive, light=light)
 
 
 def _estimate_wrap_width(destination: Optional[Mapping[str, Any]], profile: str) -> int:
@@ -713,143 +733,172 @@ def _wrap_transcript_blocks(text: str, width: int, profile: str) -> str:
     return "\n\n".join(wrapped_blocks)
 
 
-def _apply_context_corrections(text: str) -> str:
+def _apply_light_typo_corrections(text: str) -> str:
+    """Cheap typo cleanup pass intended to be safe for real-time dictation."""
+    if not text:
+        return text
+    updated = _apply_regex_rules(text, _LIGHT_TYPO_RULES)
+    updated = re.sub(
+        r"\b(the|a|an|and|to|of|in|is|it|that|for)\b(?:\s+\1\b)+",
+        lambda m: m.group(1),
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(r"[ \t]{2,}", " ", updated)
+    return updated
+
+
+def _apply_context_corrections(
+    text: str,
+    *,
+    aggressive: bool = True,
+    light: bool = True,
+) -> str:
     """Apply lightweight context-based corrections for high-frequency confusions."""
     if not text:
         return text
 
-    # Common substitution in current test flow: "long returns" -> "long utterances"
-    text = re.sub(r"\blong returns?\b", "long utterances", text, flags=re.IGNORECASE)
-    text = re.sub(r"\blong the turns?\b", "long utterances", text, flags=re.IGNORECASE)
-    text = re.sub(r"\blong turrets?\b", "long utterances", text, flags=re.IGNORECASE)
-    text = re.sub(r"\blong utterance\b", "long utterances", text, flags=re.IGNORECASE)
-    text = re.sub(r"\blong returns?\s+is still slowed down\b", "long utterances still slow down", text, flags=re.IGNORECASE)
-    text = re.sub(r"\blong returns?\s+is still slow down\b", "long utterances still slow down", text, flags=re.IGNORECASE)
-    text = re.sub(r"\blong utterances?\s+is still slowed down\b", "long utterances still slow down", text, flags=re.IGNORECASE)
-    text = re.sub(r"\blong utterances?\s+is still slow down\b", "long utterances still slow down", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bis still slow down\b", "still slows down", text, flags=re.IGNORECASE)
-    text = re.sub(r"\butterances still slows down\b", "utterances still slow down", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bwhether today is\b", "weather today is", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bwhether today'?s\b", "weather today's", text, flags=re.IGNORECASE)
-    # Technical vocabulary normalization (accent-sensitive coding/QC terms)
-    text = re.sub(r"\bpidentic\b", "Pydantic", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bbidanetic\b", "Pydantic", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bbidanticb2\b", "Pydantic v2", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b(bidan[\s-]*tec|pydan[\s-]*tic)\s*v[\s-]*2\b", "Pydantic v2", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bpython[\s-]*async[\.\s-]*i\.?o\.?\b", "Python asyncio", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bsqo[\s-]*alchemy\b", "SQLAlchemy", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bsql[\s-]*alchemy\b", "SQLAlchemy", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bsql[\s-]*halchemy\b", "SQLAlchemy", text, flags=re.IGNORECASE)
-    text = re.sub(r"\balambic\b", "Alembic", text, flags=re.IGNORECASE)
-    text = re.sub(r"\baimbic\b", "Alembic", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bpost[\s-]*gra[\s-]*sql\b", "PostgreSQL", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bpostgres[\s-]*sql\b", "PostgreSQL", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bpostgres,\s*sql\b", "PostgreSQL", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bPostgreSQL[\s-]*16\b", "PostgreSQL 16", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bpostgres,\s*sql[\s-]*16\b", "PostgreSQL 16", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bfast[\s-]*api\b", "FastAPI", text, flags=re.IGNORECASE)
-    text = re.sub(r"\breddit\b", "Redis", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bwebsite[\s,.-]*amity\b", "WebSocket telemetry", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bfarma[\s-]*qc\b", "pharma QC", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bkappa\b", "CAPA", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bkapaos\b", "CAPA, OOS", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bCAPA\s+oos\b", "CAPA, OOS", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bCAPA\s+and\s+os events\b", "CAPA and OOS events", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bpart of when compliant\b", "Part 11 compliant", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bpart 11 compliant\b", "Part 11 compliant", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bkloa\b", "ALCOA", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b121[\s,.-]*cfrr?[\s-]*11\b", "21 CFR Part 11", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bcfrr?[\s-]*11\b", "CFR Part 11", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bmqtt+t*\b", "MQTT", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bmqtd\b", "MQTT", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bbeige and\b", "Bayesian", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bevents[-\s]*versing\b", "event-sourcing", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bewma elements\b", "EWMA limits", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bwwma\b", "EWMA", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bprocess drifts\b", "process drift", text, flags=re.IGNORECASE)
-    text = re.sub(r"\broll-based\b", "role-based", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bruling z score\b", "rolling z-score", text, flags=re.IGNORECASE)
-    text = re.sub(r"\brolling c score\b", "rolling z-score", text, flags=re.IGNORECASE)
-    text = re.sub(r"\binvasion change\b", "Bayesian change-point", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bpublished retained\b", "publish retained", text, flags=re.IGNORECASE)
-    text = re.sub(r"\ball indicates\b", "all indicate", text, flags=re.IGNORECASE)
-    # AI ecosystem naming corrections: "cloud" is frequently a mis-hear for "Claude".
-    # Keep this context-aware to avoid breaking real cloud-provider references.
-    text = re.sub(r"\bcloud[\s-]*code\b", "Claude Code", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bclaude[\s-]*code\b", "Claude Code", text, flags=re.IGNORECASE)
-    text = re.sub(r"\banthropics?\s+cloud\b", "Anthropic's Claude", text, flags=re.IGNORECASE)
-    text = re.sub(r"\ban[\s-]*traffic\s+cloud\b", "Anthropic Claude", text, flags=re.IGNORECASE)
-    text = re.sub(r"\banth[\s-]*traffic\s+cloud\b", "Anthropic Claude", text, flags=re.IGNORECASE)
-    text = re.sub(r"\ban[\s-]*traffic\b", "Anthropic", text, flags=re.IGNORECASE)
-    text = re.sub(
-        r"\bdeployed?\s+a\s+google\s+cloud\s+and\s+aws\b",
-        "deploy to Google Cloud and AWS",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bdeployed?\s+to\s+a\s+google\s+cloud\s+and\s+aws\b",
-        "deploy to Google Cloud and AWS",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bagent\s+decoding\s+where\s+close\b",
-        "agentic coding workflows",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bagent\s+decoding\b",
-        "agentic coding",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(r"\bwordflows\b", "workflows", text, flags=re.IGNORECASE)
-    text = re.sub(
-        r"\bi\s+declare\s+the\s+google\s+cloud\s+and\s+aws\b",
-        "I deploy to Google Cloud and AWS",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bi\s+declare\s+google\s+cloud\s+and\s+aws\b",
-        "I deploy to Google Cloud and AWS",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\beach\s+end\s+encoding\s+workflows\b",
-        "agentic coding workflows",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bdeployed?\s+a\s+google\s+cloud\b",
-        "deploy to Google Cloud",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bdeploy(?:ed)?\s+the\s+google\s+cloud\b",
-        "deploy to Google Cloud",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bapply\s+to\s+google\s+cloud\s+and\s+aws\b",
-        "deploy to Google Cloud and AWS",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(r"\bterraforce\b", "Terraform", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bews\b", "AWS", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bwinter\s+reform\b", "Terraform", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bagendic\b", "agentic", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bfastapi\s+injection\s+pipeline\b", "FastAPI ingestion pipeline", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bqtt[\s-]*related\b", "MQTT retained", text, flags=re.IGNORECASE)
+    if light:
+        text = _apply_light_typo_corrections(text)
 
-    # Sentence-level whether/weather disambiguation.
+    # Common substitution in current test flow: "long returns" -> "long utterances"
+    if aggressive:
+        text = re.sub(r"\blong returns?\b", "long utterances", text, flags=re.IGNORECASE)
+        text = re.sub(r"\blong the turns?\b", "long utterances", text, flags=re.IGNORECASE)
+        text = re.sub(r"\blong turrets?\b", "long utterances", text, flags=re.IGNORECASE)
+        text = re.sub(r"\blong utterance\b", "long utterances", text, flags=re.IGNORECASE)
+        text = re.sub(r"\blong returns?\s+is still slowed down\b", "long utterances still slow down", text, flags=re.IGNORECASE)
+        text = re.sub(r"\blong returns?\s+is still slow down\b", "long utterances still slow down", text, flags=re.IGNORECASE)
+        text = re.sub(r"\blong utterances?\s+is still slowed down\b", "long utterances still slow down", text, flags=re.IGNORECASE)
+        text = re.sub(r"\blong utterances?\s+is still slow down\b", "long utterances still slow down", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bis still slow down\b", "still slows down", text, flags=re.IGNORECASE)
+        text = re.sub(r"\butterances still slows down\b", "utterances still slow down", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwhether today is\b", "weather today is", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwhether today'?s\b", "weather today's", text, flags=re.IGNORECASE)
+        # Technical vocabulary normalization (accent-sensitive coding/QC terms)
+        text = re.sub(r"\bpidentic\b", "Pydantic", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bbidanetic\b", "Pydantic", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bbidanticb2\b", "Pydantic v2", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b(bidan[\s-]*tec|pydan[\s-]*tic)\s*v[\s-]*2\b", "Pydantic v2", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bpython[\s-]*async[\.\s-]*i\.?o\.?\b", "Python asyncio", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bsqo[\s-]*alchemy\b", "SQLAlchemy", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bsql[\s-]*alchemy\b", "SQLAlchemy", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bsql[\s-]*halchemy\b", "SQLAlchemy", text, flags=re.IGNORECASE)
+        text = re.sub(r"\balambic\b", "Alembic", text, flags=re.IGNORECASE)
+        text = re.sub(r"\baimbic\b", "Alembic", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bpost[\s-]*gra[\s-]*sql\b", "PostgreSQL", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bpostgres[\s-]*sql\b", "PostgreSQL", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bpostgres,\s*sql\b", "PostgreSQL", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bPostgreSQL[\s-]*16\b", "PostgreSQL 16", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bpostgres,\s*sql[\s-]*16\b", "PostgreSQL 16", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bfast[\s-]*api\b", "FastAPI", text, flags=re.IGNORECASE)
+        text = re.sub(r"\breddit\b", "Redis", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwebsite[\s,.-]*amity\b", "WebSocket telemetry", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bfarma[\s-]*qc\b", "pharma QC", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bkappa\b", "CAPA", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bkapaos\b", "CAPA, OOS", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bCAPA\s+oos\b", "CAPA, OOS", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bCAPA\s+and\s+os events\b", "CAPA and OOS events", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bpart of when compliant\b", "Part 11 compliant", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bpart 11 compliant\b", "Part 11 compliant", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bkloa\b", "ALCOA", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b121[\s,.-]*cfrr?[\s-]*11\b", "21 CFR Part 11", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bcfrr?[\s-]*11\b", "CFR Part 11", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bmqtt+t*\b", "MQTT", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bmqtd\b", "MQTT", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bbeige and\b", "Bayesian", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bevents[-\s]*versing\b", "event-sourcing", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bewma elements\b", "EWMA limits", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwwma\b", "EWMA", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bprocess drifts\b", "process drift", text, flags=re.IGNORECASE)
+        text = re.sub(r"\broll-based\b", "role-based", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bruling z score\b", "rolling z-score", text, flags=re.IGNORECASE)
+        text = re.sub(r"\brolling c score\b", "rolling z-score", text, flags=re.IGNORECASE)
+        text = re.sub(r"\binvasion change\b", "Bayesian change-point", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bpublished retained\b", "publish retained", text, flags=re.IGNORECASE)
+        text = re.sub(r"\ball indicates\b", "all indicate", text, flags=re.IGNORECASE)
+    if aggressive:
+        # AI ecosystem naming corrections: "cloud" is frequently a mis-hear for "Claude".
+        # Keep this context-aware to avoid breaking real cloud-provider references.
+        text = re.sub(r"\bcloud[\s-]*code\b", "Claude Code", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bclaude[\s-]*code\b", "Claude Code", text, flags=re.IGNORECASE)
+        text = re.sub(r"\banthropics?\s+cloud\b", "Anthropic's Claude", text, flags=re.IGNORECASE)
+        text = re.sub(r"\ban[\s-]*traffic\s+cloud\b", "Anthropic Claude", text, flags=re.IGNORECASE)
+        text = re.sub(r"\banth[\s-]*traffic\s+cloud\b", "Anthropic Claude", text, flags=re.IGNORECASE)
+        text = re.sub(r"\ban[\s-]*traffic\b", "Anthropic", text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"\bdeployed?\s+a\s+google\s+cloud\s+and\s+aws\b",
+            "deploy to Google Cloud and AWS",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\bdeployed?\s+to\s+a\s+google\s+cloud\s+and\s+aws\b",
+            "deploy to Google Cloud and AWS",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\bagent\s+decoding\s+where\s+close\b",
+            "agentic coding workflows",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\bagent\s+decoding\b",
+            "agentic coding",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"\bwordflows\b", "workflows", text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"\bi\s+declare\s+the\s+google\s+cloud\s+and\s+aws\b",
+            "I deploy to Google Cloud and AWS",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\bi\s+declare\s+google\s+cloud\s+and\s+aws\b",
+            "I deploy to Google Cloud and AWS",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\beach\s+end\s+encoding\s+workflows\b",
+            "agentic coding workflows",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\bdeployed?\s+a\s+google\s+cloud\b",
+            "deploy to Google Cloud",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\bdeploy(?:ed)?\s+the\s+google\s+cloud\b",
+            "deploy to Google Cloud",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\bapply\s+to\s+google\s+cloud\s+and\s+aws\b",
+            "deploy to Google Cloud and AWS",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"\bterraforce\b", "Terraform", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bews\b", "AWS", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwinter\s+reform\b", "Terraform", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bagendic\b", "agentic", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bfastapi\s+injection\s+pipeline\b", "FastAPI ingestion pipeline", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bqtt[\s-]*related\b", "MQTT retained", text, flags=re.IGNORECASE)
+
+    return _apply_sentence_level_disambiguation(text, aggressive=aggressive)
+
+
+def _apply_sentence_level_disambiguation(text: str, *, aggressive: bool) -> str:
+    """Apply sentence-wise context disambiguation and term normalization."""
     parts = re.split(r"([.!?\n])", text)
     rebuilt: list[str] = []
     for i in range(0, len(parts), 2):
@@ -869,44 +918,45 @@ def _apply_context_corrections(text: str) -> str:
         elif whether_context and not weather_context:
             sentence = re.sub(r"\bweather\b", "whether", sentence, flags=re.IGNORECASE)
 
-        # Claude vs cloud disambiguation for coding-assistant context.
-        claude_context = any(
-            phrase in lower
-            for phrase in [
-                "anthropic",
-                "claude",
-                "claude code",
-                "coding assistant",
-                "llm",
-                "prompt",
-                "agent",
-                "cursor",
-                "gemini",
-                "chatgpt",
-                "copilot",
-                "vs code",
-            ]
-        )
-        infra_cloud_context = any(
-            phrase in lower
-            for phrase in [
-                "aws",
-                "azure",
-                "gcp",
-                "google cloud",
-                "icloud",
-                "cloud provider",
-                "cloud storage",
-                "kubernetes",
-                "terraform",
-                "vpc",
-                "rds",
-                "eks",
-            ]
-        )
-        if claude_context and not infra_cloud_context:
-            sentence = re.sub(r"\bcloud\b", "Claude", sentence, flags=re.IGNORECASE)
-            sentence = re.sub(r"\bcloud's\b", "Claude's", sentence, flags=re.IGNORECASE)
+        if aggressive:
+            # Claude vs cloud disambiguation for coding-assistant context.
+            claude_context = any(
+                phrase in lower
+                for phrase in [
+                    "anthropic",
+                    "claude",
+                    "claude code",
+                    "coding assistant",
+                    "llm",
+                    "prompt",
+                    "agent",
+                    "cursor",
+                    "gemini",
+                    "chatgpt",
+                    "copilot",
+                    "vs code",
+                ]
+            )
+            infra_cloud_context = any(
+                phrase in lower
+                for phrase in [
+                    "aws",
+                    "azure",
+                    "gcp",
+                    "google cloud",
+                    "icloud",
+                    "cloud provider",
+                    "cloud storage",
+                    "kubernetes",
+                    "terraform",
+                    "vpc",
+                    "rds",
+                    "eks",
+                ]
+            )
+            if claude_context and not infra_cloud_context:
+                sentence = re.sub(r"\bcloud\b", "Claude", sentence, flags=re.IGNORECASE)
+                sentence = re.sub(r"\bcloud's\b", "Claude's", sentence, flags=re.IGNORECASE)
 
         rebuilt.append(sentence + sep)
 

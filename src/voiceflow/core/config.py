@@ -90,6 +90,8 @@ class Config:
     # Quality improvements without speed impact
     enable_smart_prompting: bool = True  # Adaptive prompting for better accuracy
     use_enhanced_post_processing: bool = True  # Smart text cleaning
+    enable_light_typo_correction: bool = True  # Low-latency typo/spelling cleanup before injection
+    enable_aggressive_context_corrections: bool = False  # Keep high-risk phrase rewrites opt-in
     destination_aware_formatting: bool = True  # Adjust output layout by destination app/window
     destination_wrap_enabled: bool = True  # Wrap long output for target window width
     destination_default_chars: int = 78  # Generic readability width
@@ -146,6 +148,7 @@ class Config:
     setup_completed: bool = False  # first-run setup gate for visual defaults wizard
     show_setup_on_startup: bool = True  # allow users to re-open setup automatically on launch
     setup_profile: str = "recommended"  # last selected setup profile
+    setup_flow_version: int = 3  # prompt setup once when onboarding flow is upgraded
 
     # Long sentence optimizations (for 3+ second recordings)
     chunk_size_seconds: float = 5.0  # Process in 5-second chunks for long audio

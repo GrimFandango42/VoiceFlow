@@ -103,13 +103,28 @@ def load_config(defaults: Config) -> Config:
         if _apply_performance_migrations(defaults):
             save_config(defaults)
         return defaults
-    if "setup_completed" not in data:
-        # Existing installs should keep current behavior and opt into the wizard manually from tray.
-        defaults.setup_completed = True
     # Apply known fields only
     for field in asdict(defaults).keys():
         if field in data:
             setattr(defaults, field, data[field])
+
+    required_setup_flow_version = int(
+        getattr(getattr(Config, "__dataclass_fields__", {}).get("setup_flow_version"), "default", 1)
+    )
+    try:
+        saved_setup_flow_version = int(data.get("setup_flow_version", 0) or 0)
+    except Exception:
+        saved_setup_flow_version = 0
+    setup_markers_missing = "setup_completed" not in data
+    setup_flow_stale = saved_setup_flow_version < required_setup_flow_version
+
+    if setup_markers_missing or setup_flow_stale:
+        # Prompt setup once when onboarding markers are missing or flow version changed.
+        defaults.setup_completed = False
+        defaults.show_setup_on_startup = True
+        defaults.setup_profile = str(getattr(defaults, "setup_profile", "") or "recommended")
+        defaults.setup_flow_version = required_setup_flow_version
+
     if _apply_performance_migrations(defaults):
         save_config(defaults)
     return defaults

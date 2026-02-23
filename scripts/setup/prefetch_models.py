@@ -25,27 +25,21 @@ class ModelCandidate:
 
 MODEL_CANDIDATES: List[ModelCandidate] = [
     ModelCandidate(
-        repo_id="distil-whisper/distil-large-v3.5",
-        est_size_gb=1.6,
-        priority=1,
-        note="Balanced speed/accuracy baseline for fast local dictation",
-    ),
-    ModelCandidate(
         repo_id="Systran/faster-distil-whisper-large-v3",
         est_size_gb=1.5,
-        priority=2,
-        note="Quick fallback with strong realtime performance",
+        priority=1,
+        note="Balanced faster-whisper baseline for fast local dictation",
     ),
     ModelCandidate(
         repo_id="openai/whisper-large-v3-turbo",
         est_size_gb=3.2,
-        priority=3,
+        priority=2,
         note="High-quality Whisper tier when accuracy bar is strict",
     ),
     ModelCandidate(
         repo_id="nvidia/parakeet-tdt-0.6b-v2",
         est_size_gb=2.0,
-        priority=4,
+        priority=3,
         note="Fast non-Whisper option for comparative quality testing",
     ),
 ]
@@ -157,4 +151,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

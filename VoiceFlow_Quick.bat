@@ -4,6 +4,10 @@
 
 cd /d "%~dp0"
 
+:: Clean stale VoiceFlow runtimes before relaunching.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\setup\stop_voiceflow_processes.ps1" -Quiet >nul 2>&1
+timeout /t 1 /nobreak >nul
+
 :: Python runtime selection:
 :: 1) .venv-gpu (preferred for CUDA retest)
 :: 2) venv

@@ -25,5 +25,11 @@ launcher = scriptDir & "\src\voiceflow\ui\launcher_silent.pyw"
 srcDir = scriptDir & "\src"
 WshShell.CurrentDirectory = srcDir
 
+' Clean stale VoiceFlow runtimes before relaunching.
+cleanupScript = scriptDir & "\scripts\setup\stop_voiceflow_processes.ps1"
+killCmd = "powershell -NoProfile -ExecutionPolicy Bypass -File """ & cleanupScript & """ -Quiet"
+WshShell.Run killCmd, 0, True
+WScript.Sleep 800
+
 ' Run launcher with no console window
 WshShell.Run """" & pythonw & """ """ & launcher & """", 0, False

@@ -313,6 +313,7 @@ try:
         record_transcription_event as visual_record_transcription_event,
         update_audio_level as visual_update_audio_level,
         update_audio_features as visual_update_audio_features,
+        set_dock_enabled as visual_set_dock_enabled,
     )
     VISUAL_INDICATORS_AVAILABLE = True
 except ImportError:
@@ -328,6 +329,7 @@ except ImportError:
             pass
     def visual_update_audio_level(level): pass
     def visual_update_audio_features(features): pass
+    def visual_set_dock_enabled(enabled): pass
 
 
 class EnhancedTranscriptionManager:
@@ -919,6 +921,13 @@ class EnhancedApp:
         context["destination_editor_chars"] = int(getattr(self.cfg, "destination_editor_chars", 88))
         return context
 
+    def _normalize_context_terms_runtime(self, text: str) -> str:
+        return normalize_context_terms(
+            text,
+            aggressive=bool(getattr(self.cfg, "enable_aggressive_context_corrections", False)),
+            light=bool(getattr(self.cfg, "enable_light_typo_correction", True)),
+        )
+
     def wait_for_model(self, timeout: float = 60.0) -> bool:
         """Wait for model to be ready"""
         if self._model_ready:
@@ -984,7 +993,7 @@ class EnhancedApp:
             # Prefer fast ASR path, but always fallback so live flush does not silently skip.
             engine = self.asr_fast if (self.asr_fast and self._fast_model_ready) else self.asr
             text = engine.transcribe(segment)
-            text = normalize_context_terms(text)
+            text = self._normalize_context_terms_runtime(text)
             destination_context = self._destination_format_context()
             destination_profile = infer_destination_profile(destination_context)
             effective_code_mode = bool(self.code_mode and destination_profile in {"editor", "terminal"})
@@ -1675,7 +1684,7 @@ class EnhancedApp:
 
             # Apply basic processing
             postprocess_start = time.perf_counter()
-            text = normalize_context_terms(text)
+            text = self._normalize_context_terms_runtime(text)
             destination_context = self._destination_format_context()
             destination_profile = infer_destination_profile(destination_context)
             effective_code_mode = bool(self.code_mode and destination_profile in {"editor", "terminal"})
@@ -2010,6 +2019,18 @@ def main(argv=None):
     setup_saved, _setup_restart_required = maybe_run_startup_setup(cfg)
     if setup_saved:
         print("[SETUP] Saved startup defaults from setup wizard.")
+    else:
+        skip_setup_env = str(os.environ.get("VOICEFLOW_SKIP_SETUP_UI", "")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        setup_incomplete = not bool(getattr(cfg, "setup_completed", False))
+        startup_prompt_enabled = bool(getattr(cfg, "show_setup_on_startup", True))
+        if setup_incomplete and startup_prompt_enabled and not skip_setup_env:
+            print("[SETUP] Startup setup was not completed. Exiting before runtime launch.")
+            return 0
 
     gpu_mode = (
         str(getattr(cfg, "device", "")).strip().lower() == "cuda"
@@ -2029,6 +2050,7 @@ def main(argv=None):
 
     # Initialize async logging to a rotating file
     _alog = AsyncLogger(default_log_dir())
+    runtime_log = _alog.get()
 
     # Start idle-aware monitoring for long-running operation
     print(
@@ -2068,20 +2090,38 @@ def main(argv=None):
     # Enhanced tray support with visual indicators
     tray = None
     if cfg.use_tray:
+        runtime_log.info("tray_start_attempt controller=enhanced")
         try:
             tray = EnhancedTrayController(app)
             app.tray_controller = tray  # Connect to app for status updates
             tray.start()
             print("Enhanced tray with visual indicators started.")
+            runtime_log.info("tray_started controller=enhanced")
         except Exception as e:
             print(f"Enhanced tray failed to start: {e}")
+            runtime_log.exception("tray_start_failed controller=enhanced")
             # Fallback to basic tray
             try:
                 tray = TrayController(app)
                 tray.start()
                 print("Basic tray started.")
+                runtime_log.info("tray_started controller=basic")
             except Exception as e2:
                 print(f"Basic tray also failed: {e2}")
+                runtime_log.exception("tray_start_failed controller=basic")
+    else:
+        runtime_log.info("tray_disabled_by_config")
+
+    # Keep dock feedback alive even if tray startup fails.
+    if not tray and app.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+        try:
+            from voiceflow.ui.visual_indicators import set_dock_enabled
+
+            dock_enabled = bool(getattr(cfg, "visual_dock_enabled", True))
+            set_dock_enabled(dock_enabled)
+            runtime_log.info("dock_started_without_tray enabled=%s", dock_enabled)
+        except Exception:
+            runtime_log.exception("dock_start_without_tray_failed")
 
     # Enhanced hotkey toggles with better feedback
     def toggle_code_mode():
@@ -2102,10 +2142,19 @@ def main(argv=None):
         print(f"[CONFIG] After-paste Enter: {state}")
         save_config(app.cfg)
 
-    # Register hotkeys
-    keyboard.add_hotkey('ctrl+alt+c', toggle_code_mode, suppress=False)
-    keyboard.add_hotkey('ctrl+alt+p', toggle_injection, suppress=False)
-    keyboard.add_hotkey('ctrl+alt+enter', toggle_enter, suppress=False)
+    def _register_hotkey(chord: str, callback: callable, label: str) -> bool:
+        try:
+            keyboard.add_hotkey(chord, callback, suppress=False)
+            runtime_log.info("hotkey_registered chord=%s label=%s", chord, label)
+            return True
+        except Exception:
+            runtime_log.exception("hotkey_register_failed chord=%s label=%s", chord, label)
+            return False
+
+    # Register config hotkeys (best-effort; failures should not block app startup).
+    _register_hotkey('ctrl+alt+c', toggle_code_mode, "toggle_code_mode")
+    _register_hotkey('ctrl+alt+p', toggle_injection, "toggle_injection")
+    _register_hotkey('ctrl+alt+enter', toggle_enter, "toggle_enter")
 
     # Enhanced PTT listener with tail-end buffer
     listener = EnhancedPTTHotkeyListener(

@@ -46,6 +46,33 @@ A:
 3. Keep one active VoiceFlow instance.
 4. Retry with a short and then long sample to compare timing.
 
+## Q: Setup wizard only lets me run hardware check first. Is that expected?
+
+A:
+
+Yes. In startup flow, Step 1 is intentionally required before Step 2:
+
+1. Click `Step 1: Run Hardware Check (Required)`.
+2. Wait for the check to complete.
+3. Pick `Recommended`, `CPU Compatible`, or `GPU Balanced`.
+4. Click `Save And Launch`.
+
+Step 2 controls are locked/dimmed until Step 1 completes.
+
+Visual reference:
+
+![Setup Step 1 required](../../assets/setup-startup-step1-required.png)
+![Setup Step 2 unlocked](../../assets/setup-startup-step2-unlocked.png)
+
+## Q: Transcription is fast but quality/formatting looks rough.
+
+A:
+
+1. Keep light typo cleanup enabled (`enable_light_typo_correction=true`).
+2. Keep aggressive context rewrites off unless needed (`enable_aggressive_context_corrections=false`).
+3. Verify destination-aware formatting is on (`destination_aware_formatting=true`).
+4. Use `Correction Review` for recurring misses and run daily learning.
+
 ## Q: How do I improve recognition for my accent or repeated terms?
 
 A:

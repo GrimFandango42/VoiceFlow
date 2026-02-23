@@ -5,6 +5,10 @@
 
 cd /d "%~dp0"
 
+:: Clean stale VoiceFlow runtimes before relaunching.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\setup\stop_voiceflow_processes.ps1" -Quiet >nul 2>&1
+timeout /t 1 /nobreak >nul
+
 set "PYTHONW_EXE="
 if /I not "%VOICEFLOW_USE_GPU_VENV%"=="0" if exist ".venv-gpu\Scripts\pythonw.exe" (
     set "PYTHONW_EXE=%cd%\.venv-gpu\Scripts\pythonw.exe"

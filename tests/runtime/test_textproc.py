@@ -69,6 +69,20 @@ def test_technical_term_dictionary_context_guard():
     assert "OAuth" not in normalized
 
 
+def test_normalize_context_terms_light_typo_cleanup_can_be_enabled_without_aggressive_rules():
+    text = "teh and and dont forget to recieve updates"
+    normalized = normalize_context_terms(text, aggressive=False, light=True)
+    assert "the and don't forget to receive updates" in normalized.lower()
+
+
+def test_normalize_context_terms_aggressive_rules_are_opt_in():
+    text = "cloud code works well for coding assistant prompts"
+    safe = normalize_context_terms(text, aggressive=False, light=True)
+    aggressive = normalize_context_terms(text, aggressive=True, light=True)
+    assert "cloud code" in safe.lower()
+    assert "Claude Code" in aggressive
+
+
 def test_custom_technical_term_dictionary(monkeypatch, tmp_path):
     custom_path = tmp_path / "engineering_terms.json"
     custom_path.write_text(

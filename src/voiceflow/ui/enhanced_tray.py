@@ -278,12 +278,6 @@ class EnhancedTrayController(ITrayManager):
                         pass
 
             threading.Thread(target=_run, daemon=True).start()
-            try:
-                from voiceflow.utils.settings import save_config
-                save_config(self.app.cfg)
-                self._notify("VoiceFlow", f"Dock: {'ON' if new_state else 'OFF'}")
-            except Exception:
-                pass
 
         def show_recent_history(icon, item):
             """Open recent history panel from tray."""

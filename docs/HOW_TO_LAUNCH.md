@@ -6,6 +6,8 @@
 - `VoiceFlow.bat` (console visible)
 - `VoiceFlow_Silent.bat` (tray-first)
 
+All launchers now clean up stale VoiceFlow processes before starting a fresh runtime.
+
 ## First-Time Setup
 
 ```powershell
@@ -21,8 +23,9 @@ powershell -ExecutionPolicy Bypass -File scripts\setup\bootstrap_windows.ps1 -Gp
 ## Basic Verification
 
 1. Tray icon appears.
-2. Hold `Ctrl+Shift`, speak, release.
-3. Text appears in Notepad.
+2. If first-run setup opens, complete `Step 1: Run Hardware Check (Required)` first.
+3. Hold `Ctrl+Shift`, speak, release.
+4. Text appears in Notepad.
 
 ## If Launch Fails
 

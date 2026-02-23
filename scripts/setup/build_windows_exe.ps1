@@ -259,6 +259,10 @@ $args = @(
     "--collect-submodules", "voiceflow.ai",
     "--collect-submodules", "voiceflow.models",
     "--collect-data", "voiceflow",
+    # Setup wizard is imported dynamically; include tkinter explicitly for packaged builds.
+    "--hidden-import", "tkinter",
+    "--hidden-import", "tkinter.ttk",
+    "--hidden-import", "tkinter.messagebox",
     "--hidden-import", "PIL._tkinter_finder",
     "--hidden-import", "win32api",
     "--hidden-import", "win32con",
