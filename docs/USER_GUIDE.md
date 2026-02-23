@@ -52,6 +52,7 @@ At startup, VoiceFlow can show a setup wizard before the main runtime starts.
 - GPU-balanced mode: optimized for CUDA-capable systems.
 - `Run Hardware Check`: re-detect hardware and reset profile preview to recommended defaults.
 - Choose one profile after check (`Recommended`, `CPU Compatible`, or `GPU Balanced`) before `Save And Launch`.
+- Selected profile shows a green `✓ Selected` indicator in Step 2 for quick visual confirmation.
 - Advanced section: device/compute/model/injection overrides.
 
 You can reopen the same wizard from tray:

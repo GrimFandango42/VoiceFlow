@@ -540,6 +540,7 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
         )
         toggles_frame.pack(fill="x", pady=(0, 12))
         profile_buttons: Dict[str, Any] = {}
+        profile_check_labels: Dict[str, Any] = {}
         profile_hint_var = tk.StringVar(value="")
         ttk.Label(toggles_frame, textvariable=profile_hint_var, foreground="#4B5563").pack(
             anchor="w", padx=8, pady=(4, 2)
@@ -568,7 +569,22 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
             profile_buttons[profile_key] = button
             detail = ttk.Frame(row)
             detail.pack(side="left", fill="x", expand=True, padx=(10, 0))
-            ttk.Label(detail, text=PROFILE_SUBTITLE[profile_key]).pack(anchor="w")
+            detail_header = ttk.Frame(detail)
+            detail_header.pack(fill="x")
+            ttk.Label(detail_header, text=PROFILE_SUBTITLE[profile_key]).pack(side="left", anchor="w")
+            check_label = tk.Label(
+                detail_header,
+                text="",
+                fg="#15803D",
+                font=("Segoe UI", 9, "bold"),
+                padx=2,
+            )
+            try:
+                check_label.configure(bg=str(detail_header.cget("background")))
+            except Exception:
+                pass
+            check_label.pack(side="right")
+            profile_check_labels[profile_key] = check_label
             ttk.Label(detail, text=PROFILE_HELP[profile_key], foreground="#6B7280").pack(anchor="w")
 
         simple_frame = ttk.LabelFrame(main, text="Simple Settings")
@@ -702,6 +718,12 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
             button = profile_buttons.get(profile_key)
             if button is None:
                 return
+            check_label = profile_check_labels.get(profile_key)
+            if check_label is not None:
+                if enabled and selected:
+                    check_label.configure(text="✓ Selected", fg="#15803D")
+                else:
+                    check_label.configure(text="")
             if not enabled:
                 button.configure(
                     state="disabled",
