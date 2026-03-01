@@ -497,8 +497,8 @@ def format_transcript_for_destination(
         return formatted
 
     profile = infer_destination_profile(destination)
-    # Trigger paragraph shaping earlier so medium-length dictation is easier to scan.
-    long_form = len(formatted) >= 140 or float(audio_duration) >= 5.0
+    # Keep formatting readable but reduce over-fragmentation for medium dictation.
+    long_form = len(formatted) >= 180 or float(audio_duration) >= 6.5
     if long_form and profile != "terminal":
         formatted = _insert_light_paragraph_breaks(formatted)
         formatted = _rebalance_paragraphs_for_readability(formatted, profile=profile)
@@ -525,10 +525,10 @@ def normalize_context_terms(
 
 def _estimate_wrap_width(destination: Optional[Mapping[str, Any]], profile: str) -> int:
     width_px = 0
-    cfg_default = 78
-    cfg_terminal = 96
-    cfg_chat = 64
-    cfg_editor = 88
+    cfg_default = 84
+    cfg_terminal = 104
+    cfg_chat = 68
+    cfg_editor = 94
     if destination:
         try:
             width_px = int(destination.get("window_width", 0) or 0)
@@ -619,7 +619,14 @@ def _rebalance_paragraphs_for_readability(text: str, profile: str) -> str:
     if not parts:
         return (text or "").strip()
 
-    max_sentences = 3 if profile in ("editor", "document") else 2
+    if profile == "editor":
+        max_sentences = 4
+    elif profile == "document":
+        max_sentences = 3
+    elif profile == "chat":
+        max_sentences = 2
+    else:
+        max_sentences = 3
     output: list[str] = []
     for part in parts:
         sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", part) if s.strip()]
@@ -746,6 +753,56 @@ def _apply_light_typo_corrections(text: str) -> str:
     )
     updated = re.sub(r"[ \t]{2,}", " ", updated)
     return updated
+
+
+def _apply_safe_second_pass_cleanup(text: str) -> str:
+    """
+    Deterministic, low-cost cleanup pass.
+    Keep rules conservative to preserve user intent and latency.
+    """
+    if not text:
+        return text
+
+    updated = text
+    updated = re.sub(r"[ \t]{2,}", " ", updated)
+    updated = re.sub(r"\s+([,.;:!?])", r"\1", updated)
+    updated = re.sub(r"([(\[{])\s+", r"\1", updated)
+    updated = re.sub(r"\s+([)\]}])", r"\1", updated)
+    updated = re.sub(r"([,.;:!?])([A-Za-z])", r"\1 \2", updated)
+    updated = re.sub(r"\b(\w+)(?:\s+\1){2,}\b", r"\1 \1", updated, flags=re.IGNORECASE)
+    updated = re.sub(r"([!?.,])\1{3,}", r"\1\1\1", updated)
+    return updated.strip()
+
+
+def _apply_heavy_second_pass_cleanup(text: str) -> str:
+    """
+    Optional stronger cleanup.
+    This pass is deliberately opt-in because it can be more aggressive.
+    """
+    if not text:
+        return text
+
+    updated = text
+    updated = re.sub(r"\b(\w+(?:'\w+)?)\s+\1\s+\1\b", r"\1", updated, flags=re.IGNORECASE)
+    updated = re.sub(
+        r"\b(\w+(?:'\w+)?)\s+(\w+(?:'\w+)?)(?:\s+\1\s+\2){2,}\b",
+        r"\1 \2",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(r"\b(uh|um|erm)\b(?:[\s,]+\1){2,}", r"\1", updated, flags=re.IGNORECASE)
+    updated = re.sub(r"([!?.,;:]){4,}", lambda m: m.group(1) * 3, updated)
+    return _apply_safe_second_pass_cleanup(updated)
+
+
+def apply_second_pass_cleanup(text: str, *, heavy: bool = False) -> str:
+    """
+    Public second-pass cleanup API used by runtime postprocessing.
+    """
+    cleaned = _apply_safe_second_pass_cleanup(text or "")
+    if heavy:
+        cleaned = _apply_heavy_second_pass_cleanup(cleaned)
+    return cleaned
 
 
 def _apply_context_corrections(

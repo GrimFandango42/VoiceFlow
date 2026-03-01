@@ -44,7 +44,13 @@ class Config:
     pause_compaction_retry_max_words: int = 8  # Treat very short result as likely clipped output
     pause_compaction_retry_min_raw_audio_seconds: float = 4.0  # Only retry for medium/long dictation
     pause_compaction_retry_max_raw_audio_seconds: float = 20.0  # Avoid expensive second-pass decode on very long clips
+    pause_compaction_retry_hard_max_raw_audio_seconds: float = 75.0  # Allow long-clip retry only when output looks clearly sparse
     pause_compaction_retry_fast_path_max_raw_audio_seconds: float = 18.0  # Keep retry on fast model for short-medium clips
+    pause_compaction_retry_min_words_per_second: float = 1.15  # Trigger retry when transcript density is suspiciously low
+    pause_compaction_retry_min_chars_per_second: float = 5.0  # Pair with words/sec to avoid false positives
+    pause_compaction_engine_guard_enabled: bool = True  # Use raw duration for model routing when compaction is aggressive
+    pause_compaction_engine_guard_min_reduction_pct: float = 45.0  # Minimum compaction reduction before routing guard applies
+    pause_compaction_engine_guard_min_raw_audio_seconds: float = 6.0  # Ignore tiny utterances for routing guard
     enable_non_speech_guard: bool = True  # Reject likely sneeze/cough/throat-clear bursts before ASR
     non_speech_guard_soft_mode: bool = True  # Prefer salvage/retry over hard drop on suspected bursts
     non_speech_max_audio_seconds: float = 1.25  # Only run non-speech filter on short clips
@@ -91,13 +97,16 @@ class Config:
     enable_smart_prompting: bool = True  # Adaptive prompting for better accuracy
     use_enhanced_post_processing: bool = True  # Smart text cleaning
     enable_light_typo_correction: bool = True  # Low-latency typo/spelling cleanup before injection
+    enable_safe_second_pass_cleanup: bool = True  # Deterministic low-cost cleanup after main formatting
+    enable_heavy_second_pass_cleanup: bool = False  # Optional stronger cleanup; keep opt-in
+    heavy_second_pass_min_chars: int = 180  # Run heavy pass only for longer transcript payloads
     enable_aggressive_context_corrections: bool = False  # Keep high-risk phrase rewrites opt-in
     destination_aware_formatting: bool = True  # Adjust output layout by destination app/window
     destination_wrap_enabled: bool = True  # Wrap long output for target window width
-    destination_default_chars: int = 78  # Generic readability width
-    destination_terminal_chars: int = 96  # Wider terminal columns
-    destination_chat_chars: int = 64  # Tighter wrapping for chat-like inputs
-    destination_editor_chars: int = 88  # Comfortable width for editors/docs
+    destination_default_chars: int = 84  # Slightly wider default wrapping for compact output
+    destination_terminal_chars: int = 104  # Wider terminal columns
+    destination_chat_chars: int = 68  # Keep chat readable while reducing over-wrapping
+    destination_editor_chars: int = 94  # Comfortable width for editors/docs
 
     # Advanced optimization flags (disabled by default for safety)
     enable_lockfree_model_access: bool = False  # Experimental: lock-free access
@@ -179,6 +188,9 @@ class Config:
     enable_visual_demo: bool = True  # Enable visual demo feature
     visual_overlay_enabled: bool = True  # Bottom-screen overlay indicators
     visual_dock_enabled: bool = True  # Keep dock visible by default for immediate feedback
+    visual_animation_quality: str = "auto"  # auto|high|balanced|low
+    visual_reduced_motion: bool = False  # reduce expensive animation effects
+    visual_target_fps: int = 28  # preferred animation refresh target for auto mode
 
     # Output behavior
     paste_injection: bool = True  # Use clipboard paste injection by default
@@ -210,6 +222,12 @@ class Config:
     adaptive_min_count: int = 3  # Repetition count required before auto-apply
     adaptive_max_rules: int = 200  # Cap learned replacements to bound memory
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
+    daily_learning_autorun_enabled: bool = True  # Startup catch-up in case scheduled task is missing
+    daily_learning_autorun_days_back: int = 1  # Process prior-day data by default
+    daily_learning_autorun_startup_delay_seconds: float = 22.0  # Delay to avoid startup contention
+    daily_learning_task_name: str = "VoiceFlow-DailyLearning"  # Windows scheduled task name
+    daily_learning_max_history_items: int = 400  # Bound startup catch-up workload
+    daily_learning_max_correction_items: int = 400  # Bound startup catch-up workload
 
     # Misc
     language: str | None = "en"

@@ -42,8 +42,11 @@ VoiceFlow is tray-first by design.
 ## Transcription Quality Defaults
 
 - Runtime enables a lightweight typo/spelling cleanup pass by default (`enable_light_typo_correction=true`).
+- Runtime applies a safe second-pass cleanup by default (`enable_safe_second_pass_cleanup=true`).
+- Optional heavier cleanup stays opt-in (`enable_heavy_second_pass_cleanup=false`).
 - Aggressive context rewrites are opt-in (`enable_aggressive_context_corrections=false`) to reduce over-correction risk.
 - Destination-aware formatting remains enabled by default for readability.
+- Visual animation quality defaults to adaptive mode (`visual_animation_quality=auto`, `visual_target_fps=28`).
 
 ## Stable Baseline
 

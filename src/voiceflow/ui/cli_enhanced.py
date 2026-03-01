@@ -4,9 +4,11 @@ import threading
 import traceback
 import sys
 import os
+import subprocess
 import re
 import json
 import wave
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, Deque, Tuple
 import logging
@@ -27,19 +29,23 @@ from voiceflow.core.asr_engine import ModernWhisperASR as WhisperASR
 from voiceflow.core.preloader import ModelPreloader, PreloadState
 # Streaming preview
 from voiceflow.core.streaming import StreamingTranscriber, StreamingResult
-from voiceflow.integrations.inject import ClipboardInjector
-from voiceflow.integrations.hotkeys_enhanced import EnhancedPTTHotkeyListener
+from voiceflow.platform.factory import (
+    create_hotkey_backend,
+    create_injector_backend,
+    create_tray_backend,
+    runtime_platform_name,
+)
 from voiceflow.utils.utils import is_admin, nvidia_smi_info
 from voiceflow.core.textproc import (
     apply_code_mode,
+    apply_second_pass_cleanup,
     format_transcript_text,
     format_transcript_for_destination,
     infer_destination_profile,
     normalize_context_terms,
 )
 import keyboard
-from voiceflow.ui.tray import TrayController
-from voiceflow.ui.enhanced_tray import EnhancedTrayController, update_tray_status
+from voiceflow.ui.enhanced_tray import update_tray_status
 from voiceflow.ui.setup_wizard import maybe_run_startup_setup
 from voiceflow.utils.logging_setup import AsyncLogger, default_log_dir
 from voiceflow.utils.settings import config_dir, load_config, save_config
@@ -314,6 +320,7 @@ try:
         update_audio_level as visual_update_audio_level,
         update_audio_features as visual_update_audio_features,
         set_dock_enabled as visual_set_dock_enabled,
+        set_animation_preferences as visual_set_animation_preferences,
     )
     VISUAL_INDICATORS_AVAILABLE = True
 except ImportError:
@@ -330,6 +337,7 @@ except ImportError:
     def visual_update_audio_level(level): pass
     def visual_update_audio_features(features): pass
     def visual_set_dock_enabled(enabled): pass
+    def visual_set_animation_preferences(quality="auto", reduced_motion=False, target_fps=28): pass
 
 
 class EnhancedTranscriptionManager:
@@ -464,10 +472,10 @@ class EnhancedTranscriptionManager:
 class EnhancedApp:
     """Enhanced VoiceFlow app with better thread management and long conversation support"""
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, injector_backend: Optional[Any] = None):
         self.cfg = cfg
         self.rec = EnhancedAudioRecorder(cfg)
-        self.injector = ClipboardInjector(cfg)
+        self.injector = injector_backend or create_injector_backend(cfg)
 
         # Cold start elimination: Create ASR and start background preloading
         print("[STARTUP] Creating ASR engine...")
@@ -508,7 +516,7 @@ class EnhancedApp:
         self._log = logging.getLogger("localflow")
 
         # Visual indicators integration
-        self.tray_controller: Optional[EnhancedTrayController] = None
+        self.tray_controller: Optional[Any] = None
         self.visual_indicators_enabled = getattr(cfg, 'visual_indicators_enabled', True)
 
         # AI Enhancement Layer (VoiceFlow 3.0)
@@ -576,7 +584,7 @@ class EnhancedApp:
         self._checkpoint_last_text = ""
         self._checkpoint_committed_sample_idx = 0
         self._checkpoint_live_injected = False
-        self.ptt_listener: Optional[EnhancedPTTHotkeyListener] = None
+        self.ptt_listener: Optional[Any] = None
         self._feedback_audio_enabled = str(os.environ.get("VOICEFLOW_FEEDBACK_AUDIO", "")).strip().lower() in {
             "1",
             "true",
@@ -591,6 +599,7 @@ class EnhancedApp:
             1,
             int(os.environ.get("VOICEFLOW_FEEDBACK_AUDIO_RETENTION_MINUTES", "30") or 30),
         )
+        self._start_daily_learning_guardrail()
 
         print(f"[EnhancedApp] Initialized with enhanced thread management and visual indicators {'enabled' if self.visual_indicators_enabled else 'disabled'}")
         print(f"[EnhancedApp] Streaming preview: {'Enabled' if self.streaming_enabled else 'Disabled'}")
@@ -646,6 +655,91 @@ class EnhancedApp:
             self.asr_fast = None
             self._fast_preloader = None
             self._fast_model_ready = False
+
+    def _daily_learning_report_exists(self, target_date_text: str) -> bool:
+        if not target_date_text:
+            return False
+        report_dir = config_dir() / "daily_learning_reports"
+        if not report_dir.exists():
+            return False
+        pattern = f"daily_learning_{target_date_text}_*.json"
+        try:
+            return any(report_dir.glob(pattern))
+        except Exception:
+            return False
+
+    def _is_daily_learning_task_registered(self) -> bool:
+        if os.name != "nt":
+            return True
+        task_name = str(getattr(self.cfg, "daily_learning_task_name", "VoiceFlow-DailyLearning") or "").strip()
+        if not task_name:
+            task_name = "VoiceFlow-DailyLearning"
+        try:
+            result = subprocess.run(
+                ["schtasks", "/Query", "/TN", task_name],
+                capture_output=True,
+                text=True,
+                timeout=6,
+            )
+            return int(result.returncode) == 0
+        except Exception:
+            return False
+
+    def _start_daily_learning_guardrail(self) -> None:
+        """Run a bounded startup catch-up daily-learning pass when needed."""
+        if not bool(getattr(self.cfg, "daily_learning_autorun_enabled", True)):
+            return
+
+        def _worker() -> None:
+            try:
+                delay = max(0.0, float(getattr(self.cfg, "daily_learning_autorun_startup_delay_seconds", 22.0)))
+                if delay > 0:
+                    time.sleep(delay)
+
+                if not self._is_daily_learning_task_registered():
+                    self._log.warning(
+                        "daily_learning_task_missing task=%s action=startup_autorun",
+                        str(getattr(self.cfg, "daily_learning_task_name", "VoiceFlow-DailyLearning")),
+                    )
+
+                days_back = max(1, int(getattr(self.cfg, "daily_learning_autorun_days_back", 1)))
+                target_date_text = (datetime.now().date() - timedelta(days=days_back)).isoformat()
+                if self._daily_learning_report_exists(target_date_text):
+                    self._log.info(
+                        "daily_learning_autorun_skipped reason=report_exists target_date=%s",
+                        target_date_text,
+                    )
+                    return
+
+                from voiceflow.ai.daily_learning import run_daily_learning_job
+
+                report = run_daily_learning_job(
+                    days_back=days_back,
+                    dry_run=False,
+                    max_history_items=max(50, int(getattr(self.cfg, "daily_learning_max_history_items", 400))),
+                    max_correction_items=max(50, int(getattr(self.cfg, "daily_learning_max_correction_items", 400))),
+                )
+                stats = report.get("stats", {})
+                self._log.info(
+                    "daily_learning_autorun_complete target_date=%s corrections=%s/%s history=%s/%s instr=%s/%s report=%s",
+                    str(report.get("target_date", "")),
+                    int(stats.get("correction_items_used", 0)),
+                    int(stats.get("correction_items_total", 0)),
+                    int(stats.get("history_items_used", 0)),
+                    int(stats.get("history_items_total", 0)),
+                    int(stats.get("instructional_items_used", 0)),
+                    int(stats.get("instructional_items_total", 0)),
+                    str(stats.get("report_path", "")),
+                )
+            except Exception as exc:
+                self._log.warning("daily_learning_autorun_failed error=%s", exc)
+
+        thread = threading.Thread(
+            target=_worker,
+            name="DailyLearningGuardrail",
+            daemon=True,
+        )
+        thread.start()
 
     def _pick_asr_engine(self, audio_duration: float):
         """Pick fast engine for short audio to reduce perceived latency."""
@@ -915,10 +1009,10 @@ class EnhancedApp:
         context = self.injector.get_target_context()
         context["destination_aware_formatting"] = bool(getattr(self.cfg, "destination_aware_formatting", True))
         context["destination_wrap_enabled"] = bool(getattr(self.cfg, "destination_wrap_enabled", True))
-        context["destination_default_chars"] = int(getattr(self.cfg, "destination_default_chars", 78))
-        context["destination_terminal_chars"] = int(getattr(self.cfg, "destination_terminal_chars", 96))
-        context["destination_chat_chars"] = int(getattr(self.cfg, "destination_chat_chars", 64))
-        context["destination_editor_chars"] = int(getattr(self.cfg, "destination_editor_chars", 88))
+        context["destination_default_chars"] = int(getattr(self.cfg, "destination_default_chars", 84))
+        context["destination_terminal_chars"] = int(getattr(self.cfg, "destination_terminal_chars", 104))
+        context["destination_chat_chars"] = int(getattr(self.cfg, "destination_chat_chars", 68))
+        context["destination_editor_chars"] = int(getattr(self.cfg, "destination_editor_chars", 94))
         return context
 
     def _normalize_context_terms_runtime(self, text: str) -> str:
@@ -1451,6 +1545,8 @@ class EnhancedApp:
         asr_compute = ""
         asr_path = "primary"
         retry_used = False
+        second_pass_mode = "none"
+        second_pass_chars_delta = 0
 
         try:
             original_samples = len(audio_data)
@@ -1564,7 +1660,25 @@ class EnhancedApp:
                 active_asr = self.asr
                 asr_path = "primary"
                 with OperationTimeout(timeout_seconds, f"transcription_{audio_duration:.1f}s"):
-                    active_asr, asr_path = self._pick_asr_engine(audio_duration)
+                    engine_pick_duration = audio_duration
+                    if bool(getattr(self.cfg, "pause_compaction_engine_guard_enabled", True)):
+                        guard_min_reduction = float(
+                            getattr(self.cfg, "pause_compaction_engine_guard_min_reduction_pct", 45.0)
+                        )
+                        guard_min_raw = float(
+                            getattr(self.cfg, "pause_compaction_engine_guard_min_raw_audio_seconds", 6.0)
+                        )
+                        if compaction_reduction_pct >= guard_min_reduction and raw_audio_duration >= guard_min_raw:
+                            engine_pick_duration = max(audio_duration, raw_audio_duration)
+                            self._log.info(
+                                "pause_compaction_engine_guard reduction=%.1f%% pick_duration=%.2f raw_duration=%.2f compacted_duration=%.2f",
+                                compaction_reduction_pct,
+                                engine_pick_duration,
+                                raw_audio_duration,
+                                audio_duration,
+                            )
+
+                    active_asr, asr_path = self._pick_asr_engine(engine_pick_duration)
                     model_cfg = getattr(active_asr, "model_config", None)
                     if model_cfg is not None:
                         asr_model_name = str(getattr(model_cfg, "name", "") or "")
@@ -1590,16 +1704,52 @@ class EnhancedApp:
                 retry_max_raw_seconds = float(
                     getattr(self.cfg, "pause_compaction_retry_max_raw_audio_seconds", 20.0)
                 )
+                retry_hard_max_raw_seconds = float(
+                    getattr(self.cfg, "pause_compaction_retry_hard_max_raw_audio_seconds", 75.0)
+                )
                 if (
                     bool(getattr(self.cfg, "pause_compaction_retry_on_short_output", True))
                     and len(audio_data) > len(compacted_audio)
                     and raw_audio_duration >= float(getattr(self.cfg, "pause_compaction_retry_min_raw_audio_seconds", 4.0))
-                    and raw_audio_duration <= retry_max_raw_seconds
                 ):
                     retry_min_reduction = float(getattr(self.cfg, "pause_compaction_retry_min_reduction_pct", 38.0))
                     retry_max_words = int(getattr(self.cfg, "pause_compaction_retry_max_words", 8))
                     initial_words = len((text or "").split())
-                    if compaction_reduction_pct >= retry_min_reduction and initial_words <= retry_max_words:
+                    initial_chars = len((text or "").strip())
+                    min_words_per_second = float(
+                        getattr(self.cfg, "pause_compaction_retry_min_words_per_second", 1.15)
+                    )
+                    min_chars_per_second = float(
+                        getattr(self.cfg, "pause_compaction_retry_min_chars_per_second", 5.0)
+                    )
+                    words_per_second = initial_words / max(0.1, raw_audio_duration)
+                    chars_per_second = initial_chars / max(0.1, raw_audio_duration)
+                    retry_due_to_short = initial_words <= retry_max_words
+                    retry_due_to_sparse = (
+                        words_per_second < min_words_per_second
+                        and chars_per_second < min_chars_per_second
+                    )
+                    within_primary_window = raw_audio_duration <= retry_max_raw_seconds
+                    within_extended_window = (
+                        raw_audio_duration > retry_max_raw_seconds
+                        and raw_audio_duration <= retry_hard_max_raw_seconds
+                        and retry_due_to_sparse
+                    )
+                    retry_triggered = (
+                        compaction_reduction_pct >= retry_min_reduction
+                        and (retry_due_to_short or retry_due_to_sparse)
+                        and (within_primary_window or within_extended_window)
+                    )
+                    if retry_triggered:
+                        self._log.info(
+                            "pause_compaction_retry_candidate words=%d chars=%d wps=%.2f cps=%.2f reduction=%.1f%% raw_duration=%.2f",
+                            initial_words,
+                            initial_chars,
+                            words_per_second,
+                            chars_per_second,
+                            compaction_reduction_pct,
+                            raw_audio_duration,
+                        )
                         fast_retry_max_raw = float(
                             getattr(self.cfg, "pause_compaction_retry_fast_path_max_raw_audio_seconds", 18.0)
                         )
@@ -1613,7 +1763,6 @@ class EnhancedApp:
                         stage_ms["asr_retry"] = (time.perf_counter() - stage_start) * 1000.0
                         retry_words = len((retry_text or "").split())
                         retry_chars = len((retry_text or "").strip())
-                        initial_chars = len((text or "").strip())
                         if retry_words >= (initial_words + 2) or retry_chars >= (initial_chars + 12):
                             retry_used = True
                             self._log.info(
@@ -1634,15 +1783,34 @@ class EnhancedApp:
                                 retry_words,
                                 compaction_reduction_pct,
                             )
+                    elif raw_audio_duration > retry_hard_max_raw_seconds:
+                        self._log.info(
+                            "pause_compaction_retry_skipped raw_duration=%.2f hard_max_raw=%.2f",
+                            raw_audio_duration,
+                            retry_hard_max_raw_seconds,
+                        )
+                    elif (
+                        raw_audio_duration > retry_max_raw_seconds
+                        and compaction_reduction_pct >= retry_min_reduction
+                    ):
+                        self._log.info(
+                            "pause_compaction_retry_not_sparse words=%d chars=%d wps=%.2f cps=%.2f raw_duration=%.2f max_raw=%.2f",
+                            initial_words,
+                            initial_chars,
+                            words_per_second,
+                            chars_per_second,
+                            raw_audio_duration,
+                            retry_max_raw_seconds,
+                        )
                 elif (
                     bool(getattr(self.cfg, "pause_compaction_retry_on_short_output", True))
                     and len(audio_data) > len(compacted_audio)
-                    and raw_audio_duration > retry_max_raw_seconds
+                    and raw_audio_duration > retry_hard_max_raw_seconds
                 ):
                     self._log.info(
-                        "pause_compaction_retry_skipped raw_duration=%.2f max_raw=%.2f",
+                        "pause_compaction_retry_skipped raw_duration=%.2f hard_max_raw=%.2f",
                         raw_audio_duration,
-                        retry_max_raw_seconds,
+                        retry_hard_max_raw_seconds,
                     )
 
                 # Simple hallucination detection - fast and reliable
@@ -1771,6 +1939,29 @@ class EnhancedApp:
                     )
                 except Exception:
                     text = format_transcript_text(text)
+
+                # Optional low-latency second-pass cleanup stage.
+                base_before_second_pass = text
+                if bool(getattr(self.cfg, "enable_safe_second_pass_cleanup", True)):
+                    stage_start = time.perf_counter()
+                    text = apply_second_pass_cleanup(text, heavy=False)
+                    stage_ms["second_pass_safe"] = (time.perf_counter() - stage_start) * 1000.0
+                    second_pass_mode = "safe"
+                if bool(getattr(self.cfg, "enable_heavy_second_pass_cleanup", False)):
+                    heavy_threshold = max(64, int(getattr(self.cfg, "heavy_second_pass_min_chars", 180)))
+                    if len(text or "") >= heavy_threshold:
+                        stage_start = time.perf_counter()
+                        text = apply_second_pass_cleanup(text, heavy=True)
+                        stage_ms["second_pass_heavy"] = (time.perf_counter() - stage_start) * 1000.0
+                        second_pass_mode = "safe+heavy" if second_pass_mode == "safe" else "heavy"
+                second_pass_chars_delta = len(text) - len(base_before_second_pass)
+                self._log.info(
+                    "second_pass_cleanup mode=%s delta_chars=%d safe_ms=%.2f heavy_ms=%.2f",
+                    second_pass_mode,
+                    second_pass_chars_delta,
+                    stage_ms.get("second_pass_safe", 0.0),
+                    stage_ms.get("second_pass_heavy", 0.0),
+                )
             stage_ms["postprocess"] = (time.perf_counter() - postprocess_start) * 1000.0
 
             # Performance tracking
@@ -1877,7 +2068,7 @@ class EnhancedApp:
                 (
                     "transcription_timing total_ms=%.1f path=%s model_id=%s device=%s compute=%s "
                     "retry_used=%s compaction_ms=%.1f guard_ms=%.1f asr_ms=%.1f retry_ms=%.1f "
-                    "post_ms=%.1f inject_ms=%.1f"
+                    "post_ms=%.1f safe2_ms=%.1f heavy2_ms=%.1f second_pass=%s delta_chars=%d inject_ms=%.1f"
                 ),
                 transcription_time * 1000.0,
                 asr_path,
@@ -1890,6 +2081,10 @@ class EnhancedApp:
                 stage_ms.get("asr_decode", 0.0),
                 stage_ms.get("asr_retry", 0.0),
                 stage_ms.get("postprocess", 0.0),
+                stage_ms.get("second_pass_safe", 0.0),
+                stage_ms.get("second_pass_heavy", 0.0),
+                second_pass_mode,
+                int(second_pass_chars_delta),
                 stage_ms.get("inject", 0.0),
             )
 
@@ -2079,36 +2274,49 @@ def main(argv=None):
     # Mark initial state as idle
     mark_idle()
 
+    if VISUAL_INDICATORS_AVAILABLE:
+        try:
+            visual_set_animation_preferences(
+                quality=str(getattr(cfg, "visual_animation_quality", "auto") or "auto"),
+                reduced_motion=bool(getattr(cfg, "visual_reduced_motion", False)),
+                target_fps=int(getattr(cfg, "visual_target_fps", 28) or 28),
+            )
+        except Exception:
+            runtime_log.exception("visual_animation_pref_apply_failed")
+
     if not is_admin():
         print("Warning: Not running as Administrator. Global hotkeys and key injection may be limited in elevated apps.")
     info = nvidia_smi_info()
     if info:
         print(f"GPU: {info}")
 
-    app = EnhancedApp(cfg)
+    current_platform = runtime_platform_name()
+    injector_backend = create_injector_backend(cfg, platform_name=current_platform)
+    app = EnhancedApp(cfg, injector_backend=injector_backend)
 
     # Enhanced tray support with visual indicators
     tray = None
     if cfg.use_tray:
-        runtime_log.info("tray_start_attempt controller=enhanced")
+        runtime_log.info("tray_start_attempt controller=platform platform=%s", current_platform)
         try:
-            tray = EnhancedTrayController(app)
-            app.tray_controller = tray  # Connect to app for status updates
+            tray = create_tray_backend(app, platform_name=current_platform, prefer_enhanced=True)
+            app.tray_controller = tray
             tray.start()
-            print("Enhanced tray with visual indicators started.")
-            runtime_log.info("tray_started controller=enhanced")
+            print(f"Tray backend started ({current_platform}).")
+            runtime_log.info("tray_started controller=platform platform=%s", current_platform)
         except Exception as e:
-            print(f"Enhanced tray failed to start: {e}")
-            runtime_log.exception("tray_start_failed controller=enhanced")
-            # Fallback to basic tray
-            try:
-                tray = TrayController(app)
-                tray.start()
-                print("Basic tray started.")
-                runtime_log.info("tray_started controller=basic")
-            except Exception as e2:
-                print(f"Basic tray also failed: {e2}")
-                runtime_log.exception("tray_start_failed controller=basic")
+            print(f"Primary tray backend failed: {e}")
+            runtime_log.exception("tray_start_failed controller=platform platform=%s", current_platform)
+            if current_platform == "windows":
+                try:
+                    tray = create_tray_backend(app, platform_name=current_platform, prefer_enhanced=False)
+                    app.tray_controller = tray
+                    tray.start()
+                    print("Fallback tray backend started.")
+                    runtime_log.info("tray_started controller=fallback platform=%s", current_platform)
+                except Exception as e2:
+                    print(f"Fallback tray backend also failed: {e2}")
+                    runtime_log.exception("tray_start_failed controller=fallback platform=%s", current_platform)
     else:
         runtime_log.info("tray_disabled_by_config")
 
@@ -2157,10 +2365,11 @@ def main(argv=None):
     _register_hotkey('ctrl+alt+enter', toggle_enter, "toggle_enter")
 
     # Enhanced PTT listener with tail-end buffer
-    listener = EnhancedPTTHotkeyListener(
-        cfg,
+    listener = create_hotkey_backend(
+        cfg=cfg,
         on_start=app.start_recording,
         on_stop=app.stop_recording,
+        platform_name=current_platform,
     )
     app.ptt_listener = listener
 

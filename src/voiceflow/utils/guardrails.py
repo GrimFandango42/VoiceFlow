@@ -414,10 +414,10 @@ def validate_config(cfg: Config) -> Config:
             cfg.temperature = 0.0
 
         for field, default_val in (
-            ('destination_default_chars', 78),
-            ('destination_terminal_chars', 96),
-            ('destination_chat_chars', 64),
-            ('destination_editor_chars', 88),
+            ('destination_default_chars', 84),
+            ('destination_terminal_chars', 104),
+            ('destination_chat_chars', 68),
+            ('destination_editor_chars', 94),
         ):
             current = getattr(cfg, field, None)
             try:
@@ -427,6 +427,95 @@ def validate_config(cfg: Config) -> Config:
             if parsed < 24 or parsed > 240:
                 logger.warning(f"Invalid {field} {current}, defaulting to {default_val}")
                 setattr(cfg, field, default_val)
+
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_hard_max_raw_audio_seconds')
+            or cfg.pause_compaction_retry_hard_max_raw_audio_seconds < 10.0
+            or cfg.pause_compaction_retry_hard_max_raw_audio_seconds > 180.0
+        ):
+            logger.warning(
+                "Invalid pause_compaction_retry_hard_max_raw_audio_seconds %s, defaulting to 75.0",
+                getattr(cfg, 'pause_compaction_retry_hard_max_raw_audio_seconds', 'None'),
+            )
+            cfg.pause_compaction_retry_hard_max_raw_audio_seconds = 75.0
+
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_min_words_per_second')
+            or cfg.pause_compaction_retry_min_words_per_second < 0.2
+            or cfg.pause_compaction_retry_min_words_per_second > 4.0
+        ):
+            logger.warning(
+                "Invalid pause_compaction_retry_min_words_per_second %s, defaulting to 1.15",
+                getattr(cfg, 'pause_compaction_retry_min_words_per_second', 'None'),
+            )
+            cfg.pause_compaction_retry_min_words_per_second = 1.15
+
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_min_chars_per_second')
+            or cfg.pause_compaction_retry_min_chars_per_second < 1.0
+            or cfg.pause_compaction_retry_min_chars_per_second > 20.0
+        ):
+            logger.warning(
+                "Invalid pause_compaction_retry_min_chars_per_second %s, defaulting to 5.0",
+                getattr(cfg, 'pause_compaction_retry_min_chars_per_second', 'None'),
+            )
+            cfg.pause_compaction_retry_min_chars_per_second = 5.0
+
+        if not hasattr(cfg, 'pause_compaction_engine_guard_enabled'):
+            cfg.pause_compaction_engine_guard_enabled = True
+
+        if (
+            not hasattr(cfg, 'pause_compaction_engine_guard_min_reduction_pct')
+            or cfg.pause_compaction_engine_guard_min_reduction_pct < 5.0
+            or cfg.pause_compaction_engine_guard_min_reduction_pct > 95.0
+        ):
+            logger.warning(
+                "Invalid pause_compaction_engine_guard_min_reduction_pct %s, defaulting to 45.0",
+                getattr(cfg, 'pause_compaction_engine_guard_min_reduction_pct', 'None'),
+            )
+            cfg.pause_compaction_engine_guard_min_reduction_pct = 45.0
+
+        if (
+            not hasattr(cfg, 'pause_compaction_engine_guard_min_raw_audio_seconds')
+            or cfg.pause_compaction_engine_guard_min_raw_audio_seconds < 0.5
+            or cfg.pause_compaction_engine_guard_min_raw_audio_seconds > 60.0
+        ):
+            logger.warning(
+                "Invalid pause_compaction_engine_guard_min_raw_audio_seconds %s, defaulting to 6.0",
+                getattr(cfg, 'pause_compaction_engine_guard_min_raw_audio_seconds', 'None'),
+            )
+            cfg.pause_compaction_engine_guard_min_raw_audio_seconds = 6.0
+
+        if not hasattr(cfg, 'heavy_second_pass_min_chars'):
+            cfg.heavy_second_pass_min_chars = 180
+        else:
+            try:
+                heavy_min = int(getattr(cfg, 'heavy_second_pass_min_chars'))
+            except Exception:
+                heavy_min = 180
+            if heavy_min < 64 or heavy_min > 4000:
+                logger.warning(
+                    f"Invalid heavy_second_pass_min_chars {getattr(cfg, 'heavy_second_pass_min_chars', 'None')}, defaulting to 180"
+                )
+                heavy_min = 180
+            cfg.heavy_second_pass_min_chars = heavy_min
+
+        quality_mode = str(getattr(cfg, 'visual_animation_quality', 'auto') or 'auto').strip().lower()
+        if quality_mode not in {'auto', 'high', 'balanced', 'low'}:
+            logger.warning(f"Invalid visual_animation_quality {quality_mode}, defaulting to auto")
+            quality_mode = 'auto'
+        cfg.visual_animation_quality = quality_mode
+
+        try:
+            visual_target_fps = int(getattr(cfg, 'visual_target_fps', 28))
+        except Exception:
+            visual_target_fps = 28
+        if visual_target_fps < 12 or visual_target_fps > 60:
+            logger.warning(
+                f"Invalid visual_target_fps {getattr(cfg, 'visual_target_fps', 'None')}, defaulting to 28"
+            )
+            visual_target_fps = 28
+        cfg.visual_target_fps = visual_target_fps
 
         # Adaptive learning validation (privacy-first temporary storage)
         if not hasattr(cfg, 'adaptive_retention_hours') or cfg.adaptive_retention_hours < 1 or cfg.adaptive_retention_hours > 720:
@@ -452,6 +541,31 @@ def validate_config(cfg: Config) -> Config:
         if not hasattr(cfg, 'command_mode_prefix') or not str(cfg.command_mode_prefix).strip():
             logger.warning("Invalid command_mode_prefix, defaulting to 'command'")
             cfg.command_mode_prefix = "command"
+
+        if not hasattr(cfg, 'daily_learning_autorun_enabled'):
+            cfg.daily_learning_autorun_enabled = True
+
+        if (
+            not hasattr(cfg, 'daily_learning_autorun_days_back')
+            or int(getattr(cfg, 'daily_learning_autorun_days_back', 0)) < 1
+            or int(getattr(cfg, 'daily_learning_autorun_days_back', 0)) > 30
+        ):
+            logger.warning(
+                "Invalid daily_learning_autorun_days_back %s, defaulting to 1",
+                getattr(cfg, 'daily_learning_autorun_days_back', 'None'),
+            )
+            cfg.daily_learning_autorun_days_back = 1
+
+        if (
+            not hasattr(cfg, 'daily_learning_autorun_startup_delay_seconds')
+            or float(getattr(cfg, 'daily_learning_autorun_startup_delay_seconds', -1.0)) < 0.0
+            or float(getattr(cfg, 'daily_learning_autorun_startup_delay_seconds', -1.0)) > 600.0
+        ):
+            logger.warning(
+                "Invalid daily_learning_autorun_startup_delay_seconds %s, defaulting to 22.0",
+                getattr(cfg, 'daily_learning_autorun_startup_delay_seconds', 'None'),
+            )
+            cfg.daily_learning_autorun_startup_delay_seconds = 22.0
 
         logger.debug("Configuration validation completed successfully")
         return cfg

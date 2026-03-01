@@ -128,8 +128,8 @@ class EnhancedTrayController(ITrayManager):
             except Exception as e:
                 print(f"[EnhancedTray] Status callback error: {e}")
     
-    def update_status(self, status: str, recording: bool = False, message: str = None):
-        """Update tray icon and visual indicators based on status"""
+    def _apply_status_update(self, status: str, recording: bool = False, message: str = None) -> None:
+        """Canonical tray/indicator status update path."""
         with self.status_lock:
             # Cancel any existing reset timer
             if self._reset_timer:
@@ -450,8 +450,9 @@ class EnhancedTrayController(ITrayManager):
         # Apply dock visibility preference on startup.
         if VISUAL_INDICATORS_AVAILABLE:
             try:
-                set_dock_enabled(True)
-                self.app.cfg.visual_dock_enabled = True
+                preferred_dock = bool(getattr(self.app.cfg, "visual_dock_enabled", True))
+                set_dock_enabled(preferred_dock)
+                self.app.cfg.visual_dock_enabled = preferred_dock
             except Exception:
                 pass
         
@@ -498,57 +499,7 @@ class EnhancedTrayController(ITrayManager):
         """
         # Convert enum to string if needed
         status_str = status.value if hasattr(status, 'value') else str(status)
-
-        with self.status_lock:
-            # Cancel any existing reset timer
-            if self._reset_timer:
-                self._reset_timer.cancel()
-                self._reset_timer = None
-
-            self.current_status = status_str
-            self.is_recording = recording
-
-            # Update tray icon
-            if self._icon and TRAY_AVAILABLE:
-                new_icon = _make_status_icon(16, status_str, recording)
-                if new_icon:
-                    self._icon.icon = new_icon
-
-            # Update visual indicators
-            if VISUAL_INDICATORS_AVAILABLE:
-                self._update_visual_indicator(status_str, recording, message)
-
-            # Notify callbacks
-            self._notify_status_change(status_str, recording)
-
-            # CRITICAL: Auto-reset timer for "complete" and "error" states
-            if status_str in ["complete", "error"]:
-                def reset_to_idle():
-                    try:
-                        with self.status_lock:
-                            if self.current_status in ["complete", "error"]:  # Only reset if still in completion state
-                                self.current_status = "idle"
-                                self.is_recording = False
-
-                                # Update tray icon to idle
-                                if self._icon and TRAY_AVAILABLE:
-                                    idle_icon = _make_status_icon(16, "idle", False)
-                                    if idle_icon:
-                                        self._icon.icon = idle_icon
-
-                                # Hide visual indicators
-                                if VISUAL_INDICATORS_AVAILABLE:
-                                    from voiceflow.ui.visual_indicators import hide_status
-                                    hide_status()
-
-                                # Notify callbacks of reset
-                                self._notify_status_change("idle", False)
-                    except Exception as e:
-                        print(f"[EnhancedTray] Auto-reset error: {e}")
-
-                # Start 2-second timer to reset to idle
-                self._reset_timer = threading.Timer(2.0, reset_to_idle)
-                self._reset_timer.start()
+        self._apply_status_update(status_str, recording, message)
 
     def update_menu(self, items) -> None:
         """

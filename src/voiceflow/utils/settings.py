@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from voiceflow.core.config import Config
 from voiceflow.utils.logging_setup import default_log_dir
@@ -19,6 +20,116 @@ def config_dir() -> Path:
 
 def config_path() -> Path:
     return config_dir() / "config.json"
+
+
+_DEFAULT_JSON_MAX_BYTES = 2 * 1024 * 1024
+
+
+def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> bool:
+    """Atomically replace a text file to avoid partial writes during crashes."""
+    tmp_name = f".{path.name}.tmp.{os.getpid()}.{time.time_ns()}"
+    tmp_path = path.with_name(tmp_name)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_text(text, encoding=encoding)
+        os.replace(tmp_path, path)
+        return True
+    except Exception:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+        return False
+
+
+def load_json_dict_bounded(path: Path, *, max_bytes: int = _DEFAULT_JSON_MAX_BYTES) -> Optional[dict[str, Any]]:
+    """Load a JSON dictionary only when the file is reasonably bounded."""
+    try:
+        if not path.exists():
+            return None
+        if int(path.stat().st_size) > max(1, int(max_bytes)):
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def read_text_tail_lines(
+    path: Path,
+    *,
+    max_lines: int,
+    max_bytes: int,
+    max_line_chars: int,
+) -> list[str]:
+    """
+    Read only the tail of a text file and return bounded valid lines.
+    Keeps large JSONL files from causing heavy reads.
+    """
+    try:
+        if not path.exists():
+            return []
+        file_size = int(path.stat().st_size)
+        if file_size <= 0:
+            return []
+        read_size = min(file_size, max(1, int(max_bytes)))
+        with path.open("rb") as handle:
+            if file_size > read_size:
+                handle.seek(file_size - read_size)
+            raw = handle.read(read_size)
+        text = raw.decode("utf-8", errors="ignore")
+        lines = text.splitlines()
+        if file_size > read_size and lines:
+            # Drop potentially partial first line when reading file tail.
+            lines = lines[1:]
+    except Exception:
+        return []
+
+    bounded: list[str] = []
+    cap = max(32, int(max_line_chars))
+    for line in lines:
+        line = line.strip()
+        if not line or len(line) > cap:
+            continue
+        bounded.append(line)
+    return bounded[-max(1, int(max_lines)) :]
+
+
+def append_jsonl_bounded(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    max_file_bytes: int,
+    keep_lines: int,
+    max_line_chars: int = 8192,
+) -> bool:
+    """Append a JSONL row and trim file growth when size threshold is exceeded."""
+    try:
+        line = json.dumps(payload, ensure_ascii=True)
+    except Exception:
+        return False
+    if len(line) > max(64, int(max_line_chars)):
+        return False
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+        if int(path.stat().st_size) <= max(1, int(max_file_bytes)):
+            return True
+    except Exception:
+        return False
+
+    lines = read_text_tail_lines(
+        path,
+        max_lines=max(1, int(keep_lines)),
+        max_bytes=max(1, int(max_file_bytes)),
+        max_line_chars=max(64, int(max_line_chars)),
+    )
+    return atomic_write_text(path, ("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
 
 
 def _is_legacy_value(current: Any, legacy: Any) -> bool:
@@ -97,9 +208,8 @@ def load_config(defaults: Config) -> Config:
         if _apply_performance_migrations(defaults):
             save_config(defaults)
         return defaults
-    try:
-        data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    data = load_json_dict_bounded(path)
+    if data is None:
         if _apply_performance_migrations(defaults):
             save_config(defaults)
         return defaults
@@ -133,6 +243,6 @@ def load_config(defaults: Config) -> Config:
 def save_config(cfg: Config) -> None:
     path = config_path()
     try:
-        path.write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
+        atomic_write_text(path, json.dumps(asdict(cfg), indent=2), encoding="utf-8")
     except Exception:
         pass

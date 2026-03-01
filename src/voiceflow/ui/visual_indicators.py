@@ -21,9 +21,15 @@ from enum import Enum
 from pathlib import Path
 from .visual_config import get_visual_config, VisualConfigManager
 from ..utils.guardrails import safe_visual_update, process_visual_update_queue, with_error_recovery
-from ..utils.settings import config_dir
+from ..utils.settings import config_dir, append_jsonl_bounded, read_text_tail_lines
 
 logger = logging.getLogger(__name__)
+
+_ANIMATION_PREFS: Dict[str, Any] = {
+    "quality": "auto",
+    "reduced_motion": False,
+    "target_fps": 28,
+}
 
 class TranscriptionStatus(Enum):
     """Status states for visual indication"""
@@ -64,6 +70,11 @@ class BottomScreenIndicator:
         self.ready_event = threading.Event()
         self.animation_job = None
         self.animation_step = 0.0
+        self.animation_quality = "auto"
+        self.reduced_motion = False
+        self.target_fps = 28
+        self._anim_last_frame_ms = 0.0
+        self._anim_load_factor = 1.0
         self.transparent_key = "#010203"
         self.status_icon_canvas = None
         self.status_icon_bg = None
@@ -128,6 +139,10 @@ class BottomScreenIndicator:
         self.ui_actions_path: Path = config_dir() / "ui_actions.jsonl"
         self.ui_action_last_processed_ts = time.time()
         self.ui_action_seen = deque(maxlen=240)
+        self.ui_action_allowed = {"open_recent_history", "open_correction_review"}
+        self.ui_action_max_age_seconds = 180.0
+        self.ui_action_future_skew_seconds = 5.0
+        self.ui_action_session_floor = self.history_session_started_at - 2.0
         self.dock_enabled = False
         self.noise_floor = 0.0
         self.wave_energy_history = deque([0.0] * 84, maxlen=84)
@@ -143,6 +158,11 @@ class BottomScreenIndicator:
         # Configuration manager
         self.config_manager = get_visual_config()
         self._update_visual_settings()
+        self.set_animation_preferences(
+            quality=_ANIMATION_PREFS.get("quality", "auto"),
+            reduced_motion=bool(_ANIMATION_PREFS.get("reduced_motion", False)),
+            target_fps=int(_ANIMATION_PREFS.get("target_fps", 28) or 28),
+        )
         self.visual_theme = self._select_daily_visual_theme()
 
         # Start GUI in separate thread for background compatibility
@@ -176,6 +196,56 @@ class BottomScreenIndicator:
         ]
         idx = datetime.now().timetuple().tm_yday % len(themes)
         return themes[idx]
+
+    def set_animation_preferences(
+        self,
+        *,
+        quality: Optional[str] = None,
+        reduced_motion: Optional[bool] = None,
+        target_fps: Optional[int] = None,
+    ) -> None:
+        allowed = {"auto", "high", "balanced", "low"}
+        if quality is not None:
+            normalized_quality = str(quality or "auto").strip().lower()
+            if normalized_quality not in allowed:
+                normalized_quality = "auto"
+            self.animation_quality = normalized_quality
+        if reduced_motion is not None:
+            self.reduced_motion = bool(reduced_motion)
+        if target_fps is not None:
+            try:
+                fps_val = int(target_fps)
+            except Exception:
+                fps_val = 28
+            self.target_fps = max(12, min(60, fps_val))
+
+    def _resolve_animation_interval(self, status: TranscriptionStatus) -> int:
+        fps = int(max(12, min(60, self.target_fps)))
+        quality = self.animation_quality
+        if self.reduced_motion:
+            fps = min(fps, 18)
+        if quality == "high":
+            fps = max(fps, 34)
+        elif quality == "balanced":
+            fps = min(max(fps, 24), 32)
+        elif quality == "low":
+            fps = min(fps, 18)
+        else:
+            # Auto mode: adapt gently to frame load.
+            if self._anim_load_factor > 1.30:
+                fps = max(12, int(fps * 0.72))
+            elif self._anim_load_factor > 1.12:
+                fps = max(12, int(fps * 0.84))
+            elif self._anim_load_factor < 0.70:
+                fps = min(40, int(fps * 1.12))
+
+        if status == TranscriptionStatus.LISTENING:
+            pass
+        elif status == TranscriptionStatus.PROCESSING:
+            fps = min(fps + 2, 42)
+        elif status == TranscriptionStatus.TRANSCRIBING:
+            fps = min(fps + 3, 44)
+        return int(max(16, min(84, round(1000.0 / max(12.0, float(fps))))))
     
     def _start_gui_thread(self):
         """Start GUI thread for thread-safe visual indicators"""
@@ -248,14 +318,17 @@ class BottomScreenIndicator:
         if not self.gui_running or not self.root:
             return
         try:
-            if not self.ui_actions_path.exists():
-                return
-            try:
-                lines = self.ui_actions_path.read_text(encoding="utf-8").splitlines()[-120:]
-            except Exception:
+            lines = read_text_tail_lines(
+                self.ui_actions_path,
+                max_lines=120,
+                max_bytes=262144,
+                max_line_chars=2048,
+            )
+            if not lines:
                 return
 
             latest_ts = float(self.ui_action_last_processed_ts)
+            now = time.time()
             for raw in lines:
                 line = raw.strip()
                 if not line:
@@ -267,12 +340,18 @@ class BottomScreenIndicator:
                 if not isinstance(payload, dict):
                     continue
                 action = str(payload.get("action", "")).strip().lower()
-                if not action:
+                if action not in self.ui_action_allowed:
                     continue
                 try:
                     event_ts = float(payload.get("ts", 0.0))
                 except Exception:
                     event_ts = 0.0
+                if event_ts < self.ui_action_session_floor:
+                    continue
+                if event_ts > (now + self.ui_action_future_skew_seconds):
+                    continue
+                if (now - event_ts) > self.ui_action_max_age_seconds:
+                    continue
                 if event_ts <= self.ui_action_last_processed_ts:
                     continue
                 src_pid = int(payload.get("pid", 0) or 0)
@@ -691,6 +770,11 @@ class BottomScreenIndicator:
             min(255, accent_g + 28),
             min(255, accent_b + 36),
         )
+        low_detail = bool(
+            self.reduced_motion
+            or self.animation_quality == "low"
+            or (self.animation_quality == "auto" and self._anim_load_factor > 1.25)
+        )
 
         if self.wave_trail_line and self.wave_trail_glow and len(hist) >= 4:
             points = []
@@ -708,12 +792,12 @@ class BottomScreenIndicator:
             self.wave_canvas.itemconfig(
                 self.wave_trail_glow,
                 fill=glow_color,
-                width=(4 + (4.2 * voiced_drive) + (2.4 * self._burst_energy)),
+                width=(2.5 + (2.8 * voiced_drive) if low_detail else (4 + (4.2 * voiced_drive) + (2.4 * self._burst_energy))),
             )
 
         if self.wave_line and self.wave_line_glow:
             points = []
-            point_count = 72
+            point_count = 44 if low_detail else (60 if self.animation_quality == "balanced" else 72)
             span = max(1.0, float(self.wave_right - self.wave_left))
             wave_amp = 1.2 + (voiced_drive * max_h * (0.58 + (0.32 * mid)))
             base_freq = 1.4 + (4.8 * centroid) + (0.8 * high)
@@ -787,26 +871,30 @@ class BottomScreenIndicator:
             self.wave_canvas.itemconfig(self.wave_orb_glow, fill=glow_color)
 
             # Orb pulse rings for stronger speech reactivity cues.
-            for idx, ring in enumerate(self.wave_pulse_rings):
-                phase = (self.wave_phase * (0.34 + (idx * 0.08))) + (idx * 1.7)
-                pulse = (0.5 + 0.5 * math.sin(phase))
-                ring_r = glow_r + 5 + (idx * 8) + (pulse * 6) + (voiced_drive * 14)
-                self.wave_canvas.coords(
-                    ring,
-                    orb_x - ring_r,
-                    orb_y - ring_r,
-                    orb_x + ring_r,
-                    orb_y + ring_r,
-                )
-                rc_r = min(255, accent_r + 10 + (idx * 6))
-                rc_g = min(255, accent_g + 8 + (idx * 4))
-                rc_b = min(255, accent_b + 18 + (idx * 3))
-                ring_color = "#{:02X}{:02X}{:02X}".format(rc_r, rc_g, rc_b)
-                ring_w = max(1, int(1 + voiced_drive + (0.4 * (2 - idx)) + (0.4 * self._burst_energy)))
-                self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
+            if not low_detail:
+                for idx, ring in enumerate(self.wave_pulse_rings):
+                    phase = (self.wave_phase * (0.34 + (idx * 0.08))) + (idx * 1.7)
+                    pulse = (0.5 + 0.5 * math.sin(phase))
+                    ring_r = glow_r + 5 + (idx * 8) + (pulse * 6) + (voiced_drive * 14)
+                    self.wave_canvas.coords(
+                        ring,
+                        orb_x - ring_r,
+                        orb_y - ring_r,
+                        orb_x + ring_r,
+                        orb_y + ring_r,
+                    )
+                    rc_r = min(255, accent_r + 10 + (idx * 6))
+                    rc_g = min(255, accent_g + 8 + (idx * 4))
+                    rc_b = min(255, accent_b + 18 + (idx * 3))
+                    ring_color = "#{:02X}{:02X}{:02X}".format(rc_r, rc_g, rc_b)
+                    ring_w = max(1, int(1 + voiced_drive + (0.4 * (2 - idx)) + (0.4 * self._burst_energy)))
+                    self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
+            else:
+                for ring in self.wave_pulse_rings:
+                    self.wave_canvas.itemconfig(ring, outline="", width=0)
 
         # Spark particles orbiting the waveform path.
-        if self.wave_sparks and self.wave_spark_meta:
+        if (not low_detail) and self.wave_sparks and self.wave_spark_meta:
             span = max(1.0, float(self.wave_right - self.wave_left))
             speed = 0.02 + (1.05 * voiced_drive)
             drift = 0.02 + (0.20 * voiced_drive)
@@ -828,6 +916,9 @@ class BottomScreenIndicator:
                 s_b = min(255, accent_b + 30)
                 spark_color = "#{:02X}{:02X}{:02X}".format(s_r, s_g, s_b)
                 self.wave_canvas.itemconfig(spark, fill=spark_color)
+        elif self.wave_sparks:
+            for spark in self.wave_sparks:
+                self.wave_canvas.coords(spark, -12, -12, -12, -12)
 
     def update_audio_level(self, level: float):
         """Thread-safe live amplitude input from recorder loop."""
@@ -1222,24 +1313,29 @@ class BottomScreenIndicator:
         if not self.window:
             return
 
+        frame_start = time.perf_counter()
         self.animation_step += 0.28
 
         if status == TranscriptionStatus.LISTENING:
-            self._animate_geometric_strip(mode="listening")
+            if not self.reduced_motion:
+                self._animate_geometric_strip(mode="listening")
             self._animate_waveform(mode="listening")
-            interval = 36
         elif status == TranscriptionStatus.PROCESSING:
-            self._animate_geometric_strip(mode="processing")
+            if not self.reduced_motion:
+                self._animate_geometric_strip(mode="processing")
             self._animate_waveform(mode="processing")
-            interval = 32
         elif status == TranscriptionStatus.TRANSCRIBING:
-            self._animate_geometric_strip(mode="transcribing")
+            if not self.reduced_motion:
+                self._animate_geometric_strip(mode="transcribing")
             self._animate_waveform(mode="transcribing")
-            interval = 30
         else:
             self._set_icon_idle()
             return
 
+        interval = self._resolve_animation_interval(status)
+        frame_ms = max(0.01, (time.perf_counter() - frame_start) * 1000.0)
+        self._anim_last_frame_ms = frame_ms
+        self._anim_load_factor = frame_ms / max(1.0, float(interval))
         self.animation_job = self.window.after(interval, lambda: self._animate_status_icon(status))
 
     def _toggle_history_panel(self):
@@ -1311,10 +1407,13 @@ class BottomScreenIndicator:
 
     def _append_correction_feedback(self, payload: Dict[str, Any]) -> bool:
         try:
-            self.history_correction_feedback_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.history_correction_feedback_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
-            return True
+            return append_jsonl_bounded(
+                self.history_correction_feedback_path,
+                payload,
+                max_file_bytes=786432,
+                keep_lines=1000,
+                max_line_chars=8192,
+            )
         except Exception as e:
             logger.debug(f"Failed to append correction feedback: {e}")
             return False
@@ -1437,7 +1536,6 @@ class BottomScreenIndicator:
 
     def _append_history_store(self, item: Dict[str, Any]) -> None:
         try:
-            self.history_store_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "ts": str(item.get("ts", "")),
                 "event_epoch": float(item.get("event_epoch", time.time())),
@@ -1447,25 +1545,37 @@ class BottomScreenIndicator:
                 "preview": str(item.get("preview", "")),
                 "full_text": str(item.get("full_text", "")),
             }
-            with self.history_store_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+            append_jsonl_bounded(
+                self.history_store_path,
+                payload,
+                max_file_bytes=1048576,
+                keep_lines=1200,
+                max_line_chars=8192,
+            )
         except Exception as e:
             logger.debug(f"Failed to append history store: {e}")
 
     def _sync_history_from_store(self) -> None:
         lines: list[str] = []
-        if self.history_store_path.exists():
-            try:
-                lines.extend(self.history_store_path.read_text(encoding="utf-8").splitlines())
-            except Exception as e:
-                logger.debug(f"Failed to read history store: {e}")
+        lines.extend(
+            read_text_tail_lines(
+                self.history_store_path,
+                max_lines=220,
+                max_bytes=1048576,
+                max_line_chars=8192,
+            )
+        )
 
         # Fallback: seed history view from saved correction records.
-        if not lines and self.history_correction_feedback_path.exists():
-            try:
-                lines.extend(self.history_correction_feedback_path.read_text(encoding="utf-8").splitlines())
-            except Exception as e:
-                logger.debug(f"Failed to read correction feedback store: {e}")
+        if not lines:
+            lines.extend(
+                read_text_tail_lines(
+                    self.history_correction_feedback_path,
+                    max_lines=220,
+                    max_bytes=1048576,
+                    max_line_chars=8192,
+                )
+            )
 
         if not lines:
             return
@@ -2419,25 +2529,40 @@ def get_dock_enabled() -> bool:
         return indicator.get_dock_enabled()
     return True
 
+def set_animation_preferences(quality: str = "auto", reduced_motion: bool = False, target_fps: int = 28):
+    """Apply animation preferences globally and to active indicator when present."""
+    _ANIMATION_PREFS["quality"] = str(quality or "auto").strip().lower()
+    _ANIMATION_PREFS["reduced_motion"] = bool(reduced_motion)
+    try:
+        _ANIMATION_PREFS["target_fps"] = int(target_fps)
+    except Exception:
+        _ANIMATION_PREFS["target_fps"] = 28
+    global _indicator
+    if _indicator:
+        _indicator.set_animation_preferences(
+            quality=str(_ANIMATION_PREFS["quality"]),
+            reduced_motion=bool(_ANIMATION_PREFS["reduced_motion"]),
+            target_fps=int(_ANIMATION_PREFS["target_fps"]),
+        )
+
 def _append_ui_action_request(action: str) -> None:
     safe_action = str(action or "").strip().lower()
-    if not safe_action:
+    if safe_action not in {"open_recent_history", "open_correction_review"}:
         return
     path = config_dir() / "ui_actions.jsonl"
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "ts": time.time(),
             "pid": int(os.getpid()),
             "action": safe_action,
         }
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
-
-        # Keep queue bounded to avoid unbounded growth in long sessions.
-        if path.stat().st_size > 524288:
-            lines = path.read_text(encoding="utf-8").splitlines()[-240:]
-            path.write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
+        append_jsonl_bounded(
+            path,
+            payload,
+            max_file_bytes=524288,
+            keep_lines=240,
+            max_line_chars=1024,
+        )
     except Exception:
         pass
 

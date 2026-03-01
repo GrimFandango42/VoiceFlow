@@ -68,6 +68,12 @@ Speed-first defaults now separate lightweight cleanup from aggressive rewrites:
 - `enable_light_typo_correction=true`
   - Low-latency typo/spelling cleanup (safe regex pass).
   - Runs before destination formatting and injection.
+- `enable_safe_second_pass_cleanup=true`
+  - Deterministic second-pass cleanup after primary formatting.
+  - Designed for low overhead and predictable output.
+- `enable_heavy_second_pass_cleanup=false`
+  - Stronger optional cleanup stage, disabled by default.
+  - Runs only when explicitly enabled and transcript length meets `heavy_second_pass_min_chars` (default `180`).
 - `enable_aggressive_context_corrections=false`
   - Disables risky phrase rewrites unless explicitly enabled.
   - Useful if you observed over-correction in normal dictation.
@@ -80,6 +86,25 @@ If quality drops mid-session:
 2. Confirm `model_tier` and `device` in logs.
 3. Keep aggressive rewrites off unless you need domain-specific substitutions.
 4. Use `Correction Review` for recurring misses.
+
+Performance/quality telemetry in logs now includes:
+
+- `safe2_ms`, `heavy2_ms`
+- `second_pass` mode (`none`, `safe`, `heavy`, `safe+heavy`)
+- `delta_chars` after second-pass cleanup
+
+## Animation Quality Controls
+
+Visual indicator animation is now configurable with performance-aware defaults:
+
+- `visual_animation_quality=auto`
+  - Adaptive quality mode. The overlay reduces effect complexity under load.
+- `visual_target_fps=28`
+  - Preferred frame target for adaptive mode (guarded to `12..60`).
+- `visual_reduced_motion=false`
+  - When enabled, disables high-cost motion effects and lowers animation intensity.
+
+You can tune these fields in config if your system needs smoother visuals or lower motion.
 
 ## Visual Setup Documentation
 
@@ -152,6 +177,12 @@ Optional tier overrides:
 
 - Config: `%LOCALAPPDATA%\LocalFlow\config.json`
 - Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+
+Local runtime stores are bounded for long-session stability:
+
+- `ui_actions.jsonl`: bounded write + stale-event filtering.
+- `recent_history_events.jsonl`: bounded append with rotation.
+- `transcription_corrections.jsonl`: bounded append with rotation.
 
 Injection reliability defaults:
 

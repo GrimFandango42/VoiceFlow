@@ -1053,10 +1053,25 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
                 if compute in {"float16", "float32"}:
                     updates["compute_type"] = "int8"
 
+        def _validate_setup_save_state(selected_profile: str) -> Tuple[bool, str]:
+            if selected_profile not in {"recommended", "cpu-compatible", "gpu-balanced"}:
+                return False, "Choose a startup profile before saving."
+            if is_startup_flow:
+                if bool(hardware_check_running_state["value"]):
+                    return False, "Hardware check is still running. Wait until Step 1 completes."
+                if not bool(hardware_checked_state["value"]):
+                    return False, "Run Step 1 hardware check before saving."
+                if not bool(profile_selected_state["value"]):
+                    return False, "Select a startup profile in Step 2 before saving."
+            if selected_profile == "gpu-balanced" and not bool(_current_caps().cuda_available):
+                return False, "GPU Balanced requires CUDA. Run hardware check or choose a different profile."
+            return True, ""
+
         def _save_and_launch():
             selected_profile = str(profile_var.get() or "").strip().lower()
-            if selected_profile not in {"recommended", "cpu-compatible", "gpu-balanced"}:
-                check_status_var.set("Choose a startup profile before saving.")
+            is_valid_save, validation_message = _validate_setup_save_state(selected_profile)
+            if not is_valid_save:
+                check_status_var.set(validation_message)
                 return
             updates = profile_defaults(selected_profile, _current_caps())
             updates["visual_indicators_enabled"] = bool(visual_var.get())

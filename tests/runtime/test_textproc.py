@@ -4,6 +4,7 @@ import json
 
 from voiceflow.core.textproc import (
     apply_code_mode,
+    apply_second_pass_cleanup,
     format_transcript_text,
     format_transcript_for_destination,
     infer_destination_profile,
@@ -81,6 +82,19 @@ def test_normalize_context_terms_aggressive_rules_are_opt_in():
     aggressive = normalize_context_terms(text, aggressive=True, light=True)
     assert "cloud code" in safe.lower()
     assert "Claude Code" in aggressive
+
+
+def test_second_pass_cleanup_safe_pass_is_low_risk():
+    src = "hello  ,   world!!!    this is is is fine"
+    out = apply_second_pass_cleanup(src, heavy=False)
+    assert "hello, world!!!" in out
+    assert "is is is is" not in out
+
+
+def test_second_pass_cleanup_heavy_pass_collapses_repeated_pairs():
+    src = "deploy now deploy now deploy now deploy now"
+    out = apply_second_pass_cleanup(src, heavy=True)
+    assert out.lower().count("deploy now") <= 2
 
 
 def test_custom_technical_term_dictionary(monkeypatch, tmp_path):
