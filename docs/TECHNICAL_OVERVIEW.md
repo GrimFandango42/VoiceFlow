@@ -29,6 +29,8 @@ Performance-sensitive fields:
 - `latency_boost_enabled`
 - `latency_boost_model_tier`
 - `enable_pause_compaction`
+- `pause_compaction_retry_*` (raw/chunked retry guardrails for sparse output)
+- `idle_resume_guard_*` (first-utterance safety policy after long idle periods)
 
 Stability and behavior fields:
 

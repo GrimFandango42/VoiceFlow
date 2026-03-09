@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from contextlib import contextmanager
 from typing import Optional, Any, Dict
 import logging
@@ -63,22 +64,78 @@ class _RECT(ctypes.Structure):
     ]
 
 
+def _schedule_clipboard_restore(
+    text: str,
+    *,
+    retry_window_seconds: float,
+    attempts_per_try: int,
+    base_delay: float,
+    log: Optional[logging.Logger] = None,
+) -> None:
+    """
+    Best-effort background clipboard restore when immediate restore fails.
+    This reduces risk of losing user clipboard contents under transient lock contention.
+    """
+    window = max(0.5, float(retry_window_seconds))
+    per_try_attempts = max(1, int(attempts_per_try))
+    delay = max(0.005, float(base_delay))
+
+    def _worker() -> None:
+        deadline = time.time() + window
+        last_error: Optional[Exception] = None
+        while time.time() < deadline:
+            try:
+                _clipboard_copy_with_retry(text, attempts=per_try_attempts, base_delay=delay)
+                if log:
+                    log.info("clipboard_restore_async_success window_s=%.2f", window)
+                return
+            except Exception as exc:
+                last_error = exc
+                time.sleep(min(0.35, delay * 2.0))
+        if log:
+            log.warning("clipboard_restore_async_failed window_s=%.2f error=%s", window, last_error)
+
+    thread = threading.Thread(target=_worker, name="ClipboardRestore", daemon=True)
+    thread.start()
+
+
 @contextmanager
-def _preserve_clipboard(enabled: bool):
+def _preserve_clipboard(
+    enabled: bool,
+    *,
+    restore_attempts: int = 10,
+    restore_base_delay: float = 0.03,
+    restore_async_retry_seconds: float = 8.0,
+    log: Optional[logging.Logger] = None,
+):
     prev: Optional[str] = None
     if enabled:
         try:
             prev = _clipboard_paste_with_retry()
-        except Exception:
+        except Exception as exc:
+            if log:
+                log.warning("clipboard_snapshot_failed error=%s", exc)
             prev = None
     try:
         yield
     finally:
         if enabled and prev is not None:
             try:
-                _clipboard_copy_with_retry(prev)
-            except Exception:
-                pass
+                _clipboard_copy_with_retry(
+                    prev,
+                    attempts=max(1, int(restore_attempts)),
+                    base_delay=max(0.005, float(restore_base_delay)),
+                )
+            except Exception as exc:
+                if log:
+                    log.warning("clipboard_restore_immediate_failed error=%s", exc)
+                _schedule_clipboard_restore(
+                    prev,
+                    retry_window_seconds=float(restore_async_retry_seconds),
+                    attempts_per_try=max(2, int(restore_attempts)),
+                    base_delay=max(0.005, float(restore_base_delay)),
+                    log=log,
+                )
 
 
 def _clipboard_copy_with_retry(text: str, attempts: int = 6, base_delay: float = 0.03) -> None:
@@ -161,7 +218,19 @@ class ClipboardInjector:
         if not text.strip():
             return False
 
-        with _preserve_clipboard(self.cfg.restore_clipboard):
+        with _preserve_clipboard(
+            self.cfg.restore_clipboard,
+            restore_attempts=max(1, int(getattr(self.cfg, "clipboard_restore_retry_attempts", 10))),
+            restore_base_delay=max(
+                0.005,
+                int(getattr(self.cfg, "clipboard_restore_retry_base_delay_ms", 30)) / 1000.0,
+            ),
+            restore_async_retry_seconds=max(
+                0.5,
+                float(getattr(self.cfg, "clipboard_restore_async_retry_seconds", 8.0)),
+            ),
+            log=self._log,
+        ):
             try:
                 _clipboard_copy_with_retry(text)
             except Exception as e:

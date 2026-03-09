@@ -5,6 +5,7 @@ import traceback
 import sys
 import os
 import subprocess
+import gc
 import re
 import json
 import wave
@@ -102,7 +103,10 @@ def _is_primary_cli_process() -> bool:
                 continue
             cmd_list = [str(part).strip() for part in (proc.info.get("cmdline") or []) if str(part).strip()]
             cmdline = " ".join(cmd_list)
-            if "-m voiceflow.ui.cli_enhanced" in cmdline:
+            if (
+                "voiceflow.ui.cli_enhanced" in cmdline
+                and ("-m" in cmdline or "from voiceflow.ui.cli_enhanced import main" in cmdline)
+            ):
                 matches.append(
                     (
                         int(proc.info["pid"]),
@@ -150,10 +154,11 @@ def _list_cli_processes() -> list[tuple[int, float, int]]:
             if name not in {"python.exe", "pythonw.exe", "python"}:
                 continue
             cmd_list = [str(part).strip() for part in (proc.info.get("cmdline") or []) if str(part).strip()]
-            if "-m" not in cmd_list:
+            cmdline = " ".join(cmd_list)
+            # Accept both tokenized and collapsed command-line variants.
+            if "voiceflow.ui.cli_enhanced" not in cmdline:
                 continue
-            # Strict module match to avoid false positives from arbitrary command text.
-            if "voiceflow.ui.cli_enhanced" not in cmd_list:
+            if "-m" not in cmdline and "from voiceflow.ui.cli_enhanced import main" not in cmdline:
                 continue
             matches.append(
                 (
@@ -327,11 +332,11 @@ except ImportError:
     VISUAL_INDICATORS_AVAILABLE = False
     def visual_show_preview(text): pass
     def visual_clear_preview(): pass
-    def visual_record_transcription_event(text, audio_duration, processing_time):
+    def visual_record_transcription_event(text, audio_duration, processing_time, metadata=None):
         # Late-bind fallback: import can fail early during startup races.
         try:
             from voiceflow.ui.visual_indicators import record_transcription_event as _record_event
-            _record_event(text, audio_duration, processing_time)
+            _record_event(text, audio_duration, processing_time, metadata=metadata)
         except Exception:
             pass
     def visual_update_audio_level(level): pass
@@ -564,6 +569,7 @@ class EnhancedApp:
         self._perf_total_audio = 0.0
         self._perf_total_processing = 0.0
         self._perf_total_count = 0
+        self._last_transcription_completed_at = 0.0
 
         # Streaming preview (VoiceFlow 3.0)
         self.live_caption_enabled = bool(getattr(cfg, "live_caption_enabled", True))
@@ -599,7 +605,10 @@ class EnhancedApp:
             1,
             int(os.environ.get("VOICEFLOW_FEEDBACK_AUDIO_RETENTION_MINUTES", "30") or 30),
         )
+        self._housekeeping_stop = threading.Event()
+        self._housekeeping_thread: Optional[threading.Thread] = None
         self._start_daily_learning_guardrail()
+        self._start_longrun_housekeeping_thread()
 
         print(f"[EnhancedApp] Initialized with enhanced thread management and visual indicators {'enabled' if self.visual_indicators_enabled else 'disabled'}")
         print(f"[EnhancedApp] Streaming preview: {'Enabled' if self.streaming_enabled else 'Disabled'}")
@@ -741,6 +750,67 @@ class EnhancedApp:
         )
         thread.start()
 
+    def _start_longrun_housekeeping_thread(self) -> None:
+        """Background long-run health telemetry + bounded cleanup hooks."""
+        if not bool(getattr(self.cfg, "longrun_housekeeping_enabled", True)):
+            return
+        if self._housekeeping_thread and self._housekeeping_thread.is_alive():
+            return
+
+        self._housekeeping_stop.clear()
+        self._housekeeping_thread = threading.Thread(
+            target=self._longrun_housekeeping_loop,
+            name="LongRunHousekeeping",
+            daemon=True,
+        )
+        self._housekeeping_thread.start()
+
+    def _longrun_housekeeping_loop(self) -> None:
+        interval_s = max(30.0, float(getattr(self.cfg, "longrun_health_log_interval_seconds", 900.0)))
+        soft_gc_mb = float(getattr(self.cfg, "longrun_soft_gc_memory_mb", 0.0) or 0.0)
+        while not self._housekeeping_stop.wait(interval_s):
+            try:
+                rss_mb = 0.0
+                try:
+                    import psutil  # type: ignore
+
+                    rss_mb = float(psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024))
+                except Exception:
+                    rss_mb = 0.0
+
+                ring_capacity_mb = float(getattr(self.rec, "get_memory_usage_mb", lambda: 0.0)() or 0.0)
+                live_audio_s = float(getattr(self.rec, "get_current_duration", lambda: 0.0)() or 0.0)
+                self._log.info(
+                    "longrun_health rss_mb=%.1f ring_capacity_mb=%.2f live_audio_s=%.2f perf_window=%d checkpoint_parts=%d",
+                    rss_mb,
+                    ring_capacity_mb,
+                    live_audio_s,
+                    len(self._perf_window),
+                    len(self._checkpoint_preview_parts),
+                )
+
+                if self.adaptive_learning and hasattr(self.adaptive_learning, "_purge_expired"):
+                    try:
+                        self.adaptive_learning._purge_expired()
+                    except Exception as purge_exc:
+                        self._log.debug("longrun_adaptive_purge_failed error=%s", purge_exc)
+
+                if self._feedback_audio_enabled:
+                    folder = self._feedback_audio_dir()
+                    if folder is not None:
+                        self._purge_feedback_audio(folder)
+
+                if soft_gc_mb > 0.0 and rss_mb >= soft_gc_mb:
+                    collected = gc.collect()
+                    self._log.warning(
+                        "longrun_soft_gc_triggered rss_mb=%.1f threshold_mb=%.1f collected=%d",
+                        rss_mb,
+                        soft_gc_mb,
+                        int(collected),
+                    )
+            except Exception as exc:
+                self._log.debug("longrun_housekeeping_error error=%s", exc)
+
     def _pick_asr_engine(self, audio_duration: float):
         """Pick fast engine for short audio to reduce perceived latency."""
         # Only route to fast path after successful preload.
@@ -756,25 +826,105 @@ class EnhancedApp:
             return self.asr_fast, "fast"
         return self.asr, "primary"
 
-    def _compact_pauses(self, audio_data: np.ndarray) -> np.ndarray:
+    def _transcribe_raw_in_chunks(self, audio_data: np.ndarray) -> tuple[str, int]:
+        """
+        Bounded long-clip retry path when single-pass raw decode would be too expensive.
+        Returns (stitched_text, chunks_used).
+        """
+        sample_rate = max(8000, int(getattr(self.cfg, "sample_rate", 16000)))
+        audio_duration = len(audio_data) / float(sample_rate)
+        chunk_seconds = max(6.0, float(getattr(self.cfg, "pause_compaction_retry_chunk_seconds", 32.0)))
+        overlap_seconds = max(
+            0.05,
+            min(chunk_seconds * 0.4, float(getattr(self.cfg, "pause_compaction_retry_chunk_overlap_seconds", 0.35))),
+        )
+        max_chunks = max(2, int(getattr(self.cfg, "pause_compaction_retry_chunk_max_chunks", 8)))
+
+        chunk_samples = max(1, int(chunk_seconds * sample_rate))
+        overlap_samples = max(1, int(overlap_seconds * sample_rate))
+        step_samples = max(1, chunk_samples - overlap_samples)
+
+        chunks: list[np.ndarray] = []
+        start = 0
+        while start < len(audio_data):
+            end = min(len(audio_data), start + chunk_samples)
+            chunk = audio_data[start:end]
+            if len(chunk) > 0:
+                chunks.append(chunk)
+            if end >= len(audio_data):
+                break
+            start += step_samples
+            if len(chunks) > max_chunks:
+                self._log.info(
+                    "pause_compaction_chunked_retry_skipped reason=max_chunks raw_duration=%.2f chunks=%d max_chunks=%d",
+                    audio_duration,
+                    len(chunks),
+                    max_chunks,
+                )
+                return "", len(chunks)
+
+        merged_words: list[str] = []
+        chunks_used = 0
+        overlap_token_cap = 12
+
+        for idx, chunk in enumerate(chunks):
+            chunk_duration = len(chunk) / float(sample_rate)
+            retry_asr, retry_path = self._pick_asr_engine(chunk_duration)
+            piece = str(retry_asr.transcribe(chunk) or "").strip()
+            chunks_used += 1
+            if not piece:
+                continue
+
+            piece_words = piece.split()
+            if merged_words and piece_words:
+                max_overlap = min(overlap_token_cap, len(merged_words), len(piece_words))
+                trim = 0
+                for overlap in range(max_overlap, 2, -1):
+                    prev_slice = [w.lower() for w in merged_words[-overlap:]]
+                    next_slice = [w.lower() for w in piece_words[:overlap]]
+                    if prev_slice == next_slice:
+                        trim = overlap
+                        break
+                if trim > 0:
+                    piece_words = piece_words[trim:]
+
+            if piece_words:
+                merged_words.extend(piece_words)
+
+            self._log.info(
+                "pause_compaction_chunked_retry_piece idx=%d/%d duration=%.2f words=%d path=%s",
+                idx + 1,
+                len(chunks),
+                chunk_duration,
+                len(piece_words),
+                retry_path,
+            )
+
+        return " ".join(merged_words).strip(), chunks_used
+
+    def _compact_pauses(self, audio_data: np.ndarray, overrides: Optional[Dict[str, float]] = None) -> np.ndarray:
         """
         Remove long silence spans from lengthy recordings to reduce inference time.
         Keeps a small silence margin around detected speech to preserve phrase boundaries.
         """
+        options: Dict[str, float] = dict(overrides or {})
         if not getattr(self.cfg, "enable_pause_compaction", True):
             return audio_data
         if audio_data is None or len(audio_data) == 0:
             return audio_data
 
-        sample_rate = int(getattr(self.cfg, "sample_rate", 16000))
+        sample_rate = int(options.get("sample_rate", getattr(self.cfg, "sample_rate", 16000)))
         audio_duration = len(audio_data) / float(sample_rate)
-        min_duration = float(getattr(self.cfg, "pause_compaction_min_audio_seconds", 14.0))
+        min_duration = float(options.get("min_duration", getattr(self.cfg, "pause_compaction_min_audio_seconds", 14.0)))
         if audio_duration < min_duration:
             return audio_data
 
-        frame_ms = max(10, int(getattr(self.cfg, "pause_compaction_frame_ms", 30)))
+        frame_ms = max(10, int(options.get("frame_ms", getattr(self.cfg, "pause_compaction_frame_ms", 30))))
         frame_len = max(160, int(sample_rate * frame_ms / 1000.0))
-        keep_ms = max(50, int(getattr(self.cfg, "pause_compaction_keep_silence_ms", 180)))
+        keep_ms = max(
+            50,
+            int(options.get("keep_ms", getattr(self.cfg, "pause_compaction_keep_silence_ms", 180))),
+        )
         keep_frames = max(1, int(keep_ms / frame_ms))
 
         # Align to whole frames for vectorized RMS estimation.
@@ -784,7 +934,7 @@ class EnhancedApp:
         framed = audio_data[:usable].reshape(-1, frame_len)
         rms = np.sqrt(np.mean(framed * framed, axis=1))
 
-        base_thr = float(getattr(self.cfg, "min_rms_amplitude", 5e-4))
+        base_thr = float(options.get("min_rms_amplitude", getattr(self.cfg, "min_rms_amplitude", 5e-4)))
         noise_floor = float(np.percentile(rms, 20))
         if audio_duration >= 10.0:
             dyn_thr = max(base_thr * 1.6, noise_floor * 2.6)
@@ -828,7 +978,9 @@ class EnhancedApp:
             return audio_data
 
         compacted = kept_frames.reshape(-1)
-        max_reduction_pct = float(getattr(self.cfg, "pause_compaction_max_reduction_pct", 60.0))
+        max_reduction_pct = float(
+            options.get("max_reduction_pct", getattr(self.cfg, "pause_compaction_max_reduction_pct", 60.0))
+        )
         min_keep_ratio = max(0.2, 1.0 - max(0.0, min(95.0, max_reduction_pct)) / 100.0)
         if (len(compacted) / len(audio_data)) < min_keep_ratio:
             # Over-compaction guardrail: preserve more context for recognition quality.
@@ -1545,6 +1697,8 @@ class EnhancedApp:
         asr_compute = ""
         asr_path = "primary"
         retry_used = False
+        retry_strategy = "none"
+        retry_chunks_used = 0
         second_pass_mode = "none"
         second_pass_chars_delta = 0
 
@@ -1569,14 +1723,38 @@ class EnhancedApp:
                             update_tray_status(self.tray_controller, "idle", False)
                             if VISUAL_INDICATORS_AVAILABLE:
                                 hide_status()
+                        self._last_transcription_completed_at = time.time()
                         return ""
 
             start_time = time.perf_counter()
             raw_audio_duration = len(audio_data) / self.cfg.sample_rate if len(audio_data) > 0 else 0.0
+            idle_resume_active = False
+            idle_gap_seconds = 0.0
+            last_completed = float(getattr(self, "_last_transcription_completed_at", 0.0) or 0.0)
+            if bool(getattr(self.cfg, "idle_resume_guard_enabled", True)) and last_completed > 0.0:
+                idle_gap_seconds = max(0.0, time.time() - last_completed)
+                idle_resume_threshold = max(30.0, float(getattr(self.cfg, "idle_resume_threshold_seconds", 1200.0)))
+                idle_resume_active = idle_gap_seconds >= idle_resume_threshold
+                if idle_resume_active:
+                    self._log.info(
+                        "transcription_idle_resume_guard gap_seconds=%.1f threshold_seconds=%.1f",
+                        idle_gap_seconds,
+                        idle_resume_threshold,
+                    )
+
+            compaction_overrides: Dict[str, float] = {}
+            if idle_resume_active:
+                compaction_overrides["keep_ms"] = float(
+                    getattr(self.cfg, "idle_resume_compaction_keep_silence_ms", 140)
+                )
+                compaction_overrides["max_reduction_pct"] = float(
+                    getattr(self.cfg, "idle_resume_compaction_max_reduction_pct", 68.0)
+                )
             stage_start = time.perf_counter()
-            compacted_audio = self._compact_pauses(audio_data)
+            compacted_audio = self._compact_pauses(audio_data, overrides=compaction_overrides)
             stage_ms["pause_compaction"] = (time.perf_counter() - stage_start) * 1000.0
             audio_duration = len(compacted_audio) / self.cfg.sample_rate if len(compacted_audio) > 0 else 0.0
+            compacted_audio_duration = audio_duration
             compaction_reduction_pct = 0.0
             if len(compacted_audio) != len(audio_data):
                 compaction_reduction_pct = 100.0 * (1.0 - (len(compacted_audio) / max(1, len(audio_data))))
@@ -1619,6 +1797,7 @@ class EnhancedApp:
                         update_tray_status(self.tray_controller, "idle", False)
                         if VISUAL_INDICATORS_AVAILABLE:
                             hide_status()
+                    self._last_transcription_completed_at = time.time()
                     return ""
 
                 non_speech_soft_trigger = True
@@ -1699,13 +1878,17 @@ class EnhancedApp:
                     stage_ms["asr_decode"] = (time.perf_counter() - stage_start) * 1000.0
                 raw_transcript = text
 
-                # Easy quality fallback: if pause compaction removed a lot and output is too short,
-                # retry once on raw audio to recover clipped latter-half speech.
-                retry_max_raw_seconds = float(
-                    getattr(self.cfg, "pause_compaction_retry_max_raw_audio_seconds", 20.0)
-                )
+                # Quality fallback: if compaction removed a lot and transcript looks sparse/short,
+                # retry on raw audio. For long clips above hard max, use bounded chunked retry.
+                retry_max_raw_seconds = float(getattr(self.cfg, "pause_compaction_retry_max_raw_audio_seconds", 20.0))
                 retry_hard_max_raw_seconds = float(
                     getattr(self.cfg, "pause_compaction_retry_hard_max_raw_audio_seconds", 75.0)
+                )
+                retry_chunked_long_enabled = bool(
+                    getattr(self.cfg, "pause_compaction_retry_chunked_long_enabled", True)
+                )
+                retry_chunked_max_raw_seconds = float(
+                    getattr(self.cfg, "pause_compaction_retry_chunked_max_raw_audio_seconds", 210.0)
                 )
                 if (
                     bool(getattr(self.cfg, "pause_compaction_retry_on_short_output", True))
@@ -1716,12 +1899,8 @@ class EnhancedApp:
                     retry_max_words = int(getattr(self.cfg, "pause_compaction_retry_max_words", 8))
                     initial_words = len((text or "").split())
                     initial_chars = len((text or "").strip())
-                    min_words_per_second = float(
-                        getattr(self.cfg, "pause_compaction_retry_min_words_per_second", 1.15)
-                    )
-                    min_chars_per_second = float(
-                        getattr(self.cfg, "pause_compaction_retry_min_chars_per_second", 5.0)
-                    )
+                    min_words_per_second = float(getattr(self.cfg, "pause_compaction_retry_min_words_per_second", 1.15))
+                    min_chars_per_second = float(getattr(self.cfg, "pause_compaction_retry_min_chars_per_second", 5.0))
                     words_per_second = initial_words / max(0.1, raw_audio_duration)
                     chars_per_second = initial_chars / max(0.1, raw_audio_duration)
                     retry_due_to_short = initial_words <= retry_max_words
@@ -1735,42 +1914,70 @@ class EnhancedApp:
                         and raw_audio_duration <= retry_hard_max_raw_seconds
                         and retry_due_to_sparse
                     )
+                    within_chunked_window = (
+                        retry_chunked_long_enabled
+                        and raw_audio_duration > retry_hard_max_raw_seconds
+                        and raw_audio_duration <= retry_chunked_max_raw_seconds
+                        and retry_due_to_sparse
+                    )
                     retry_triggered = (
                         compaction_reduction_pct >= retry_min_reduction
                         and (retry_due_to_short or retry_due_to_sparse)
-                        and (within_primary_window or within_extended_window)
+                        and (within_primary_window or within_extended_window or within_chunked_window)
                     )
                     if retry_triggered:
                         self._log.info(
-                            "pause_compaction_retry_candidate words=%d chars=%d wps=%.2f cps=%.2f reduction=%.1f%% raw_duration=%.2f",
+                            "pause_compaction_retry_candidate words=%d chars=%d wps=%.2f cps=%.2f reduction=%.1f%% raw_duration=%.2f window=%s",
                             initial_words,
                             initial_chars,
                             words_per_second,
                             chars_per_second,
                             compaction_reduction_pct,
                             raw_audio_duration,
+                            (
+                                "primary"
+                                if within_primary_window
+                                else ("extended" if within_extended_window else "chunked")
+                            ),
                         )
-                        fast_retry_max_raw = float(
-                            getattr(self.cfg, "pause_compaction_retry_fast_path_max_raw_audio_seconds", 18.0)
-                        )
-                        if asr_path == "fast" and raw_audio_duration <= fast_retry_max_raw:
-                            retry_asr = active_asr
-                            retry_path = "fast-retry"
-                        else:
-                            retry_asr, retry_path = self._pick_asr_engine(raw_audio_duration)
                         stage_start = time.perf_counter()
-                        retry_text = retry_asr.transcribe(audio_data)
+                        retry_path = "primary-retry"
+                        retry_text = ""
+                        if within_chunked_window:
+                            retry_text, retry_chunks_used = self._transcribe_raw_in_chunks(audio_data)
+                            retry_path = "chunked-raw-retry"
+                        else:
+                            fast_retry_max_raw = float(
+                                getattr(self.cfg, "pause_compaction_retry_fast_path_max_raw_audio_seconds", 18.0)
+                            )
+                            if asr_path == "fast" and raw_audio_duration <= fast_retry_max_raw:
+                                retry_asr = active_asr
+                                retry_path = "fast-retry"
+                            else:
+                                retry_asr, retry_path = self._pick_asr_engine(raw_audio_duration)
+                            retry_text = retry_asr.transcribe(audio_data)
+
                         stage_ms["asr_retry"] = (time.perf_counter() - stage_start) * 1000.0
                         retry_words = len((retry_text or "").split())
                         retry_chars = len((retry_text or "").strip())
-                        if retry_words >= (initial_words + 2) or retry_chars >= (initial_chars + 12):
+                        retry_wps = retry_words / max(0.1, raw_audio_duration)
+                        retry_cps = retry_chars / max(0.1, raw_audio_duration)
+                        improved_density = retry_wps >= (words_per_second * 1.2) or retry_cps >= (chars_per_second * 1.18)
+                        improved_volume = retry_words >= (initial_words + 2) or retry_chars >= (initial_chars + 12)
+                        retry_accept = (retry_words > 0 and retry_chars > 0) and (
+                            improved_volume or improved_density
+                        )
+
+                        if retry_accept:
                             retry_used = True
+                            retry_strategy = retry_path
                             self._log.info(
-                                "pause_compaction_retry_applied initial_words=%d retry_words=%d reduction=%.1f%% path=%s",
+                                "pause_compaction_retry_applied initial_words=%d retry_words=%d reduction=%.1f%% path=%s chunks=%d",
                                 initial_words,
                                 retry_words,
                                 compaction_reduction_pct,
                                 retry_path,
+                                int(retry_chunks_used),
                             )
                             text = retry_text
                             raw_transcript = retry_text
@@ -1778,16 +1985,18 @@ class EnhancedApp:
                             audio_duration = raw_audio_duration
                         else:
                             self._log.info(
-                                "pause_compaction_retry_rejected initial_words=%d retry_words=%d reduction=%.1f%%",
+                                "pause_compaction_retry_rejected initial_words=%d retry_words=%d reduction=%.1f%% path=%s chunks=%d",
                                 initial_words,
                                 retry_words,
                                 compaction_reduction_pct,
+                                retry_path,
+                                int(retry_chunks_used),
                             )
-                    elif raw_audio_duration > retry_hard_max_raw_seconds:
+                    elif raw_audio_duration > retry_chunked_max_raw_seconds:
                         self._log.info(
-                            "pause_compaction_retry_skipped raw_duration=%.2f hard_max_raw=%.2f",
+                            "pause_compaction_retry_skipped raw_duration=%.2f max_raw=%.2f",
                             raw_audio_duration,
-                            retry_hard_max_raw_seconds,
+                            retry_chunked_max_raw_seconds,
                         )
                     elif (
                         raw_audio_duration > retry_max_raw_seconds
@@ -1802,16 +2011,6 @@ class EnhancedApp:
                             raw_audio_duration,
                             retry_max_raw_seconds,
                         )
-                elif (
-                    bool(getattr(self.cfg, "pause_compaction_retry_on_short_output", True))
-                    and len(audio_data) > len(compacted_audio)
-                    and raw_audio_duration > retry_hard_max_raw_seconds
-                ):
-                    self._log.info(
-                        "pause_compaction_retry_skipped raw_duration=%.2f hard_max_raw=%.2f",
-                        raw_audio_duration,
-                        retry_hard_max_raw_seconds,
-                    )
 
                 # Simple hallucination detection - fast and reliable
                 if text and len(text.strip()) > 0:
@@ -1832,6 +2031,7 @@ class EnhancedApp:
                         self._log.info("transcription_filtered reason=hallucination")
                         mark_idle()
                         update_tray_status(self.tray_controller, "idle", False)
+                        self._last_transcription_completed_at = time.time()
                         return ""
 
                     # Check for very short or repetitive content
@@ -1840,6 +2040,7 @@ class EnhancedApp:
                         self._log.info("transcription_filtered reason=too_short")
                         mark_idle()
                         update_tray_status(self.tray_controller, "idle", False)
+                        self._last_transcription_completed_at = time.time()
                         return ""
 
             except TimeoutError as e:
@@ -1848,6 +2049,7 @@ class EnhancedApp:
                 self._log.error("transcription_timeout duration=%.2f timeout=%.2f", audio_duration, timeout_seconds)
                 # Return to idle state after timeout
                 mark_idle()
+                self._last_transcription_completed_at = time.time()
                 return ""
 
             # Apply basic processing
@@ -2005,8 +2207,21 @@ class EnhancedApp:
                 perf_snapshot["session_rtf_avg"],
                 perf_snapshot["status"],
             )
+            final_transcription_path = retry_strategy if retry_used else asr_path
             if self.visual_indicators_enabled and text.strip():
-                visual_record_transcription_event(text, audio_duration, transcription_time)
+                visual_record_transcription_event(
+                    text,
+                    audio_duration,
+                    transcription_time,
+                    metadata={
+                        "raw_audio_duration": round(raw_audio_duration, 3),
+                        "compacted_audio_duration": round(compacted_audio_duration, 3),
+                        "compaction_reduction_pct": round(compaction_reduction_pct, 2),
+                        "retry_used": bool(retry_used),
+                        "transcription_path": str(final_transcription_path),
+                        "idle_resume_active": bool(idle_resume_active),
+                    },
+                )
 
             # Inject text
             inject_start = time.perf_counter()
@@ -2068,7 +2283,8 @@ class EnhancedApp:
                 (
                     "transcription_timing total_ms=%.1f path=%s model_id=%s device=%s compute=%s "
                     "retry_used=%s compaction_ms=%.1f guard_ms=%.1f asr_ms=%.1f retry_ms=%.1f "
-                    "post_ms=%.1f safe2_ms=%.1f heavy2_ms=%.1f second_pass=%s delta_chars=%d inject_ms=%.1f"
+                    "post_ms=%.1f safe2_ms=%.1f heavy2_ms=%.1f second_pass=%s delta_chars=%d inject_ms=%.1f "
+                    "raw_dur=%.2f compacted_dur=%.2f reduction=%.1f retry_strategy=%s retry_chunks=%d idle_resume=%s"
                 ),
                 transcription_time * 1000.0,
                 asr_path,
@@ -2086,6 +2302,12 @@ class EnhancedApp:
                 second_pass_mode,
                 int(second_pass_chars_delta),
                 stage_ms.get("inject", 0.0),
+                raw_audio_duration,
+                compacted_audio_duration,
+                compaction_reduction_pct,
+                retry_strategy,
+                int(retry_chunks_used),
+                str(idle_resume_active),
             )
 
             if text.strip():
@@ -2098,6 +2320,14 @@ class EnhancedApp:
                         "course_corrected": course_corrected,
                         "correction_type": correction_type,
                         "audio_duration": round(audio_duration, 3),
+                        "raw_audio_duration": round(raw_audio_duration, 3),
+                        "compacted_audio_duration": round(compacted_audio_duration, 3),
+                        "compaction_reduction_pct": round(compaction_reduction_pct, 2),
+                        "retry_used": bool(retry_used),
+                        "retry_strategy": retry_strategy,
+                        "retry_chunks_used": int(retry_chunks_used),
+                        "idle_resume_active": bool(idle_resume_active),
+                        "transcription_path": final_transcription_path,
                         "processing_time": round(transcription_time, 3),
                     },
                 )
@@ -2111,6 +2341,7 @@ class EnhancedApp:
                 if VISUAL_INDICATORS_AVAILABLE:
                     hide_status()
 
+            self._last_transcription_completed_at = time.time()
             return text
             
         except Exception as e:
@@ -2131,6 +2362,7 @@ class EnhancedApp:
             time.sleep(2)  # Brief pause before returning to idle
             mark_idle()
 
+            self._last_transcription_completed_at = time.time()
             return ""
 
     def _record_performance(self, audio_duration: float, processing_time: float) -> Dict[str, float | str]:
@@ -2180,6 +2412,9 @@ class EnhancedApp:
                 self.rec.stop()
             except Exception:
                 pass
+        self._housekeeping_stop.set()
+        if self._housekeeping_thread and self._housekeeping_thread.is_alive():
+            self._housekeeping_thread.join(timeout=1.5)
         self._stop_live_checkpoint_monitor()
         
         # Shutdown transcription manager
@@ -2206,9 +2441,14 @@ def main(argv=None):
     """Enhanced main with better error handling and monitoring"""
     if not _acquire_single_instance_mutex():
         return 0
+    if not _is_primary_cli_process():
+        return 0
+    if not _enforce_single_instance():
+        return 0
     if _yield_if_bootstrap_parent():
         return 0
     _start_bootstrap_parent_watchdog()
+    _start_single_instance_watchdog(interval_seconds=2.0)
 
     cfg = load_config(Config())
     setup_saved, _setup_restart_required = maybe_run_startup_setup(cfg)
@@ -2246,6 +2486,8 @@ def main(argv=None):
     # Initialize async logging to a rotating file
     _alog = AsyncLogger(default_log_dir())
     runtime_log = _alog.get()
+    runtime_log.info("single_instance_ok pid=%d", os.getpid())
+    runtime_log.info("single_instance_watchdog_started interval_s=2.0")
 
     # Start idle-aware monitoring for long-running operation
     print(
@@ -2258,6 +2500,7 @@ def main(argv=None):
         memory_critical_mb=monitor_memory_critical_mb,
         check_interval=10.0             # Check every 10 seconds
     )
+    app_ref: Dict[str, Any] = {"instance": None}
 
     # Set up monitoring callbacks
     def on_hang_detected(reason: str):
@@ -2267,6 +2510,19 @@ def main(argv=None):
 
     def on_memory_warning(memory_mb: float):
         print(f"[MONITOR] Memory warning: {memory_mb:.1f}MB")
+        runtime_log.warning("monitor_memory_warning usage_mb=%.1f", float(memory_mb))
+        instance = app_ref.get("instance")
+        if instance is not None:
+            try:
+                if getattr(instance, "adaptive_learning", None) and hasattr(instance.adaptive_learning, "_purge_expired"):
+                    instance.adaptive_learning._purge_expired()
+            except Exception:
+                runtime_log.exception("monitor_memory_warning adaptive_purge_failed")
+        try:
+            collected = gc.collect()
+            runtime_log.info("monitor_memory_warning gc_collected=%d", int(collected))
+        except Exception:
+            runtime_log.exception("monitor_memory_warning gc_failed")
 
     monitor.on_hang_detected = on_hang_detected
     monitor.on_memory_warning = on_memory_warning
@@ -2293,6 +2549,7 @@ def main(argv=None):
     current_platform = runtime_platform_name()
     injector_backend = create_injector_backend(cfg, platform_name=current_platform)
     app = EnhancedApp(cfg, injector_backend=injector_backend)
+    app_ref["instance"] = app
 
     # Enhanced tray support with visual indicators
     tray = None
@@ -2391,6 +2648,7 @@ def main(argv=None):
     
     try:
         listener.start()
+        runtime_log.info("hotkey_listener_started backend=%s", type(listener).__name__)
         print("\n" + "="*70)
         print("VoiceFlow 3.0 - Cold Start Elimination Enabled")
         print("="*70)

@@ -1989,7 +1989,13 @@ class BottomScreenIndicator:
                 )
                 expand_btn.pack(side=tk.LEFT)
 
-    def record_transcription_event(self, text: str, audio_duration: float, processing_time: float):
+    def record_transcription_event(
+        self,
+        text: str,
+        audio_duration: float,
+        processing_time: float,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
         """Record summary for always-on dock/history panel."""
         safe_text = (text or "").strip()
         if not safe_text:
@@ -1998,27 +2004,48 @@ class BottomScreenIndicator:
         preview = self._history_preview_text(safe_text)
         proc = max(0.001, float(processing_time))
         rtf = float(audio_duration) / proc if audio_duration > 0 else 0.0
+        event_meta: Dict[str, Any] = dict(metadata or {})
+        raw_audio_duration = float(event_meta.get("raw_audio_duration", audio_duration) or audio_duration)
+        compacted_audio_duration = float(
+            event_meta.get("compacted_audio_duration", audio_duration) or audio_duration
+        )
+        compaction_reduction_pct = float(event_meta.get("compaction_reduction_pct", 0.0) or 0.0)
         self._append_history_store(
             {
                 "ts": datetime.now().strftime("%H:%M:%S"),
                 "event_epoch": event_epoch,
                 "audio_duration": float(audio_duration),
+                "raw_audio_duration": raw_audio_duration,
+                "compacted_audio_duration": compacted_audio_duration,
+                "compaction_reduction_pct": compaction_reduction_pct,
                 "processing_time": float(processing_time),
                 "rtf": float(rtf),
                 "preview": preview,
                 "full_text": safe_text,
+                "retry_used": bool(event_meta.get("retry_used", False)),
+                "transcription_path": str(event_meta.get("transcription_path", "")),
+                "idle_resume_active": bool(event_meta.get("idle_resume_active", False)),
             }
         )
 
-        event = (safe_text, float(audio_duration), float(processing_time))
+        event = (safe_text, float(audio_duration), float(processing_time), event_meta)
         if not self.command_queue or not self.gui_ready:
             self.pending_history_events.append(event)
             return
         try:
             while self.pending_history_events:
-                pending_text, pending_audio, pending_proc = self.pending_history_events.popleft()
+                pending = self.pending_history_events.popleft()
+                if len(pending) >= 4:
+                    pending_text, pending_audio, pending_proc, pending_meta = pending
+                else:
+                    pending_text, pending_audio, pending_proc = pending
+                    pending_meta = {}
                 self.command_queue.put(
-                    (self._record_transcription_event_ui, (pending_text, pending_audio, pending_proc), {})
+                    (
+                        self._record_transcription_event_ui,
+                        (pending_text, pending_audio, pending_proc, pending_meta),
+                        {},
+                    )
                 )
             self.command_queue.put(
                 (self._record_transcription_event_ui, event, {})
@@ -2031,10 +2058,21 @@ class BottomScreenIndicator:
         if not self.pending_history_events:
             return
         while self.pending_history_events:
-            pending_text, pending_audio, pending_proc = self.pending_history_events.popleft()
-            self._record_transcription_event_ui(pending_text, pending_audio, pending_proc)
+            pending = self.pending_history_events.popleft()
+            if len(pending) >= 4:
+                pending_text, pending_audio, pending_proc, pending_meta = pending
+            else:
+                pending_text, pending_audio, pending_proc = pending
+                pending_meta = {}
+            self._record_transcription_event_ui(pending_text, pending_audio, pending_proc, pending_meta)
 
-    def _record_transcription_event_ui(self, text: str, audio_duration: float, processing_time: float):
+    def _record_transcription_event_ui(
+        self,
+        text: str,
+        audio_duration: float,
+        processing_time: float,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
         safe_text = (text or "").strip()
         if not safe_text:
             return
@@ -2042,6 +2080,7 @@ class BottomScreenIndicator:
         preview = self._history_preview_text(safe_text)
         proc = max(0.001, float(processing_time))
         rtf = float(audio_duration) / proc if audio_duration > 0 else 0.0
+        event_meta: Dict[str, Any] = dict(metadata or {})
 
         incoming_fingerprint = self._history_item_fingerprint(
             {
@@ -2085,6 +2124,14 @@ class BottomScreenIndicator:
             "preview": preview,
             "full_text": safe_text,
             "segments": 1,
+            "raw_audio_duration": float(event_meta.get("raw_audio_duration", audio_duration) or audio_duration),
+            "compacted_audio_duration": float(
+                event_meta.get("compacted_audio_duration", audio_duration) or audio_duration
+            ),
+            "compaction_reduction_pct": float(event_meta.get("compaction_reduction_pct", 0.0) or 0.0),
+            "retry_used": bool(event_meta.get("retry_used", False)),
+            "transcription_path": str(event_meta.get("transcription_path", "")),
+            "idle_resume_active": bool(event_meta.get("idle_resume_active", False)),
         }
         self._remember_history_fingerprint(incoming_fingerprint)
         self.recent_transcriptions.append(item)
@@ -2498,11 +2545,16 @@ def clear_preview():
     if indicator:
         indicator.clear_preview()
 
-def record_transcription_event(text: str, audio_duration: float, processing_time: float):
+def record_transcription_event(
+    text: str,
+    audio_duration: float,
+    processing_time: float,
+    metadata: Optional[Dict[str, Any]] = None,
+):
     """Record recent transcription item for dock/history display."""
     indicator = get_indicator()
     if indicator:
-        indicator.record_transcription_event(text, audio_duration, processing_time)
+        indicator.record_transcription_event(text, audio_duration, processing_time, metadata=metadata)
 
 def update_audio_level(level: float):
     """Push live voice amplitude to waveform animation (0..1)."""

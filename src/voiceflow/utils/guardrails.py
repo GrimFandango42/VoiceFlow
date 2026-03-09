@@ -429,6 +429,39 @@ def validate_config(cfg: Config) -> Config:
                 setattr(cfg, field, default_val)
 
         if (
+            not hasattr(cfg, 'clipboard_restore_retry_attempts')
+            or int(getattr(cfg, 'clipboard_restore_retry_attempts', 0)) < 1
+            or int(getattr(cfg, 'clipboard_restore_retry_attempts', 0)) > 100
+        ):
+            logger.warning(
+                "Invalid clipboard_restore_retry_attempts %s, defaulting to 10",
+                getattr(cfg, 'clipboard_restore_retry_attempts', 'None'),
+            )
+            cfg.clipboard_restore_retry_attempts = 10
+
+        if (
+            not hasattr(cfg, 'clipboard_restore_retry_base_delay_ms')
+            or int(getattr(cfg, 'clipboard_restore_retry_base_delay_ms', -1)) < 1
+            or int(getattr(cfg, 'clipboard_restore_retry_base_delay_ms', -1)) > 1000
+        ):
+            logger.warning(
+                "Invalid clipboard_restore_retry_base_delay_ms %s, defaulting to 30",
+                getattr(cfg, 'clipboard_restore_retry_base_delay_ms', 'None'),
+            )
+            cfg.clipboard_restore_retry_base_delay_ms = 30
+
+        if (
+            not hasattr(cfg, 'clipboard_restore_async_retry_seconds')
+            or float(getattr(cfg, 'clipboard_restore_async_retry_seconds', -1.0)) < 0.5
+            or float(getattr(cfg, 'clipboard_restore_async_retry_seconds', -1.0)) > 120.0
+        ):
+            logger.warning(
+                "Invalid clipboard_restore_async_retry_seconds %s, defaulting to 8.0",
+                getattr(cfg, 'clipboard_restore_async_retry_seconds', 'None'),
+            )
+            cfg.clipboard_restore_async_retry_seconds = 8.0
+
+        if (
             not hasattr(cfg, 'pause_compaction_retry_hard_max_raw_audio_seconds')
             or cfg.pause_compaction_retry_hard_max_raw_audio_seconds < 10.0
             or cfg.pause_compaction_retry_hard_max_raw_audio_seconds > 180.0
@@ -438,6 +471,53 @@ def validate_config(cfg: Config) -> Config:
                 getattr(cfg, 'pause_compaction_retry_hard_max_raw_audio_seconds', 'None'),
             )
             cfg.pause_compaction_retry_hard_max_raw_audio_seconds = 75.0
+
+        if not hasattr(cfg, 'pause_compaction_retry_chunked_long_enabled'):
+            cfg.pause_compaction_retry_chunked_long_enabled = True
+
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_chunked_max_raw_audio_seconds')
+            or float(getattr(cfg, 'pause_compaction_retry_chunked_max_raw_audio_seconds', -1.0)) < 30.0
+            or float(getattr(cfg, 'pause_compaction_retry_chunked_max_raw_audio_seconds', -1.0)) > 360.0
+        ):
+            logger.warning(
+                "Invalid pause_compaction_retry_chunked_max_raw_audio_seconds %s, defaulting to 210.0",
+                getattr(cfg, 'pause_compaction_retry_chunked_max_raw_audio_seconds', 'None'),
+            )
+            cfg.pause_compaction_retry_chunked_max_raw_audio_seconds = 210.0
+
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_chunk_seconds')
+            or float(getattr(cfg, 'pause_compaction_retry_chunk_seconds', -1.0)) < 6.0
+            or float(getattr(cfg, 'pause_compaction_retry_chunk_seconds', -1.0)) > 90.0
+        ):
+            logger.warning(
+                "Invalid pause_compaction_retry_chunk_seconds %s, defaulting to 32.0",
+                getattr(cfg, 'pause_compaction_retry_chunk_seconds', 'None'),
+            )
+            cfg.pause_compaction_retry_chunk_seconds = 32.0
+
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_chunk_overlap_seconds')
+            or float(getattr(cfg, 'pause_compaction_retry_chunk_overlap_seconds', -1.0)) < 0.05
+            or float(getattr(cfg, 'pause_compaction_retry_chunk_overlap_seconds', -1.0)) > 3.0
+        ):
+            logger.warning(
+                "Invalid pause_compaction_retry_chunk_overlap_seconds %s, defaulting to 0.35",
+                getattr(cfg, 'pause_compaction_retry_chunk_overlap_seconds', 'None'),
+            )
+            cfg.pause_compaction_retry_chunk_overlap_seconds = 0.35
+
+        if (
+            not hasattr(cfg, 'pause_compaction_retry_chunk_max_chunks')
+            or int(getattr(cfg, 'pause_compaction_retry_chunk_max_chunks', 0)) < 2
+            or int(getattr(cfg, 'pause_compaction_retry_chunk_max_chunks', 0)) > 20
+        ):
+            logger.warning(
+                "Invalid pause_compaction_retry_chunk_max_chunks %s, defaulting to 8",
+                getattr(cfg, 'pause_compaction_retry_chunk_max_chunks', 'None'),
+            )
+            cfg.pause_compaction_retry_chunk_max_chunks = 8
 
         if (
             not hasattr(cfg, 'pause_compaction_retry_min_words_per_second')
@@ -485,6 +565,42 @@ def validate_config(cfg: Config) -> Config:
                 getattr(cfg, 'pause_compaction_engine_guard_min_raw_audio_seconds', 'None'),
             )
             cfg.pause_compaction_engine_guard_min_raw_audio_seconds = 6.0
+
+        if not hasattr(cfg, 'idle_resume_guard_enabled'):
+            cfg.idle_resume_guard_enabled = True
+
+        if (
+            not hasattr(cfg, 'idle_resume_threshold_seconds')
+            or float(getattr(cfg, 'idle_resume_threshold_seconds', -1.0)) < 30.0
+            or float(getattr(cfg, 'idle_resume_threshold_seconds', -1.0)) > 86400.0
+        ):
+            logger.warning(
+                "Invalid idle_resume_threshold_seconds %s, defaulting to 1200.0",
+                getattr(cfg, 'idle_resume_threshold_seconds', 'None'),
+            )
+            cfg.idle_resume_threshold_seconds = 1200.0
+
+        if (
+            not hasattr(cfg, 'idle_resume_compaction_keep_silence_ms')
+            or int(getattr(cfg, 'idle_resume_compaction_keep_silence_ms', -1)) < 50
+            or int(getattr(cfg, 'idle_resume_compaction_keep_silence_ms', -1)) > 1000
+        ):
+            logger.warning(
+                "Invalid idle_resume_compaction_keep_silence_ms %s, defaulting to 140",
+                getattr(cfg, 'idle_resume_compaction_keep_silence_ms', 'None'),
+            )
+            cfg.idle_resume_compaction_keep_silence_ms = 140
+
+        if (
+            not hasattr(cfg, 'idle_resume_compaction_max_reduction_pct')
+            or float(getattr(cfg, 'idle_resume_compaction_max_reduction_pct', -1.0)) < 20.0
+            or float(getattr(cfg, 'idle_resume_compaction_max_reduction_pct', -1.0)) > 95.0
+        ):
+            logger.warning(
+                "Invalid idle_resume_compaction_max_reduction_pct %s, defaulting to 68.0",
+                getattr(cfg, 'idle_resume_compaction_max_reduction_pct', 'None'),
+            )
+            cfg.idle_resume_compaction_max_reduction_pct = 68.0
 
         if not hasattr(cfg, 'heavy_second_pass_min_chars'):
             cfg.heavy_second_pass_min_chars = 180
@@ -544,6 +660,31 @@ def validate_config(cfg: Config) -> Config:
 
         if not hasattr(cfg, 'daily_learning_autorun_enabled'):
             cfg.daily_learning_autorun_enabled = True
+
+        if not hasattr(cfg, 'longrun_housekeeping_enabled'):
+            cfg.longrun_housekeeping_enabled = True
+
+        if (
+            not hasattr(cfg, 'longrun_health_log_interval_seconds')
+            or float(getattr(cfg, 'longrun_health_log_interval_seconds', -1.0)) < 30.0
+            or float(getattr(cfg, 'longrun_health_log_interval_seconds', -1.0)) > 86400.0
+        ):
+            logger.warning(
+                "Invalid longrun_health_log_interval_seconds %s, defaulting to 900.0",
+                getattr(cfg, 'longrun_health_log_interval_seconds', 'None'),
+            )
+            cfg.longrun_health_log_interval_seconds = 900.0
+
+        if (
+            not hasattr(cfg, 'longrun_soft_gc_memory_mb')
+            or float(getattr(cfg, 'longrun_soft_gc_memory_mb', -1.0)) < 0.0
+            or float(getattr(cfg, 'longrun_soft_gc_memory_mb', -1.0)) > 32768.0
+        ):
+            logger.warning(
+                "Invalid longrun_soft_gc_memory_mb %s, defaulting to 0.0",
+                getattr(cfg, 'longrun_soft_gc_memory_mb', 'None'),
+            )
+            cfg.longrun_soft_gc_memory_mb = 0.0
 
         if (
             not hasattr(cfg, 'daily_learning_autorun_days_back')

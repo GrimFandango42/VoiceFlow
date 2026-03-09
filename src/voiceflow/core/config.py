@@ -45,12 +45,21 @@ class Config:
     pause_compaction_retry_min_raw_audio_seconds: float = 4.0  # Only retry for medium/long dictation
     pause_compaction_retry_max_raw_audio_seconds: float = 20.0  # Avoid expensive second-pass decode on very long clips
     pause_compaction_retry_hard_max_raw_audio_seconds: float = 75.0  # Allow long-clip retry only when output looks clearly sparse
+    pause_compaction_retry_chunked_long_enabled: bool = True  # Use bounded chunked raw retry beyond hard max
+    pause_compaction_retry_chunked_max_raw_audio_seconds: float = 210.0  # Upper bound for chunked long-clip retries
+    pause_compaction_retry_chunk_seconds: float = 32.0  # Chunk size for bounded long-clip raw retry
+    pause_compaction_retry_chunk_overlap_seconds: float = 0.35  # Overlap to reduce boundary word loss
+    pause_compaction_retry_chunk_max_chunks: int = 8  # Hard cap for chunked retry cost
     pause_compaction_retry_fast_path_max_raw_audio_seconds: float = 18.0  # Keep retry on fast model for short-medium clips
     pause_compaction_retry_min_words_per_second: float = 1.15  # Trigger retry when transcript density is suspiciously low
     pause_compaction_retry_min_chars_per_second: float = 5.0  # Pair with words/sec to avoid false positives
     pause_compaction_engine_guard_enabled: bool = True  # Use raw duration for model routing when compaction is aggressive
     pause_compaction_engine_guard_min_reduction_pct: float = 45.0  # Minimum compaction reduction before routing guard applies
     pause_compaction_engine_guard_min_raw_audio_seconds: float = 6.0  # Ignore tiny utterances for routing guard
+    idle_resume_guard_enabled: bool = True  # Apply safer first-pass policy after long idle gaps
+    idle_resume_threshold_seconds: float = 1200.0  # Idle gap that activates resume guardrails
+    idle_resume_compaction_keep_silence_ms: int = 140  # Preserve more phrase boundaries after long idle
+    idle_resume_compaction_max_reduction_pct: float = 68.0  # Limit aggressive compaction after long idle
     enable_non_speech_guard: bool = True  # Reject likely sneeze/cough/throat-clear bursts before ASR
     non_speech_guard_soft_mode: bool = True  # Prefer salvage/retry over hard drop on suspected bursts
     non_speech_max_audio_seconds: float = 1.25  # Only run non-speech filter on short clips
@@ -196,6 +205,9 @@ class Config:
     paste_injection: bool = True  # Use clipboard paste injection by default
     restore_clipboard: bool = True  # restore original clipboard after paste
     clipboard_restore_delay_ms: int = 150  # wait before restoring clipboard to avoid paste race
+    clipboard_restore_retry_attempts: int = 10  # immediate restore retries when clipboard is busy
+    clipboard_restore_retry_base_delay_ms: int = 30  # base delay between clipboard restore retries
+    clipboard_restore_async_retry_seconds: float = 8.0  # bounded background retry window on restore failure
     paste_shortcut: str = "ctrl+v"  # e.g., "ctrl+v" or "shift+insert"
     press_enter_after_paste: bool = False
     max_inject_chars: int = 4000  # safety limit to avoid huge payloads
@@ -222,6 +234,9 @@ class Config:
     adaptive_min_count: int = 3  # Repetition count required before auto-apply
     adaptive_max_rules: int = 200  # Cap learned replacements to bound memory
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
+    longrun_housekeeping_enabled: bool = True  # periodic long-run health telemetry and cleanup hooks
+    longrun_health_log_interval_seconds: float = 900.0  # periodic memory/queue health snapshot cadence
+    longrun_soft_gc_memory_mb: float = 0.0  # 0 = use monitor warning threshold; trigger GC above threshold
     daily_learning_autorun_enabled: bool = True  # Startup catch-up in case scheduled task is missing
     daily_learning_autorun_days_back: int = 1  # Process prior-day data by default
     daily_learning_autorun_startup_delay_seconds: float = 22.0  # Delay to avoid startup contention

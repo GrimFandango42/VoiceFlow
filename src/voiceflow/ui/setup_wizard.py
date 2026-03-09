@@ -419,11 +419,21 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
             root = tk.Tk()
         except Exception:
             return False, False
+
+        def _center_window(width: int, height: int) -> str:
+            screen_w = max(1, int(root.winfo_screenwidth() or width))
+            screen_h = max(1, int(root.winfo_screenheight() or height))
+            pos_x = max(0, int((screen_w - width) / 2))
+            pos_y = max(0, int((screen_h - height) / 3))
+            return f"{width}x{height}+{pos_x}+{pos_y}"
+
         root.title("VoiceFlow Setup")
-        root.geometry("860x720")
+        root.geometry(_center_window(900, 730))
         root.minsize(780, 620)
         root.grid_columnconfigure(0, weight=1)
         root.grid_rowconfigure(0, weight=1)
+        root.grid_rowconfigure(2, weight=0)
+        root.grid_rowconfigure(2, minsize=108)
 
         style = ttk.Style(root)
         _pick_theme(style)
@@ -431,15 +441,17 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
             style.configure("SetupPrimary.TButton", font=("Segoe UI", 10, "bold"), padding=(14, 9))
             style.configure("SetupSecondary.TButton", font=("Segoe UI", 10), padding=(12, 8))
             style.configure("SetupGhost.TButton", font=("Segoe UI", 10), padding=(10, 7))
+            style.configure("SetupCard.TLabelframe", padding=(4, 4, 4, 4))
+            style.configure("SetupCard.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         except Exception:
             pass
 
-        body = ttk.Frame(root, padding=(18, 16, 12, 8))
+        body = ttk.Frame(root, padding=(16, 14, 12, 8))
         body.grid(row=0, column=0, sticky="nsew")
         body.grid_columnconfigure(0, weight=1)
         body.grid_rowconfigure(0, weight=1)
 
-        canvas = tk.Canvas(body, highlightthickness=0, borderwidth=0)
+        canvas = tk.Canvas(body, highlightthickness=0, borderwidth=0, bg="#F7FAFC")
         canvas.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
         scroll.grid(row=0, column=1, sticky="ns", padx=(10, 0))
@@ -473,8 +485,26 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
 
         footer_sep = ttk.Separator(root, orient="horizontal")
         footer_sep.grid(row=1, column=0, sticky="ew")
-        footer = ttk.Frame(root, padding=(18, 8, 18, 14))
+        footer = tk.Frame(root, bg="#EEF3F8", padx=16, pady=10, highlightthickness=1, highlightbackground="#C7D2E0")
         footer.grid(row=2, column=0, sticky="ew")
+        footer.tkraise()
+        footer.grid_columnconfigure(0, weight=1)
+        footer_hint_var = tk.StringVar(value="")
+        footer_hint_label = tk.Label(
+            footer,
+            textvariable=footer_hint_var,
+            bg="#EEF3F8",
+            fg="#334155",
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+            justify="left",
+            padx=2,
+            pady=2,
+        )
+        footer_hint_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        footer_actions = tk.Frame(footer, bg="#EEF3F8")
+        footer_actions.grid(row=1, column=0, sticky="ew")
+        footer_actions.grid_columnconfigure(0, weight=1)
 
         title_text = "VoiceFlow First-Run Setup" if source == "startup" else "VoiceFlow Setup & Defaults"
         subtitle_text = (
@@ -482,8 +512,51 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
             if source == "startup"
             else "Run diagnostics and tune defaults for this machine."
         )
-        ttk.Label(main, text=title_text, font=("Segoe UI", 16, "bold")).pack(anchor="w")
-        ttk.Label(main, text=subtitle_text).pack(anchor="w", pady=(4, 12))
+        header_card = tk.Frame(main, bg="#E6F4FF", highlightthickness=1, highlightbackground="#B9D9FF", bd=0)
+        header_card.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            header_card,
+            text=title_text,
+            bg="#E6F4FF",
+            fg="#0C4A6E",
+            font=("Segoe UI", 16, "bold"),
+            anchor="w",
+            padx=12,
+            pady=8,
+        ).pack(fill="x")
+        tk.Label(
+            header_card,
+            text=subtitle_text,
+            bg="#E6F4FF",
+            fg="#1E3A5F",
+            font=("Segoe UI", 10),
+            anchor="w",
+            justify="left",
+            padx=12,
+            pady=9,
+        ).pack(fill="x")
+
+        stepper = tk.Frame(main, bg="#F7FAFC")
+        stepper.pack(fill="x", pady=(0, 10))
+        step1_chip = tk.Label(
+            stepper,
+            text="Step 1: Hardware Check",
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=4,
+            bd=0,
+        )
+        step1_chip.pack(side="left")
+        tk.Label(stepper, text="  ->  ", bg="#F7FAFC", fg="#64748B", font=("Segoe UI", 9, "bold")).pack(side="left")
+        step2_chip = tk.Label(
+            stepper,
+            text="Step 2: Startup Profile" if is_startup_flow else "Profile",
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=4,
+            bd=0,
+        )
+        step2_chip.pack(side="left")
 
         step_state_var = tk.StringVar(value="")
         ttk.Label(main, textvariable=step_state_var, font=("Segoe UI", 10, "bold")).pack(
@@ -503,7 +576,7 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
         )
         focus_state_label.pack(fill="x", pady=(0, 10))
 
-        status_frame = ttk.LabelFrame(main, text="Step 1 - Hardware Check")
+        status_frame = ttk.LabelFrame(main, text="Step 1 - Hardware Check", style="SetupCard.TLabelframe")
         status_frame.pack(fill="x", pady=(0, 12))
         detected_var = tk.StringVar(value="")
         grade_var = tk.StringVar(value="")
@@ -537,6 +610,7 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
         toggles_frame = ttk.LabelFrame(
             main,
             text="Step 2 - Choose Startup Profile" if is_startup_flow else "Profile",
+            style="SetupCard.TLabelframe",
         )
         toggles_frame.pack(fill="x", pady=(0, 12))
         profile_buttons: Dict[str, Any] = {}
@@ -587,7 +661,7 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
             profile_check_labels[profile_key] = check_label
             ttk.Label(detail, text=PROFILE_HELP[profile_key], foreground="#6B7280").pack(anchor="w")
 
-        simple_frame = ttk.LabelFrame(main, text="Simple Settings")
+        simple_frame = ttk.LabelFrame(main, text="Simple Settings", style="SetupCard.TLabelframe")
         simple_frame.pack(fill="x", pady=(0, 12))
 
         visual_default = True if is_startup_flow else bool(getattr(cfg, "visual_indicators_enabled", True))
@@ -611,7 +685,7 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
         advanced_toggle = ttk.Checkbutton(main, text="Show advanced settings", variable=advanced_enabled)
         advanced_toggle.pack(anchor="w")
 
-        advanced_frame = ttk.LabelFrame(main, text="Advanced")
+        advanced_frame = ttk.LabelFrame(main, text="Advanced", style="SetupCard.TLabelframe")
         advanced_frame.pack(fill="x", pady=(8, 12))
 
         model_tier_initial = "" if is_startup_flow else str(getattr(cfg, "model_tier", "quick"))
@@ -678,8 +752,17 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
         ))
 
         summary_var = tk.StringVar(value="")
-        summary = ttk.Label(main, textvariable=summary_var, wraplength=780, foreground="#1F2937")
-        summary.pack(fill="x", pady=(6, 12))
+        summary_frame = ttk.LabelFrame(main, text="Summary", style="SetupCard.TLabelframe")
+        summary_frame.pack(fill="x", pady=(6, 12))
+        summary = ttk.Label(
+            summary_frame,
+            textvariable=summary_var,
+            wraplength=780,
+            foreground="#1F2937",
+            justify="left",
+            anchor="w",
+        )
+        summary.pack(fill="x", padx=8, pady=(6, 8))
         save_button: Any = None
 
         def _format_detected_text(caps: SetupCapabilities) -> str:
@@ -810,15 +893,55 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
         def _update_save_state() -> None:
             if save_button is None:
                 return
+
+            def _set_footer_hint(text: str, *, ready: bool = False, blocked: bool = False) -> None:
+                footer_hint_var.set(text)
+                if ready:
+                    footer_hint_label.configure(bg="#EAFBF2", fg="#0F5132")
+                elif blocked:
+                    footer_hint_label.configure(bg="#FFF6E6", fg="#8A4B00")
+                else:
+                    footer_hint_label.configure(bg="#EEF3F8", fg="#334155")
+
+            def _set_save_button_visual(enabled: bool) -> None:
+                if enabled:
+                    save_button.configure(
+                        state="normal",
+                        bg="#0A7AAA",
+                        fg="#FFFFFF",
+                        activebackground="#09638A",
+                        activeforeground="#FFFFFF",
+                        disabledforeground="#D1D5DB",
+                    )
+                else:
+                    save_button.configure(
+                        state="disabled",
+                        bg="#CBD5E1",
+                        fg="#4B5563",
+                        activebackground="#CBD5E1",
+                        activeforeground="#4B5563",
+                        disabledforeground="#4B5563",
+                    )
+
             if not is_startup_flow:
-                save_button.configure(state="normal")
+                _set_save_button_visual(True)
+                _set_footer_hint("Ready. Save applies your selections immediately.", ready=True)
                 return
+
             allow_save = (
                 bool(hardware_checked_state["value"])
                 and bool(profile_selected_state["value"])
                 and not bool(hardware_check_running_state["value"])
             )
-            save_button.configure(state="normal" if allow_save else "disabled")
+            _set_save_button_visual(allow_save)
+            if allow_save:
+                _set_footer_hint("All required steps complete. Click Save And Launch.", ready=True)
+            elif bool(hardware_check_running_state["value"]):
+                _set_footer_hint("Running hardware check... Save will enable when complete.", blocked=True)
+            elif not bool(hardware_checked_state["value"]):
+                _set_footer_hint("Save is disabled until Step 1 hardware check completes.", blocked=True)
+            else:
+                _set_footer_hint("Choose a startup profile in Step 2 to enable Save.", blocked=True)
 
         def _set_hardware_button_emphasis() -> None:
             if hardware_button is None:
@@ -852,6 +975,44 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
                 activeforeground="#FFFFFF",
             )
 
+        def _set_step_chip_style(chip: Any, state: str) -> None:
+            palette = {
+                "active": ("#0A7AAA", "#FFFFFF"),
+                "done": ("#15803D", "#FFFFFF"),
+                "blocked": ("#DCE4EE", "#475569"),
+                "idle": ("#E8EDF3", "#334155"),
+            }
+            bg, fg = palette.get(state, palette["idle"])
+            try:
+                chip.configure(bg=bg, fg=fg)
+            except Exception:
+                pass
+
+        def _refresh_step_chips() -> None:
+            checked = bool(hardware_checked_state["value"])
+            running = bool(hardware_check_running_state["value"])
+            profile_selected = bool(profile_selected_state["value"])
+
+            if is_startup_flow:
+                if running or not checked:
+                    _set_step_chip_style(step1_chip, "active")
+                    _set_step_chip_style(step2_chip, "blocked")
+                elif not profile_selected:
+                    _set_step_chip_style(step1_chip, "done")
+                    _set_step_chip_style(step2_chip, "active")
+                else:
+                    _set_step_chip_style(step1_chip, "done")
+                    _set_step_chip_style(step2_chip, "done")
+                return
+
+            if running:
+                _set_step_chip_style(step1_chip, "active")
+            elif checked:
+                _set_step_chip_style(step1_chip, "done")
+            else:
+                _set_step_chip_style(step1_chip, "idle")
+            _set_step_chip_style(step2_chip, "done" if profile_selected else "idle")
+
         def _refresh_check_status() -> None:
             state = describe_setup_step_state(
                 is_startup_flow=is_startup_flow,
@@ -871,6 +1032,7 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
                 focus_state_label.configure(bg="#EAFBF2", fg="#0F5132")
 
             _set_hardware_button_emphasis()
+            _refresh_step_chips()
             if is_startup_flow and not hardware_checked_state["value"] and not hardware_check_running_state["value"]:
                 try:
                     hardware_button.focus_set()
@@ -1106,25 +1268,31 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
 
         if is_startup_flow:
             ttk.Button(
-                footer,
+                footer_actions,
                 text="Exit VoiceFlow",
                 command=_launch_without_changes,
                 style="SetupSecondary.TButton",
-            ).pack(side="left")
+            ).grid(row=0, column=0, sticky="w")
         else:
             ttk.Button(
-                footer,
+                footer_actions,
                 text="Launch Without Changes",
                 command=_launch_without_changes,
                 style="SetupSecondary.TButton",
-            ).pack(side="left")
-        save_button = ttk.Button(
-            footer,
+            ).grid(row=0, column=0, sticky="w")
+        save_button = tk.Button(
+            footer_actions,
             text="Save And Launch",
             command=_save_and_launch,
-            style="SetupPrimary.TButton",
+            font=("Segoe UI", 10, "bold"),
+            padx=16,
+            pady=8,
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            width=19,
         )
-        save_button.pack(side="right")
+        save_button.grid(row=0, column=1, sticky="e")
         _refresh_check_status()
         _update_save_state()
 

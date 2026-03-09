@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import types
+import time
 
 from voiceflow.core.config import Config
 from voiceflow.integrations.inject import ClipboardInjector
@@ -107,4 +108,47 @@ def test_copy_text_to_clipboard_fallback(monkeypatch):
     inj = ClipboardInjector(cfg)
     assert inj.copy_text_to_clipboard("manual paste backup")
     assert dummy.value == "manual paste backup"
+
+
+def test_clipboard_restore_async_retry_recovers_previous_value(monkeypatch):
+    cfg = Config(
+        paste_injection=True,
+        restore_clipboard=True,
+        min_inject_interval_ms=0,
+        clipboard_restore_delay_ms=0,
+        clipboard_restore_retry_attempts=1,  # force immediate restore failure path
+        clipboard_restore_retry_base_delay_ms=1,
+        clipboard_restore_async_retry_seconds=0.3,
+    )
+
+    state = {"value": "BASE", "restore_failures": 0}
+
+    def flaky_copy(value: str):
+        # Fail the first immediate restore attempts for BASE, then succeed in async retry.
+        if value == "BASE" and state["restore_failures"] < 2:
+            state["restore_failures"] += 1
+            raise RuntimeError("clipboard busy")
+        state["value"] = value
+
+    def fake_paste() -> str:
+        return state["value"]
+
+    sent = []
+
+    def fake_send(seq: str):
+        sent.append(seq)
+
+    monkeypatch.setattr("voiceflow.integrations.inject.pyperclip.copy", flaky_copy)
+    monkeypatch.setattr("voiceflow.integrations.inject.pyperclip.paste", fake_paste)
+    monkeypatch.setattr("voiceflow.integrations.inject.keyboard.send", fake_send)
+
+    inj = ClipboardInjector(cfg)
+    assert inj.inject("hello async restore")
+    assert sent  # paste shortcut sent
+
+    # Background retry should restore original clipboard text.
+    deadline = time.time() + 1.0
+    while time.time() < deadline and state["value"] != "BASE":
+        time.sleep(0.02)
+    assert state["value"] == "BASE"
 

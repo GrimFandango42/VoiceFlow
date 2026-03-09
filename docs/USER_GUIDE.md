@@ -141,6 +141,12 @@ Fastest way to improve accent-specific output:
 2. Correct recurring misses.
 3. Let daily learning process those corrections.
 
+Long-idle reliability defaults:
+
+- After extended idle gaps, VoiceFlow now applies a safer first-pass pause-compaction profile.
+- If output looks sparse after heavy compaction, VoiceFlow can run a bounded raw-audio retry.
+- For longer clips beyond the single-pass retry window, VoiceFlow uses chunked raw retry with overlap to recover clipped words.
+
 Daily learning commands:
 
 ```powershell
