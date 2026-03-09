@@ -403,6 +403,50 @@ def validate_config(cfg: Config) -> Config:
             logger.warning(f"Invalid latency_boost_model_tier {getattr(cfg, 'latency_boost_model_tier', 'None')}, defaulting to tiny")
             cfg.latency_boost_model_tier = 'tiny'
 
+        if (
+            not hasattr(cfg, 'live_caption_words')
+            or int(getattr(cfg, 'live_caption_words', 0)) < 1
+            or int(getattr(cfg, 'live_caption_words', 0)) > 20
+        ):
+            logger.warning(
+                "Invalid live_caption_words %s, defaulting to 6",
+                getattr(cfg, 'live_caption_words', 'None'),
+            )
+            cfg.live_caption_words = 6
+
+        if (
+            not hasattr(cfg, 'live_caption_max_chars')
+            or int(getattr(cfg, 'live_caption_max_chars', 0)) < 40
+            or int(getattr(cfg, 'live_caption_max_chars', 0)) > 400
+        ):
+            logger.warning(
+                "Invalid live_caption_max_chars %s, defaulting to 110",
+                getattr(cfg, 'live_caption_max_chars', 'None'),
+            )
+            cfg.live_caption_max_chars = 110
+
+        if (
+            not hasattr(cfg, 'live_caption_font_size')
+            or int(getattr(cfg, 'live_caption_font_size', 0)) < 10
+            or int(getattr(cfg, 'live_caption_font_size', 0)) > 32
+        ):
+            logger.warning(
+                "Invalid live_caption_font_size %s, defaulting to 16",
+                getattr(cfg, 'live_caption_font_size', 'None'),
+            )
+            cfg.live_caption_font_size = 16
+
+        if (
+            not hasattr(cfg, 'live_caption_correction_window_seconds')
+            or float(getattr(cfg, 'live_caption_correction_window_seconds', -1.0)) < 0.0
+            or float(getattr(cfg, 'live_caption_correction_window_seconds', -1.0)) > 8.0
+        ):
+            logger.warning(
+                "Invalid live_caption_correction_window_seconds %s, defaulting to 1.4",
+                getattr(cfg, 'live_caption_correction_window_seconds', 'None'),
+            )
+            cfg.live_caption_correction_window_seconds = 1.4
+
         # Beam size validation
         if not hasattr(cfg, 'beam_size') or cfg.beam_size < 1 or cfg.beam_size > 10:
             logger.warning(f"Invalid beam_size {getattr(cfg, 'beam_size', 'None')}, defaulting to 2")
@@ -601,6 +645,34 @@ def validate_config(cfg: Config) -> Config:
                 getattr(cfg, 'idle_resume_compaction_max_reduction_pct', 'None'),
             )
             cfg.idle_resume_compaction_max_reduction_pct = 68.0
+
+        if not hasattr(cfg, 'idle_resume_force_primary_model'):
+            cfg.idle_resume_force_primary_model = True
+
+        if (
+            not hasattr(cfg, 'idle_resume_force_primary_min_audio_seconds')
+            or float(getattr(cfg, 'idle_resume_force_primary_min_audio_seconds', -1.0)) < 0.3
+            or float(getattr(cfg, 'idle_resume_force_primary_min_audio_seconds', -1.0)) > 20.0
+        ):
+            logger.warning(
+                "Invalid idle_resume_force_primary_min_audio_seconds %s, defaulting to 1.8",
+                getattr(cfg, 'idle_resume_force_primary_min_audio_seconds', 'None'),
+            )
+            cfg.idle_resume_force_primary_min_audio_seconds = 1.8
+
+        if not hasattr(cfg, 'idle_resume_warmup_enabled'):
+            cfg.idle_resume_warmup_enabled = True
+
+        if (
+            not hasattr(cfg, 'idle_resume_warmup_audio_seconds')
+            or float(getattr(cfg, 'idle_resume_warmup_audio_seconds', -1.0)) < 0.1
+            or float(getattr(cfg, 'idle_resume_warmup_audio_seconds', -1.0)) > 3.0
+        ):
+            logger.warning(
+                "Invalid idle_resume_warmup_audio_seconds %s, defaulting to 0.45",
+                getattr(cfg, 'idle_resume_warmup_audio_seconds', 'None'),
+            )
+            cfg.idle_resume_warmup_audio_seconds = 0.45
 
         if not hasattr(cfg, 'heavy_second_pass_min_chars'):
             cfg.heavy_second_pass_min_chars = 180

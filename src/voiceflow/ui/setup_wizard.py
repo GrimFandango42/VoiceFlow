@@ -428,17 +428,29 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
             return f"{width}x{height}+{pos_x}+{pos_y}"
 
         root.title("VoiceFlow Setup")
-        root.geometry(_center_window(900, 730))
-        root.minsize(780, 620)
+        root.geometry(_center_window(940, 780))
+        root.minsize(820, 670)
         root.grid_columnconfigure(0, weight=1)
         root.grid_rowconfigure(0, weight=1)
         root.grid_rowconfigure(2, weight=0)
-        root.grid_rowconfigure(2, minsize=108)
+        root.grid_rowconfigure(2, minsize=124)
 
         style = ttk.Style(root)
         _pick_theme(style)
         try:
-            style.configure("SetupPrimary.TButton", font=("Segoe UI", 10, "bold"), padding=(14, 9))
+            style.configure("SetupPrimary.TButton", font=("Segoe UI", 10, "bold"), padding=(16, 10))
+            style.configure("SetupPrimaryReady.TButton", font=("Segoe UI", 10, "bold"), padding=(16, 10))
+            style.configure("SetupPrimaryDisabled.TButton", font=("Segoe UI", 10, "bold"), padding=(16, 10))
+            style.map(
+                "SetupPrimaryReady.TButton",
+                foreground=[("disabled", "#E5E7EB"), ("!disabled", "#FFFFFF")],
+                background=[("disabled", "#8FA2B8"), ("active", "#09638A"), ("!disabled", "#0A7AAA")],
+            )
+            style.map(
+                "SetupPrimaryDisabled.TButton",
+                foreground=[("disabled", "#CBD5E1"), ("!disabled", "#CBD5E1")],
+                background=[("disabled", "#94A3B8"), ("!disabled", "#94A3B8")],
+            )
             style.configure("SetupSecondary.TButton", font=("Segoe UI", 10), padding=(12, 8))
             style.configure("SetupGhost.TButton", font=("Segoe UI", 10), padding=(10, 7))
             style.configure("SetupCard.TLabelframe", padding=(4, 4, 4, 4))
@@ -505,6 +517,7 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
         footer_actions = tk.Frame(footer, bg="#EEF3F8")
         footer_actions.grid(row=1, column=0, sticky="ew")
         footer_actions.grid_columnconfigure(0, weight=1)
+        footer_actions.grid_columnconfigure(1, weight=0)
 
         title_text = "VoiceFlow First-Run Setup" if source == "startup" else "VoiceFlow Setup & Defaults"
         subtitle_text = (
@@ -907,20 +920,12 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
                 if enabled:
                     save_button.configure(
                         state="normal",
-                        bg="#0A7AAA",
-                        fg="#FFFFFF",
-                        activebackground="#09638A",
-                        activeforeground="#FFFFFF",
-                        disabledforeground="#D1D5DB",
+                        style="SetupPrimaryReady.TButton",
                     )
                 else:
                     save_button.configure(
                         state="disabled",
-                        bg="#CBD5E1",
-                        fg="#4B5563",
-                        activebackground="#CBD5E1",
-                        activeforeground="#4B5563",
-                        disabledforeground="#4B5563",
+                        style="SetupPrimaryDisabled.TButton",
                     )
 
             if not is_startup_flow:
@@ -1280,19 +1285,14 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
                 command=_launch_without_changes,
                 style="SetupSecondary.TButton",
             ).grid(row=0, column=0, sticky="w")
-        save_button = tk.Button(
+        save_button = ttk.Button(
             footer_actions,
-            text="Save And Launch",
+            text="Save and Launch VoiceFlow",
             command=_save_and_launch,
-            font=("Segoe UI", 10, "bold"),
-            padx=16,
-            pady=8,
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            width=19,
+            style="SetupPrimary.TButton",
+            width=27,
         )
-        save_button.grid(row=0, column=1, sticky="e")
+        save_button.grid(row=0, column=1, sticky="e", padx=(12, 0))
         _refresh_check_status()
         _update_save_state()
 

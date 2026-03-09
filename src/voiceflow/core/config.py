@@ -26,13 +26,16 @@ class Config:
     max_batch_size: int = 4  # Process multiple segments together
     enable_streaming: bool = True  # Enable real-time partial ASR preview stream
     live_caption_enabled: bool = True  # Show live caption-style preview while recording
-    live_caption_words: int = 2  # Display only the latest N words in live caption overlay
+    live_caption_words: int = 6  # Display the latest N words in live caption overlay
+    live_caption_max_chars: int = 110  # Keep live caption compact while allowing richer context
+    live_caption_font_size: int = 16  # Smaller caption font so more words fit below waveform
+    live_caption_correction_window_seconds: float = 1.4  # Keep corrected words visually highlighted briefly
     live_caption_start_delay_seconds: float = 0.6  # Start preview quickly without immediate startup contention
     live_flush_during_hold: bool = False  # Keep target-app injection on release only (more stable)
     live_checkpoint_enabled: bool = True  # Show interim transcript checkpoints during long dictation
     live_checkpoint_seconds: float = 10.0  # Emit a checkpoint preview every N seconds while recording
     live_checkpoint_min_audio_seconds: float = 6.0  # Minimum chunk duration for a checkpoint pass
-    live_checkpoint_preview_chars: int = 260  # Keep overlay preview bounded for readability
+    live_checkpoint_preview_chars: int = 380  # Show more running transcript context while speaking
     live_checkpoint_inject: bool = False  # Keep checkpoint injection off by default for hold stability
     enable_pause_compaction: bool = True  # Trim long silent spans before ASR for faster long dictation
     pause_compaction_min_audio_seconds: float = 7.0  # compact pauses earlier for medium/long dictations
@@ -60,6 +63,10 @@ class Config:
     idle_resume_threshold_seconds: float = 1200.0  # Idle gap that activates resume guardrails
     idle_resume_compaction_keep_silence_ms: int = 140  # Preserve more phrase boundaries after long idle
     idle_resume_compaction_max_reduction_pct: float = 68.0  # Limit aggressive compaction after long idle
+    idle_resume_force_primary_model: bool = True  # Force primary ASR path on first long-idle utterance
+    idle_resume_force_primary_min_audio_seconds: float = 1.8  # Skip fast path when resume utterance is sustained
+    idle_resume_warmup_enabled: bool = True  # Warm ASR runtime once before first long-idle decode
+    idle_resume_warmup_audio_seconds: float = 0.45  # Warmup clip duration for idle-resume guardrail
     enable_non_speech_guard: bool = True  # Reject likely sneeze/cough/throat-clear bursts before ASR
     non_speech_guard_soft_mode: bool = True  # Prefer salvage/retry over hard drop on suspected bursts
     non_speech_max_audio_seconds: float = 1.25  # Only run non-speech filter on short clips
@@ -236,7 +243,7 @@ class Config:
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
     longrun_housekeeping_enabled: bool = True  # periodic long-run health telemetry and cleanup hooks
     longrun_health_log_interval_seconds: float = 900.0  # periodic memory/queue health snapshot cadence
-    longrun_soft_gc_memory_mb: float = 0.0  # 0 = use monitor warning threshold; trigger GC above threshold
+    longrun_soft_gc_memory_mb: float = 0.0  # 0 = use adaptive threshold derived from current runtime profile
     daily_learning_autorun_enabled: bool = True  # Startup catch-up in case scheduled task is missing
     daily_learning_autorun_days_back: int = 1  # Process prior-day data by default
     daily_learning_autorun_startup_delay_seconds: float = 22.0  # Delay to avoid startup contention

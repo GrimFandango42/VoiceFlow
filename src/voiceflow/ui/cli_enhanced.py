@@ -590,6 +590,8 @@ class EnhancedApp:
         self._checkpoint_last_text = ""
         self._checkpoint_committed_sample_idx = 0
         self._checkpoint_live_injected = False
+        self._idle_resume_warmup_lock = threading.Lock()
+        self._idle_resume_last_warmup_at = 0.0
         self.ptt_listener: Optional[Any] = None
         self._feedback_audio_enabled = str(os.environ.get("VOICEFLOW_FEEDBACK_AUDIO", "")).strip().lower() in {
             "1",
@@ -765,9 +767,56 @@ class EnhancedApp:
         )
         self._housekeeping_thread.start()
 
+    def _recommended_soft_gc_threshold_mb(self) -> float:
+        """Adaptive threshold used when config keeps soft GC on auto (0)."""
+        gpu_mode = (
+            str(getattr(self.cfg, "device", "")).strip().lower() == "cuda"
+            or bool(getattr(self.cfg, "enable_gpu_acceleration", False))
+        )
+        model_tier = str(getattr(self.cfg, "model_tier", "quick")).strip().lower()
+        if gpu_mode:
+            if model_tier in {"quality", "voxtral"}:
+                return 1728.0
+            return 960.0
+        return 768.0
+
+    def _run_idle_resume_warmup(self) -> float:
+        """Warm ASR runtime once after long idle to reduce first-utterance quality dips."""
+        if not bool(getattr(self.cfg, "idle_resume_warmup_enabled", True)):
+            return 0.0
+
+        warmup_seconds = max(0.1, float(getattr(self.cfg, "idle_resume_warmup_audio_seconds", 0.45)))
+        cooldown_seconds = 300.0
+        now = time.time()
+        with self._idle_resume_warmup_lock:
+            if now - float(self._idle_resume_last_warmup_at or 0.0) < cooldown_seconds:
+                return 0.0
+            self._idle_resume_last_warmup_at = now
+
+        sample_rate = max(8000, int(getattr(self.cfg, "sample_rate", 16000)))
+        warmup_samples = max(1, int(sample_rate * warmup_seconds))
+        warmup_audio = np.zeros(warmup_samples, dtype=np.float32)
+        started = time.perf_counter()
+        try:
+            # Warm both paths when available; keep this short and bounded.
+            self.asr.transcribe(warmup_audio)
+            if self.asr_fast and self._fast_model_ready:
+                self.asr_fast.transcribe(warmup_audio)
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            self._log.info(
+                "idle_resume_warmup_complete audio_seconds=%.2f elapsed_ms=%.1f",
+                warmup_seconds,
+                elapsed_ms,
+            )
+            return elapsed_ms
+        except Exception as exc:
+            self._log.debug("idle_resume_warmup_failed error=%s", exc)
+            return 0.0
+
     def _longrun_housekeeping_loop(self) -> None:
         interval_s = max(30.0, float(getattr(self.cfg, "longrun_health_log_interval_seconds", 900.0)))
-        soft_gc_mb = float(getattr(self.cfg, "longrun_soft_gc_memory_mb", 0.0) or 0.0)
+        configured_soft_gc_mb = float(getattr(self.cfg, "longrun_soft_gc_memory_mb", 0.0) or 0.0)
+        soft_gc_mb = configured_soft_gc_mb if configured_soft_gc_mb > 0.0 else self._recommended_soft_gc_threshold_mb()
         while not self._housekeeping_stop.wait(interval_s):
             try:
                 rss_mb = 0.0
@@ -811,8 +860,10 @@ class EnhancedApp:
             except Exception as exc:
                 self._log.debug("longrun_housekeeping_error error=%s", exc)
 
-    def _pick_asr_engine(self, audio_duration: float):
+    def _pick_asr_engine(self, audio_duration: float, *, force_primary: bool = False):
         """Pick fast engine for short audio to reduce perceived latency."""
+        if force_primary:
+            return self.asr, "primary-forced"
         # Only route to fast path after successful preload.
         # Fresh installs may still be downloading tiny model assets.
         if not self.asr_fast or not self._fast_model_ready:
@@ -826,7 +877,12 @@ class EnhancedApp:
             return self.asr_fast, "fast"
         return self.asr, "primary"
 
-    def _transcribe_raw_in_chunks(self, audio_data: np.ndarray) -> tuple[str, int]:
+    def _transcribe_raw_in_chunks(
+        self,
+        audio_data: np.ndarray,
+        *,
+        force_primary: bool = False,
+    ) -> tuple[str, int]:
         """
         Bounded long-clip retry path when single-pass raw decode would be too expensive.
         Returns (stitched_text, chunks_used).
@@ -869,7 +925,7 @@ class EnhancedApp:
 
         for idx, chunk in enumerate(chunks):
             chunk_duration = len(chunk) / float(sample_rate)
-            retry_asr, retry_path = self._pick_asr_engine(chunk_duration)
+            retry_asr, retry_path = self._pick_asr_engine(chunk_duration, force_primary=force_primary)
             piece = str(retry_asr.transcribe(chunk) or "").strip()
             chunks_used += 1
             if not piece:
@@ -1311,11 +1367,12 @@ class EnhancedApp:
         """Handle streaming preview update"""
         if result.text and result.text != self._last_preview_text:
             self._last_preview_text = result.text
-            # Caption-style preview: keep latest 1-2 words for large, readable live feedback.
+            # Caption-style preview: keep latest N words for readable live feedback.
             words = re.findall(r"\S+", result.text.strip())
-            keep_words = max(1, int(getattr(self.cfg, "live_caption_words", 2)))
+            keep_words = max(1, int(getattr(self.cfg, "live_caption_words", 6)))
             caption_text = " ".join(words[-keep_words:]) if words else result.text.strip()
-            preview_display = caption_text[:60] + "..." if len(caption_text) > 60 else caption_text
+            display_cap = max(40, int(getattr(self.cfg, "live_caption_max_chars", 110)))
+            preview_display = caption_text[:display_cap] + "..." if len(caption_text) > display_cap else caption_text
             print(f"[PREVIEW] {preview_display}")
 
             # Update visual overlay preview
@@ -1701,6 +1758,7 @@ class EnhancedApp:
         retry_chunks_used = 0
         second_pass_mode = "none"
         second_pass_chars_delta = 0
+        idle_resume_force_primary = False
 
         try:
             original_samples = len(audio_data)
@@ -1740,6 +1798,20 @@ class EnhancedApp:
                         "transcription_idle_resume_guard gap_seconds=%.1f threshold_seconds=%.1f",
                         idle_gap_seconds,
                         idle_resume_threshold,
+                    )
+                    stage_start = time.perf_counter()
+                    warmup_ms = self._run_idle_resume_warmup()
+                    stage_ms["idle_resume_warmup"] = warmup_ms or ((time.perf_counter() - stage_start) * 1000.0)
+
+            if idle_resume_active and bool(getattr(self.cfg, "idle_resume_force_primary_model", True)):
+                idle_resume_force_primary = raw_audio_duration >= float(
+                    getattr(self.cfg, "idle_resume_force_primary_min_audio_seconds", 1.8)
+                )
+                if idle_resume_force_primary:
+                    self._log.info(
+                        "idle_resume_force_primary_enabled raw_duration=%.2f min_seconds=%.2f",
+                        raw_audio_duration,
+                        float(getattr(self.cfg, "idle_resume_force_primary_min_audio_seconds", 1.8)),
                     )
 
             compaction_overrides: Dict[str, float] = {}
@@ -1857,7 +1929,10 @@ class EnhancedApp:
                                 audio_duration,
                             )
 
-                    active_asr, asr_path = self._pick_asr_engine(engine_pick_duration)
+                    active_asr, asr_path = self._pick_asr_engine(
+                        engine_pick_duration,
+                        force_primary=idle_resume_force_primary,
+                    )
                     model_cfg = getattr(active_asr, "model_config", None)
                     if model_cfg is not None:
                         asr_model_name = str(getattr(model_cfg, "name", "") or "")
@@ -1944,7 +2019,10 @@ class EnhancedApp:
                         retry_path = "primary-retry"
                         retry_text = ""
                         if within_chunked_window:
-                            retry_text, retry_chunks_used = self._transcribe_raw_in_chunks(audio_data)
+                            retry_text, retry_chunks_used = self._transcribe_raw_in_chunks(
+                                audio_data,
+                                force_primary=idle_resume_force_primary,
+                            )
                             retry_path = "chunked-raw-retry"
                         else:
                             fast_retry_max_raw = float(
@@ -1954,7 +2032,10 @@ class EnhancedApp:
                                 retry_asr = active_asr
                                 retry_path = "fast-retry"
                             else:
-                                retry_asr, retry_path = self._pick_asr_engine(raw_audio_duration)
+                                retry_asr, retry_path = self._pick_asr_engine(
+                                    raw_audio_duration,
+                                    force_primary=idle_resume_force_primary,
+                                )
                             retry_text = retry_asr.transcribe(audio_data)
 
                         stage_ms["asr_retry"] = (time.perf_counter() - stage_start) * 1000.0
@@ -2284,7 +2365,8 @@ class EnhancedApp:
                     "transcription_timing total_ms=%.1f path=%s model_id=%s device=%s compute=%s "
                     "retry_used=%s compaction_ms=%.1f guard_ms=%.1f asr_ms=%.1f retry_ms=%.1f "
                     "post_ms=%.1f safe2_ms=%.1f heavy2_ms=%.1f second_pass=%s delta_chars=%d inject_ms=%.1f "
-                    "raw_dur=%.2f compacted_dur=%.2f reduction=%.1f retry_strategy=%s retry_chunks=%d idle_resume=%s"
+                    "raw_dur=%.2f compacted_dur=%.2f reduction=%.1f retry_strategy=%s retry_chunks=%d "
+                    "idle_resume=%s idle_resume_force_primary=%s warmup_ms=%.1f"
                 ),
                 transcription_time * 1000.0,
                 asr_path,
@@ -2308,6 +2390,8 @@ class EnhancedApp:
                 retry_strategy,
                 int(retry_chunks_used),
                 str(idle_resume_active),
+                str(idle_resume_force_primary),
+                stage_ms.get("idle_resume_warmup", 0.0),
             )
 
             if text.strip():
@@ -2327,6 +2411,7 @@ class EnhancedApp:
                         "retry_strategy": retry_strategy,
                         "retry_chunks_used": int(retry_chunks_used),
                         "idle_resume_active": bool(idle_resume_active),
+                        "idle_resume_force_primary": bool(idle_resume_force_primary),
                         "transcription_path": final_transcription_path,
                         "processing_time": round(transcription_time, 3),
                     },

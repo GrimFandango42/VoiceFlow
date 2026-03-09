@@ -154,6 +154,9 @@ def _apply_performance_migrations(cfg: Config) -> bool:
         "pause_compaction_keep_silence_ms": (180, 80),
         "pause_compaction_max_reduction_pct": (60.0, 82.0),
         "ptt_tail_buffer_seconds": (0.25, 0.35),
+        # Older preview defaults were too short for useful live feedback.
+        "live_caption_words": (2, 6),
+        "live_checkpoint_preview_chars": (260, 380),
     }
 
     for field, (legacy, replacement) in legacy_updates.items():

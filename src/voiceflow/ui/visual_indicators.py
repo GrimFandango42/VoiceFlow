@@ -14,6 +14,7 @@ import math
 import random
 import json
 import os
+import re
 from datetime import datetime
 from collections import deque
 from typing import Optional, Callable, Dict, Any
@@ -21,7 +22,13 @@ from enum import Enum
 from pathlib import Path
 from .visual_config import get_visual_config, VisualConfigManager
 from ..utils.guardrails import safe_visual_update, process_visual_update_queue, with_error_recovery
-from ..utils.settings import config_dir, append_jsonl_bounded, read_text_tail_lines
+from ..utils.settings import (
+    config_dir,
+    config_path,
+    append_jsonl_bounded,
+    read_text_tail_lines,
+    load_json_dict_bounded,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -154,9 +161,16 @@ class BottomScreenIndicator:
         self.word_stream_canvas = None
         self._bubble_tokens = deque(maxlen=16)
         self._last_stream_word_count = 0
+        self._last_preview_words: list[str] = []
+        self._preview_correction_tokens: Dict[str, float] = {}
+        self.live_caption_words = 6
+        self.live_caption_max_chars = 110
+        self.live_caption_font_size = 16
+        self.live_caption_correction_window_seconds = 1.4
 
         # Configuration manager
         self.config_manager = get_visual_config()
+        self._load_live_caption_preferences()
         self._update_visual_settings()
         self.set_animation_preferences(
             quality=_ANIMATION_PREFS.get("quality", "auto"),
@@ -184,6 +198,37 @@ class BottomScreenIndicator:
         self.text_color = colors['text_color']
         self.accent_color = colors['accent_color']
         self.error_color = colors['error_color']
+
+    def _load_live_caption_preferences(self) -> None:
+        """Load preview presentation options from persisted runtime config."""
+        try:
+            payload = load_json_dict_bounded(config_path()) or {}
+        except Exception:
+            payload = {}
+
+        def _bounded_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+            try:
+                parsed = int(payload.get(name, default))
+            except Exception:
+                parsed = default
+            return max(min_value, min(max_value, parsed))
+
+        def _bounded_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
+            try:
+                parsed = float(payload.get(name, default))
+            except Exception:
+                parsed = default
+            return max(min_value, min(max_value, parsed))
+
+        self.live_caption_words = _bounded_int("live_caption_words", 6, min_value=1, max_value=20)
+        self.live_caption_max_chars = _bounded_int("live_caption_max_chars", 110, min_value=40, max_value=400)
+        self.live_caption_font_size = _bounded_int("live_caption_font_size", 16, min_value=10, max_value=32)
+        self.live_caption_correction_window_seconds = _bounded_float(
+            "live_caption_correction_window_seconds",
+            1.4,
+            min_value=0.0,
+            max_value=8.0,
+        )
 
     def _select_daily_visual_theme(self) -> Dict[str, str]:
         """Rotate playful indicator theme by day to keep the experience fresh."""
@@ -490,7 +535,7 @@ class BottomScreenIndicator:
             textvariable=self.preview_var,
             bg=self.transparent_key,
             fg="#E6F3FF",
-            font=("Segoe UI", 20, "bold"),
+            font=("Segoe UI", max(10, int(self.live_caption_font_size)), "bold"),
             wraplength=self.wave_w - 24,
             justify=tk.CENTER,
         )
@@ -2350,23 +2395,64 @@ class BottomScreenIndicator:
                 words = [w for w in text.strip().split() if w]
                 if not words:
                     self.preview_var.set("")
+                    self._last_preview_words = []
+                    self._preview_correction_tokens.clear()
                     return
 
-                # Large caption text: latest 1-2 words.
-                caption = " ".join(words[-2:])
-                if len(caption) > 42:
-                    caption = caption[-42:]
+                now = time.time()
+                mismatch_idx = None
+                max_overlap = min(len(self._last_preview_words), len(words))
+                for idx in range(max_overlap):
+                    if self._last_preview_words[idx].lower() != words[idx].lower():
+                        mismatch_idx = idx
+                        break
+
+                if mismatch_idx is not None:
+                    stable_prefix = max(0, len(self._last_preview_words) - 2)
+                    if mismatch_idx < stable_prefix:
+                        expire_at = now + max(0.2, float(self.live_caption_correction_window_seconds))
+                        for token in words[mismatch_idx : mismatch_idx + 8]:
+                            normalized = re.sub(r"[^\w']+", "", token.lower()).strip()
+                            if normalized:
+                                self._preview_correction_tokens[normalized] = expire_at
+
+                for token, expires_at in list(self._preview_correction_tokens.items()):
+                    if expires_at <= now:
+                        self._preview_correction_tokens.pop(token, None)
+
+                caption_tokens = words[-max(1, int(self.live_caption_words)) :]
+                rendered_tokens: list[str] = []
+                for token in caption_tokens:
+                    normalized = re.sub(r"[^\w']+", "", token.lower()).strip()
+                    if normalized and normalized in self._preview_correction_tokens:
+                        rendered_tokens.append(f"[{token}]")
+                    else:
+                        rendered_tokens.append(token)
+                caption = " ".join(rendered_tokens)
+                if len(caption) > int(self.live_caption_max_chars):
+                    caption = "..." + caption[-int(self.live_caption_max_chars):]
                 self.preview_var.set(caption)
 
                 # Bubble stream: append only newly observed words from cumulative partial text.
-                if len(words) < self._last_stream_word_count:
+                if mismatch_idx is not None and mismatch_idx < self._last_stream_word_count:
+                    self._bubble_tokens.clear()
+                    for token in words[-12:]:
+                        if token:
+                            self._bubble_tokens.append(token[:24])
+                    self._last_stream_word_count = len(words)
+                elif len(words) < self._last_stream_word_count:
                     # Partial reset/new phrase.
                     self._bubble_tokens.clear()
-                new_words = words[self._last_stream_word_count:]
-                for token in new_words:
-                    if token:
-                        self._bubble_tokens.append(token[:24])
-                self._last_stream_word_count = len(words)
+                    self._last_stream_word_count = 0
+
+                if self._last_stream_word_count <= len(words):
+                    new_words = words[self._last_stream_word_count:]
+                    for token in new_words:
+                        if token:
+                            self._bubble_tokens.append(token[:24])
+                    self._last_stream_word_count = len(words)
+
+                self._last_preview_words = list(words)
                 self._render_word_stream()
         except Exception as e:
             print(f"[VisualIndicator] Preview update error: {e}")
@@ -2414,6 +2500,8 @@ class BottomScreenIndicator:
                 self.preview_var.set("")
             self._bubble_tokens.clear()
             self._last_stream_word_count = 0
+            self._last_preview_words = []
+            self._preview_correction_tokens.clear()
             if self.word_stream_canvas:
                 self.word_stream_canvas.delete("all")
         except Exception as e:

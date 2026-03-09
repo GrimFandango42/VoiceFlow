@@ -80,3 +80,28 @@ def test_load_config_prompts_once_when_setup_flow_version_is_stale(tmp_path, mon
     assert cfg.setup_completed is False
     assert cfg.show_setup_on_startup is True
     assert cfg.setup_flow_version == current_flow_version
+
+
+def test_load_config_migrates_legacy_live_preview_defaults(tmp_path, monkeypatch):
+    current_flow_version = _setup_flow_version()
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "setup_completed": True,
+                "show_setup_on_startup": False,
+                "setup_profile": "recommended",
+                "setup_flow_version": current_flow_version,
+                "live_caption_words": 2,
+                "live_checkpoint_preview_chars": 260,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(settings_mod, "config_path", lambda: config_file)
+    monkeypatch.setenv("VOICEFLOW_FORCE_CPU", "1")
+
+    cfg = settings_mod.load_config(Config())
+    assert cfg.live_caption_words == 6
+    assert cfg.live_checkpoint_preview_chars == 380
