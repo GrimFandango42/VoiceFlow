@@ -17,7 +17,7 @@ Hold a hotkey, speak, release, and text is injected into your active app.
 
 ## 60-Second Start
 
-1. Run `VoiceFlow-win64.exe` (or `VoiceFlow.exe` from the portable zip).
+1. Run `VoiceFlow-win64.exe` from Releases, or `dist\VoiceFlow\VoiceFlow.exe` for local packaged testing.
 2. On first run, click `Step 1: Run Hardware Check (Required)` in setup wizard.
 3. Choose a startup profile (`Recommended`, `CPU Compatible`, or `GPU Balanced`).
 4. Click `Save And Launch`.
@@ -35,6 +35,8 @@ VoiceFlow is tray-first by design.
 - First-run startup requires choosing a profile after hardware evaluation.
 - Primary settings are available from the tray menu (no JSON editing required for normal use).
 - Setup wizard can be reopened from tray (right-click tray icon) via `Setup & Defaults`.
+- Local end-to-end testing should use the packaged bundle executable: `dist\VoiceFlow\VoiceFlow.exe`.
+- Batch launchers remain useful for source debugging, not as the default daily test path.
 - Setup wizard includes `Run Hardware Check` to quickly re-detect GPU/CPU defaults.
 - Recent History and Correction Review are available from the tray for fast feedback loops.
 - Current runtime does not include a separate "Command Center" window. The active control surfaces are tray + overlay/dock + history/review panels.
@@ -46,7 +48,16 @@ VoiceFlow is tray-first by design.
 - Optional heavier cleanup stays opt-in (`enable_heavy_second_pass_cleanup=false`).
 - Aggressive context rewrites are opt-in (`enable_aggressive_context_corrections=false`) to reduce over-correction risk.
 - Destination-aware formatting remains enabled by default for readability.
+- Default release behavior pastes text on release without auto-sending Enter (`press_enter_after_paste=false`).
 - Visual animation quality defaults to adaptive mode (`visual_animation_quality=auto`, `visual_target_fps=28`).
+
+## Stable Local Test Loop
+
+1. Build the bundle with `scripts\setup\build_windows_exe.ps1`.
+2. Launch `dist\VoiceFlow\VoiceFlow.exe`.
+3. If validating onboarding, start from a clean config or reopen `Setup & Defaults` from tray.
+4. Verify one short `Ctrl+Shift` dictation and one target-app injection before calling the build stable.
+5. Reserve one-file exe rebuilds for release validation; they are significantly slower than the bundle build.
 
 ## Stable Baseline
 

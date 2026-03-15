@@ -37,10 +37,16 @@ pytest -q tests\runtime
 powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -OutputName VoiceFlow -Clean
 ```
 
+The build script stops stale VoiceFlow processes before packaging and bundles the setup wizard runtime assets needed by the packaged app.
+
 Output:
 
 - Bundle: `dist\VoiceFlow\`
 - Package zip: `dist\packages\VoiceFlow-*-portable.zip`
+
+Primary local test target:
+
+- `dist\VoiceFlow\VoiceFlow.exe`
 
 ## Build One-File Executable
 
@@ -48,12 +54,24 @@ Output:
 powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -OutputName VoiceFlow -OneFile -Clean
 ```
 
+Use the one-file build for release validation, not the default inner-loop test cycle.
+It is materially slower to rebuild than the bundled app.
+
+## Recommended Local Validation Loop
+
+1. Build the bundled executable.
+2. Launch `dist\VoiceFlow\VoiceFlow.exe`.
+3. If validating onboarding, use a clean config or reset the setup markers before launch.
+4. Complete one setup save, one relaunch, and one real dictation/injection pass.
+5. Only then build the one-file executable or installer artifacts.
+
 ## Installer Pipeline
 
 Use:
 
 - `scripts/setup/build_windows_installer.ps1`
 - `packaging/windows/VoiceFlowSetup.iss`
+- `scripts/setup/register_startup_shortcut.ps1` (optional Windows sign-in startup)
 
 Detailed release flow is in `docs/guides/WINDOWS_SETUP_EXECUTABLE.md`.
 

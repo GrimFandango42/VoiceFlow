@@ -60,6 +60,7 @@ class BottomScreenIndicator:
         self.history_window: Optional[tk.Toplevel] = None
         self.root: Optional[tk.Tk] = None
         self.status_var: Optional[tk.StringVar] = None
+        self.status_label = None
         self.progress_var: Optional[tk.DoubleVar] = None
         self.dock_var: Optional[tk.StringVar] = None
         self.history_canvas: Optional[tk.Canvas] = None
@@ -163,10 +164,10 @@ class BottomScreenIndicator:
         self._last_stream_word_count = 0
         self._last_preview_words: list[str] = []
         self._preview_correction_tokens: Dict[str, float] = {}
-        self.live_caption_words = 6
-        self.live_caption_max_chars = 110
-        self.live_caption_font_size = 16
-        self.live_caption_correction_window_seconds = 1.4
+        self.live_caption_words = 8
+        self.live_caption_max_chars = 150
+        self.live_caption_font_size = 14
+        self.live_caption_correction_window_seconds = 2.0
 
         # Configuration manager
         self.config_manager = get_visual_config()
@@ -189,8 +190,8 @@ class BottomScreenIndicator:
         """Update visual settings from configuration"""
         req_w, req_h = self.config_manager.get_overlay_dimensions()
         # Compact overlay profile: small, centered, and visually lighter.
-        self.width = int(min(460, max(340, req_w)))
-        self.height = int(min(240, max(170, req_h)))
+        self.width = int(min(560, max(380, req_w + 56)))
+        self.height = int(min(214, max(162, req_h - 12)))
         self.wave_w = max(280, self.width - 24)
         colors = self.config_manager.get_color_scheme()
 
@@ -220,12 +221,12 @@ class BottomScreenIndicator:
                 parsed = default
             return max(min_value, min(max_value, parsed))
 
-        self.live_caption_words = _bounded_int("live_caption_words", 6, min_value=1, max_value=20)
-        self.live_caption_max_chars = _bounded_int("live_caption_max_chars", 110, min_value=40, max_value=400)
-        self.live_caption_font_size = _bounded_int("live_caption_font_size", 16, min_value=10, max_value=32)
+        self.live_caption_words = _bounded_int("live_caption_words", 8, min_value=1, max_value=20)
+        self.live_caption_max_chars = _bounded_int("live_caption_max_chars", 150, min_value=40, max_value=400)
+        self.live_caption_font_size = _bounded_int("live_caption_font_size", 14, min_value=10, max_value=32)
         self.live_caption_correction_window_seconds = _bounded_float(
             "live_caption_correction_window_seconds",
-            1.4,
+            2.0,
             min_value=0.0,
             max_value=8.0,
         )
@@ -467,7 +468,7 @@ class BottomScreenIndicator:
         if not self.window:
             return
         x, y = self.config_manager.get_position_coordinates(screen_width, screen_height)
-        reserved_bottom = 138 if self.dock_enabled else 86
+        reserved_bottom = 176 if self.dock_enabled else 126
 
         # Keep overlay strictly centered when dock is enabled.
         if self.dock_enabled and self.dock_window:
@@ -476,14 +477,14 @@ class BottomScreenIndicator:
                 geo = self.dock_window.geometry()  # e.g. 430x30+745+1008
                 dock_y = int(geo.rsplit("+", 1)[-1])
                 # Keep animation close to the dock for a tighter visual stack.
-                y = int(dock_y - self.height - 1)
+                y = int(dock_y - self.height - 10)
             except Exception:
-                y = min(y - 5, screen_height - self.height - reserved_bottom)
+                y = min(y - 12, screen_height - self.height - reserved_bottom)
         else:
-            y = min(y - 6, screen_height - self.height - reserved_bottom)
+            y = min(y - 12, screen_height - self.height - reserved_bottom)
 
         x = max(8, min(screen_width - self.width - 8, x))
-        y = max(10, y)
+        y = max(10, min(y, screen_height - self.height - reserved_bottom))
         self.window.geometry(f"{self.width}x{self.height}+{x}+{y}")
     
     def _create_ui(self):
@@ -508,17 +509,17 @@ class BottomScreenIndicator:
         self.wave_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=114,
+            height=96,
             bg=self.transparent_key,
             highlightthickness=0,
             bd=0,
         )
-        self.wave_canvas.pack(pady=(6, 4))
+        self.wave_canvas.pack(pady=(4, 2))
         self._init_waveform_strip()
 
         # Status text
         self.status_var = tk.StringVar(value="VoiceFlow Ready")
-        status_label = tk.Label(
+        self.status_label = tk.Label(
             main_frame,
             textvariable=self.status_var,
             bg="#0B1220",
@@ -529,31 +530,34 @@ class BottomScreenIndicator:
         # status_label.pack(pady=(0, 5))
 
         # Preview text for streaming transcription
+        preview_card = tk.Frame(
+            main_frame,
+            bg="#0F172A",
+            highlightbackground="#1E3A5F",
+            highlightthickness=1,
+            bd=0,
+            padx=10,
+            pady=6,
+        )
+        preview_card.pack(fill=tk.X, padx=8, pady=(0, 2))
         self.preview_var = tk.StringVar(value="")
         self.preview_label = tk.Label(
-            main_frame,
+            preview_card,
             textvariable=self.preview_var,
-            bg=self.transparent_key,
-            fg="#E6F3FF",
+            bg="#0F172A",
+            fg="#F7FBFF",
             font=("Segoe UI", max(10, int(self.live_caption_font_size)), "bold"),
-            wraplength=self.wave_w - 24,
-            justify=tk.CENTER,
+            wraplength=self.wave_w - 36,
+            justify=tk.LEFT,
+            anchor="w",
         )
-        self.preview_label.pack(pady=(0, 4))
-        self.word_stream_canvas = tk.Canvas(
-            main_frame,
-            width=self.wave_w,
-            height=38,
-            bg=self.transparent_key,
-            highlightthickness=0,
-            bd=0,
-        )
-        self.word_stream_canvas.pack(pady=(0, 2))
+        self.preview_label.pack(fill=tk.X)
+        self.word_stream_canvas = None
 
         # Disable progress bar (was perceived as non-audio green block movement).
         self.progress_var = tk.DoubleVar(value=0.0)
         self.progress_bar = None
-        self.preview_label.configure(wraplength=self.wave_w)
+        self.preview_label.configure(wraplength=max(120, self.wave_w - 36))
 
         # Keep waveform bars close to captions.
 
@@ -753,7 +757,7 @@ class BottomScreenIndicator:
         # Envelope smoothing: quick attack, slower release for natural feel.
         target = max(0.0, min(1.0, float(self.audio_level_target)))
         delta = target - self.audio_level_smoothed
-        alpha = 0.72 if delta > 0 else 0.26
+        alpha = 0.82 if delta > 0 else 0.34
         self.audio_level_smoothed += alpha * delta
         if target <= 0.001 and self.audio_level_smoothed < 0.08:
             self.audio_level_smoothed *= 0.56
@@ -795,7 +799,8 @@ class BottomScreenIndicator:
         self._speech_level = (self._speech_level * 0.78) + (voiced * 0.22)
         voiced = self._speech_level
         voiced_drive = max(0.0, min(1.0, voiced ** 0.86))
-        self.wave_phase += 0.05 + (1.75 * voiced_drive)
+        self.wave_phase += 0.07 + (2.35 * voiced_drive)
+        self._color_phase += 0.018 + (0.12 * voiced_drive)
 
         speech_now = voiced > 0.12
         if speech_now and not self._speech_active:
@@ -806,9 +811,12 @@ class BottomScreenIndicator:
         # Reactive spectral trail to make the overlay feel alive and speech-driven.
         self.wave_energy_history.append(voiced)
         hist = list(self.wave_energy_history)
-        accent_r = int(max(26, min(220, 40 + (110 * high) + (22 * centroid) + (22 * self._burst_energy))))
-        accent_g = int(max(74, min(230, 100 + (90 * mid) + (42 * voiced))))
-        accent_b = int(max(108, min(250, 136 + (80 * low) + (20 * (1.0 - centroid)))))
+        phase = self._color_phase + (centroid * 1.75)
+        warm_tone = 0.5 + (0.5 * math.sin(phase))
+        cool_tone = 0.5 + (0.5 * math.sin(phase + 2.1))
+        accent_r = int(max(34, min(236, 58 + (92 * high) + (36 * warm_tone) + (26 * self._burst_energy))))
+        accent_g = int(max(90, min(242, 114 + (84 * mid) + (22 * warm_tone) + (28 * voiced))))
+        accent_b = int(max(110, min(252, 138 + (76 * low) + (34 * cool_tone))))
         trail_color = "#{:02X}{:02X}{:02X}".format(accent_r, accent_g, accent_b)
         glow_color = "#{:02X}{:02X}{:02X}".format(
             min(255, accent_r + 18),
@@ -888,9 +896,9 @@ class BottomScreenIndicator:
             top = base - h
             bottom = base + (h * (0.54 + (0.14 * front_boost)))
             self.wave_canvas.coords(bar, x0, top, x1, bottom)
-            bar_r = int(max(24, min(200, 34 + (88 * band_energy) + (62 * voiced))))
-            bar_g = int(max(82, min(220, 106 + (76 * mid) + (34 * falloff))))
-            bar_b = int(max(120, min(240, 146 + (76 * high) + (28 * low))))
+            bar_r = int(max(30, min(220, 48 + (80 * band_energy) + (46 * voiced) + (24 * warm_tone))))
+            bar_g = int(max(86, min(232, 112 + (70 * mid) + (30 * falloff) + (14 * cool_tone))))
+            bar_b = int(max(120, min(246, 146 + (68 * high) + (22 * low) + (22 * cool_tone))))
             color = "#{:02X}{:02X}{:02X}".format(bar_r, bar_g, bar_b)
             self.wave_canvas.itemconfig(bar, fill=color)
 
@@ -978,8 +986,10 @@ class BottomScreenIndicator:
         try:
             val = max(0.0, min(1.0, float(level)))
             # Stronger mapping for clearer quiet-vs-speaking contrast.
-            boosted = min(1.0, (val ** 0.72) * 1.75)
-            self.audio_level_target = 0.0 if boosted < 0.012 else boosted
+            boosted = min(1.0, (val ** 0.60) * 2.05)
+            if val > 0.18:
+                boosted = min(1.0, boosted + ((val - 0.18) * 0.28))
+            self.audio_level_target = 0.0 if boosted < 0.010 else boosted
             self.audio_level = self.audio_level_target
         except Exception:
             self.audio_level = 0.0
@@ -1022,7 +1032,7 @@ class BottomScreenIndicator:
 
         dock_w, dock_h = 430, 30
         x = (screen_width - dock_w) // 2
-        y = screen_height - dock_h - 72
+        y = screen_height - dock_h - 86
         self.dock_window.geometry(f"{dock_w}x{dock_h}+{x}+{y}")
 
         dock_frame = tk.Frame(self.dock_window, bg="#0B1220", highlightthickness=1, highlightbackground="#1E293B")
@@ -2308,14 +2318,9 @@ class BottomScreenIndicator:
             elif status in [TranscriptionStatus.LISTENING, TranscriptionStatus.PROCESSING, TranscriptionStatus.TRANSCRIBING]:
                 color = self.accent_color
             
-            # Apply color (find the label widget)
-            for widget in self.window.winfo_children():
-                if isinstance(widget, tk.Frame):
-                    for child in widget.winfo_children():
-                        if isinstance(child, tk.Label):
-                            child.configure(fg=color)
-                            break
-                    break
+            # Keep caption readability stable; only update the hidden status label color.
+            if self.status_label:
+                self.status_label.configure(fg=color)
         
         except Exception as e:
             print(f"[VisualIndicator] UI update error: {e}")
@@ -2399,61 +2404,12 @@ class BottomScreenIndicator:
                     self._preview_correction_tokens.clear()
                     return
 
-                now = time.time()
-                mismatch_idx = None
-                max_overlap = min(len(self._last_preview_words), len(words))
-                for idx in range(max_overlap):
-                    if self._last_preview_words[idx].lower() != words[idx].lower():
-                        mismatch_idx = idx
-                        break
-
-                if mismatch_idx is not None:
-                    stable_prefix = max(0, len(self._last_preview_words) - 2)
-                    if mismatch_idx < stable_prefix:
-                        expire_at = now + max(0.2, float(self.live_caption_correction_window_seconds))
-                        for token in words[mismatch_idx : mismatch_idx + 8]:
-                            normalized = re.sub(r"[^\w']+", "", token.lower()).strip()
-                            if normalized:
-                                self._preview_correction_tokens[normalized] = expire_at
-
-                for token, expires_at in list(self._preview_correction_tokens.items()):
-                    if expires_at <= now:
-                        self._preview_correction_tokens.pop(token, None)
-
                 caption_tokens = words[-max(1, int(self.live_caption_words)) :]
-                rendered_tokens: list[str] = []
-                for token in caption_tokens:
-                    normalized = re.sub(r"[^\w']+", "", token.lower()).strip()
-                    if normalized and normalized in self._preview_correction_tokens:
-                        rendered_tokens.append(f"[{token}]")
-                    else:
-                        rendered_tokens.append(token)
-                caption = " ".join(rendered_tokens)
+                caption = " ".join(caption_tokens)
                 if len(caption) > int(self.live_caption_max_chars):
                     caption = "..." + caption[-int(self.live_caption_max_chars):]
                 self.preview_var.set(caption)
-
-                # Bubble stream: append only newly observed words from cumulative partial text.
-                if mismatch_idx is not None and mismatch_idx < self._last_stream_word_count:
-                    self._bubble_tokens.clear()
-                    for token in words[-12:]:
-                        if token:
-                            self._bubble_tokens.append(token[:24])
-                    self._last_stream_word_count = len(words)
-                elif len(words) < self._last_stream_word_count:
-                    # Partial reset/new phrase.
-                    self._bubble_tokens.clear()
-                    self._last_stream_word_count = 0
-
-                if self._last_stream_word_count <= len(words):
-                    new_words = words[self._last_stream_word_count:]
-                    for token in new_words:
-                        if token:
-                            self._bubble_tokens.append(token[:24])
-                    self._last_stream_word_count = len(words)
-
                 self._last_preview_words = list(words)
-                self._render_word_stream()
         except Exception as e:
             print(f"[VisualIndicator] Preview update error: {e}")
 
@@ -2469,7 +2425,11 @@ class BottomScreenIndicator:
         y_mid = 18
         for i, token in enumerate(reversed(self._bubble_tokens)):
             age = i / max(1, len(self._bubble_tokens) - 1)
-            txt_color = "#EAF4FF" if age < 0.33 else ("#CFE3F7" if age < 0.66 else "#9DB8D2")
+            token_norm = re.sub(r"[^\w']+", "", str(token).lower()).strip()
+            if token_norm and token_norm in self._preview_correction_tokens:
+                txt_color = "#FCD34D"
+            else:
+                txt_color = "#EAF4FF" if age < 0.33 else ("#CFE3F7" if age < 0.66 else "#9DB8D2")
             pad_x = 6
             # Width estimate avoids expensive font metrics and keeps updates cheap.
             width = (len(token) * 8) + (pad_x * 2)

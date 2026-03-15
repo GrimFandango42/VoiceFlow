@@ -26,10 +26,10 @@ class Config:
     max_batch_size: int = 4  # Process multiple segments together
     enable_streaming: bool = True  # Enable real-time partial ASR preview stream
     live_caption_enabled: bool = True  # Show live caption-style preview while recording
-    live_caption_words: int = 6  # Display the latest N words in live caption overlay
-    live_caption_max_chars: int = 110  # Keep live caption compact while allowing richer context
-    live_caption_font_size: int = 16  # Smaller caption font so more words fit below waveform
-    live_caption_correction_window_seconds: float = 1.4  # Keep corrected words visually highlighted briefly
+    live_caption_words: int = 8  # Display the latest N words in live caption overlay
+    live_caption_max_chars: int = 150  # Keep live caption compact while allowing richer context
+    live_caption_font_size: int = 14  # Smaller caption font so more words fit below waveform
+    live_caption_correction_window_seconds: float = 2.0  # Keep corrected words visually highlighted briefly
     live_caption_start_delay_seconds: float = 0.6  # Start preview quickly without immediate startup contention
     live_flush_during_hold: bool = False  # Keep target-app injection on release only (more stable)
     live_checkpoint_enabled: bool = True  # Show interim transcript checkpoints during long dictation

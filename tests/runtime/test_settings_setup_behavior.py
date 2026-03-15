@@ -103,5 +103,6 @@ def test_load_config_migrates_legacy_live_preview_defaults(tmp_path, monkeypatch
     monkeypatch.setenv("VOICEFLOW_FORCE_CPU", "1")
 
     cfg = settings_mod.load_config(Config())
-    assert cfg.live_caption_words == 6
+    assert cfg.live_caption_words == 8
     assert cfg.live_checkpoint_preview_chars == 380
+    assert cfg.live_caption_correction_window_seconds == 2.0

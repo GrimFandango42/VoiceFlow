@@ -5,7 +5,8 @@ param(
     [switch]$OneFile,
     [switch]$Console,
     [switch]$InstallPackagingDeps,
-    [switch]$SkipCudaRuntime
+    [switch]$SkipCudaRuntime,
+    [switch]$SkipProcessCleanup
 )
 
 Set-StrictMode -Version Latest
@@ -33,6 +34,85 @@ function Resolve-PythonExe {
         return $venvPython
     }
     return "python"
+}
+
+function Resolve-PythonBaseDir {
+    param([string]$PythonExe)
+
+    try {
+        $baseDir = (& $PythonExe -c "import sys; print(sys.base_prefix)" 2>$null | Select-Object -First 1)
+        if ($baseDir) {
+            $resolved = $baseDir.ToString().Trim()
+            if ($resolved -and (Test-Path $resolved)) {
+                return $resolved
+            }
+        }
+    } catch {
+        # no-op
+    }
+
+    try {
+        $prefixDir = (& $PythonExe -c "import sys; print(sys.prefix)" 2>$null | Select-Object -First 1)
+        if ($prefixDir) {
+            $resolved = $prefixDir.ToString().Trim()
+            if ($resolved -and (Test-Path $resolved)) {
+                return $resolved
+            }
+        }
+    } catch {
+        # no-op
+    }
+
+    return ""
+}
+
+function Get-TclTkBuildArgs {
+    param([string]$PythonBaseDir)
+
+    $args = New-Object System.Collections.Generic.List[string]
+    if (-not $PythonBaseDir) {
+        return $args
+    }
+
+    $dllDir = Join-Path $PythonBaseDir "DLLs"
+    $tclRoot = Join-Path $PythonBaseDir "tcl"
+    $tclDll = Join-Path $dllDir "tcl86t.dll"
+    $tkDll = Join-Path $dllDir "tk86t.dll"
+    $tkinterPyd = Join-Path $dllDir "_tkinter.pyd"
+    $tkinterLib = Join-Path $PythonBaseDir "Lib\tkinter"
+    $tclDataDir = Join-Path $tclRoot "tcl8.6"
+    $tkDataDir = Join-Path $tclRoot "tk8.6"
+
+    if (Test-Path $tclDll) {
+        $args.Add("--add-binary")
+        $args.Add($tclDll + ";.")
+    }
+    if (Test-Path $tkDll) {
+        $args.Add("--add-binary")
+        $args.Add($tkDll + ";.")
+    }
+    if (Test-Path $tkinterPyd) {
+        $args.Add("--add-binary")
+        $args.Add($tkinterPyd + ";.")
+    }
+    if (Test-Path $tclRoot) {
+        $args.Add("--add-data")
+        $args.Add($tclRoot + ";tcl")
+    }
+    if (Test-Path $tclDataDir) {
+        $args.Add("--add-data")
+        $args.Add($tclDataDir + ";_tcl_data")
+    }
+    if (Test-Path $tkDataDir) {
+        $args.Add("--add-data")
+        $args.Add($tkDataDir + ";_tk_data")
+    }
+    if (Test-Path $tkinterLib) {
+        $args.Add("--add-data")
+        $args.Add($tkinterLib + ";tkinter")
+    }
+
+    return $args
 }
 
 function Test-IcoHeader {
@@ -221,14 +301,26 @@ function Compress-ArchiveWithRetry {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $pythonExe = Resolve-PythonExe -RepoRoot $repoRoot -ExplicitPython $PythonExe
+$pythonBaseDir = Resolve-PythonBaseDir -PythonExe $pythonExe
 
 Write-Host "[build_windows_exe] repo: $repoRoot"
 Write-Host "[build_windows_exe] python: $pythonExe"
+if ($pythonBaseDir) {
+    Write-Host "[build_windows_exe] python base: $pythonBaseDir"
+}
 
 if ($InstallPackagingDeps) {
     Write-Host "[build_windows_exe] Installing packaging dependencies..."
     & $pythonExe -m pip install --upgrade pip
     & $pythonExe -m pip install pyinstaller pyinstaller-hooks-contrib
+}
+
+if (-not $SkipProcessCleanup) {
+    $cleanupScript = Join-Path $repoRoot "scripts\setup\stop_voiceflow_processes.ps1"
+    if (Test-Path $cleanupScript) {
+        Write-Host "[build_windows_exe] Stopping running VoiceFlow processes..."
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $cleanupScript -Quiet
+    }
 }
 
 $entryScript = Join-Path $repoRoot "scripts\setup\voiceflow_exe_entry.py"
@@ -260,6 +352,9 @@ $args = @(
     "--collect-submodules", "voiceflow.models",
     "--collect-data", "voiceflow",
     # Setup wizard is imported dynamically; include tkinter explicitly for packaged builds.
+    "--collect-submodules", "tkinter",
+    "--collect-data", "tkinter",
+    "--hidden-import", "_tkinter",
     "--hidden-import", "tkinter",
     "--hidden-import", "tkinter.ttk",
     "--hidden-import", "tkinter.messagebox",
@@ -305,6 +400,14 @@ if (Test-IcoHeader -Path $iconPath) {
     Write-Warning "[build_windows_exe] icon.ico exists but is not a valid ICO; building without custom icon."
 }
 
+$tclTkArgs = Get-TclTkBuildArgs -PythonBaseDir $pythonBaseDir
+if ($tclTkArgs.Count -gt 0) {
+    $args += $tclTkArgs
+    Write-Host "[build_windows_exe] Bundling Tcl/Tk runtime assets for setup wizard support."
+} else {
+    Write-Warning "[build_windows_exe] Tcl/Tk runtime assets not found; packaged setup wizard may be unavailable."
+}
+
 if (-not $SkipCudaRuntime) {
     $cudaDlls = Get-CudaRuntimeDlls -RepoRoot $repoRoot -PythonExe $pythonExe
     if ($cudaDlls -and $cudaDlls.Count -gt 0) {
@@ -324,6 +427,9 @@ $args += $entryScript
 
 Write-Host "[build_windows_exe] Running PyInstaller..."
 & $pythonExe @args
+if ($LASTEXITCODE -ne 0) {
+    throw "[build_windows_exe] PyInstaller failed with exit code $LASTEXITCODE"
+}
 
 $bundleRoot = Join-Path $distPath $OutputName
 $oneFileExe = Join-Path $distPath "$OutputName.exe"

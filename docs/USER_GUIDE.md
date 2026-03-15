@@ -6,6 +6,7 @@
 2. Hold push-to-talk (`Ctrl+Shift` by default).
 3. Speak.
 4. Release to transcribe and insert text.
+5. By default, VoiceFlow pastes text without auto-sending Enter.
 
 ## UI Surfaces
 
@@ -27,7 +28,7 @@ Use this as a visual click-path map:
 | Open setup wizard | Tray -> `Setup & Defaults` | `setup_*` fields + selected defaults |
 | Toggle code mode | Tray -> `Code Mode` | Session toggle (runtime state) |
 | Choose paste vs type injection | Tray -> `Injection` | `paste_injection` |
-| Auto-press Enter after paste | Tray -> `Auto-Enter` | `press_enter_after_paste` |
+| Auto-press Enter after paste (default OFF) | Tray -> `Auto-Enter` | `press_enter_after_paste` |
 | Show/hide visual indicators | Tray -> `Visual Indicators` | `visual_indicators_enabled` |
 | Show/hide dock | Tray -> `Dock` | `visual_dock_enabled` |
 | Change push-to-talk preset | Tray -> `PTT Hotkey` -> pick preset | `hotkey_*` fields |
@@ -58,6 +59,11 @@ At startup, VoiceFlow can show a setup wizard before the main runtime starts.
 You can reopen the same wizard from tray:
 
 - Right-click tray icon -> `Setup & Defaults`
+
+For a clean first-run regression pass, use a clean config or reset the setup markers before launch:
+
+- `setup_completed=false`
+- `show_setup_on_startup=true`
 
 If setup is incomplete, startup stays gated until setup is saved (or setup is explicitly skipped via env flag).
 

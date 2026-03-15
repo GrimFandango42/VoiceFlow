@@ -148,18 +148,27 @@ def _apply_performance_migrations(cfg: Config) -> bool:
     """
     changed = False
 
-    legacy_updates = {
+    legacy_updates = [
         # Older defaults were conservative and made >10s dictation slower.
-        "pause_compaction_min_audio_seconds": (14.0, 7.0),
-        "pause_compaction_keep_silence_ms": (180, 80),
-        "pause_compaction_max_reduction_pct": (60.0, 82.0),
-        "ptt_tail_buffer_seconds": (0.25, 0.35),
+        ("pause_compaction_min_audio_seconds", 14.0, 7.0),
+        ("pause_compaction_keep_silence_ms", 180, 80),
+        ("pause_compaction_max_reduction_pct", 60.0, 82.0),
+        ("ptt_tail_buffer_seconds", 0.25, 0.35),
         # Older preview defaults were too short for useful live feedback.
-        "live_caption_words": (2, 6),
-        "live_checkpoint_preview_chars": (260, 380),
-    }
+        ("live_caption_words", 2, 6),
+        ("live_caption_words", 6, 8),
+        ("live_caption_max_chars", 110, 150),
+        ("live_caption_font_size", 16, 14),
+        ("live_caption_correction_window_seconds", 1.4, 2.0),
+        ("live_checkpoint_preview_chars", 260, 380),
+        # Legacy wrapping was too narrow and felt overly fragmented.
+        ("destination_default_chars", 78, 84),
+        ("destination_terminal_chars", 96, 104),
+        ("destination_chat_chars", 64, 68),
+        ("destination_editor_chars", 88, 94),
+    ]
 
-    for field, (legacy, replacement) in legacy_updates.items():
+    for field, legacy, replacement in legacy_updates:
         current = getattr(cfg, field, None)
         if _is_legacy_value(current, legacy):
             setattr(cfg, field, replacement)

@@ -2,7 +2,7 @@
 """
 PyInstaller entrypoint for VoiceFlow on Windows.
 
-This module preserves the same default runtime path as `VoiceFlow_Quick.bat`:
+This module runs the packaged Windows runtime entrypoint:
 `voiceflow.ui.cli_enhanced:main`.
 """
 
@@ -26,6 +26,39 @@ def _ensure_src_on_path() -> None:
     src_text = str(src_root)
     if src_text not in sys.path:
         sys.path.insert(0, src_text)
+
+
+def _configure_frozen_tk_runtime() -> None:
+    """Expose bundled Tcl/Tk assets for packaged setup wizard launches."""
+    if not getattr(sys, "frozen", False):
+        return
+
+    roots = []
+    try:
+        roots.append(Path(sys.executable).resolve().parent)
+    except Exception:
+        pass
+
+    try:
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            roots.append(Path(str(meipass)))
+    except Exception:
+        pass
+
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        tcl_root = root / "tcl"
+        tcl_lib = tcl_root / "tcl8.6"
+        tk_lib = tcl_root / "tk8.6"
+        if tcl_lib.exists() and tk_lib.exists():
+            os.environ.setdefault("TCL_LIBRARY", str(tcl_lib))
+            os.environ.setdefault("TK_LIBRARY", str(tk_lib))
+            break
 
 
 def _load_wav_mono_16k(path: Path) -> np.ndarray:
@@ -113,6 +146,7 @@ def _run_diagnostic_benchmark(wav_path: Path) -> int:
 
 def main() -> int:
     _ensure_src_on_path()
+    _configure_frozen_tk_runtime()
     diag_wav = os.environ.get("VOICEFLOW_DIAG_BENCH_WAV", "").strip()
     if diag_wav:
         return _run_diagnostic_benchmark(Path(diag_wav).expanduser())

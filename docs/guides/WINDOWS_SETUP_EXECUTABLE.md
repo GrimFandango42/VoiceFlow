@@ -16,11 +16,19 @@ This packaging path is Windows-focused and targets the current runtime entrypoin
    - `VoiceFlow-Setup-<version>.exe`
 2. Run the installer.
 3. Launch `VoiceFlow` from Start Menu or desktop shortcut.
-4. Hold `Ctrl+Shift` to dictate (default push-to-talk).
+4. On first run, complete setup:
+   - click `Step 1: Run Hardware Check (Required)`
+   - choose one profile
+   - click `Save And Launch`
+5. Hold `Ctrl+Shift` to dictate (default push-to-talk).
+6. By default, VoiceFlow pastes on release without auto-sending Enter.
 
 Config and logs still live in:
 - `%LOCALAPPDATA%\LocalFlow\config.json`
 - `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+
+If the primary log file is locked, VoiceFlow can fall back to:
+- `%LOCALAPPDATA%\LocalFlow\logs\localflow-<pid>.log`
 
 ## Maintainer Build Flow
 
@@ -37,6 +45,11 @@ Config and logs still live in:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -Clean -InstallPackagingDeps
 ```
+
+Notes:
+- this is the primary local validation artifact
+- the builder stops stale VoiceFlow processes before packaging
+- the builder bundles Tcl/Tk runtime assets so the packaged setup wizard works
 
 Output:
 - `dist\VoiceFlow\VoiceFlow.exe`
@@ -65,11 +78,15 @@ If Inno Setup is not installed:
 ## Release Checklist
 
 1. Build executable and installer.
-2. Run smoke validation on a clean machine:
-   - tray appears
+2. Run smoke validation on a clean machine or clean config:
+   - packaged exe opens setup wizard on first run
+   - hardware check completes and one profile can be saved
+   - relaunch reaches tray/runtime normally
    - dock/overlay appear
    - hotkey hold/release works
+   - short dictation works without silent blank output
    - injection works in Notepad and VS Code
+   - default release behavior does not auto-send Enter
 3. Publish release assets via CI/CD (`.github/workflows/build-release.yml`):
    - push a `v*` tag, or
    - run workflow manually with:
@@ -89,3 +106,4 @@ If Inno Setup is not installed:
 - This packaging path does not bundle ASR model weights.
 - On first use, VoiceFlow may download model assets depending on selected model/runtime cache state.
 - Unsigned installers may trigger SmartScreen; code-signing is recommended for broad distribution.
+- For local end-to-end testing, prefer `dist\VoiceFlow\VoiceFlow.exe` over batch launchers.

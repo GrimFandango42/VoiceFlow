@@ -324,6 +324,7 @@ try:
         record_transcription_event as visual_record_transcription_event,
         update_audio_level as visual_update_audio_level,
         update_audio_features as visual_update_audio_features,
+        get_indicator as visual_get_indicator,
         set_dock_enabled as visual_set_dock_enabled,
         set_animation_preferences as visual_set_animation_preferences,
     )
@@ -341,6 +342,7 @@ except ImportError:
             pass
     def visual_update_audio_level(level): pass
     def visual_update_audio_features(features): pass
+    def visual_get_indicator(): return None
     def visual_set_dock_enabled(enabled): pass
     def visual_set_animation_preferences(quality="auto", reduced_motion=False, target_fps=28): pass
 
@@ -876,6 +878,100 @@ class EnhancedApp:
         if 0.0 < audio_duration <= threshold:
             return self.asr_fast, "fast"
         return self.asr, "primary"
+
+    def _should_retry_blank_fast_path(
+        self,
+        *,
+        asr_path: str,
+        text: str,
+        audio_duration: float,
+        raw_audio_duration: float,
+        is_non_speech: bool,
+        non_speech_metrics: Dict[str, float],
+    ) -> bool:
+        """Retry empty fast-path decodes on the primary model for speech-like clips."""
+        if str(asr_path or "").strip().lower() != "fast":
+            return False
+        if str(text or "").strip():
+            return False
+        if is_non_speech:
+            return False
+        if self.asr is None or self.asr is self.asr_fast:
+            return False
+
+        effective_duration = max(float(audio_duration or 0.0), float(raw_audio_duration or 0.0))
+        if effective_duration < 0.75:
+            return False
+
+        # The non-speech guard has already had a chance to reject obvious bursts/silence.
+        # At this point, a blank fast-model decode is more expensive in UX than a single
+        # retry on the primary model, so prefer correctness over saving ~tens of ms.
+        return True
+
+    def _transcribe_with_fast_path_fallback(
+        self,
+        active_asr: Any,
+        asr_path: str,
+        audio_data: np.ndarray,
+        *,
+        audio_duration: float,
+        raw_audio_duration: float,
+        is_non_speech: bool,
+        non_speech_reason: str,
+        non_speech_metrics: Dict[str, float],
+    ) -> tuple[str, Any, bool, str, float, float]:
+        """Decode with the selected engine, retrying blank fast-path results on primary."""
+        decode_start = time.perf_counter()
+        text = active_asr.transcribe(audio_data)
+        decode_ms = (time.perf_counter() - decode_start) * 1000.0
+
+        retry_used = False
+        retry_path = "none"
+        retry_ms = 0.0
+        final_asr = active_asr
+
+        if not self._should_retry_blank_fast_path(
+            asr_path=asr_path,
+            text=str(text or ""),
+            audio_duration=audio_duration,
+            raw_audio_duration=raw_audio_duration,
+            is_non_speech=is_non_speech,
+            non_speech_metrics=non_speech_metrics,
+        ):
+            return text, final_asr, retry_used, retry_path, decode_ms, retry_ms
+
+        self._log.info(
+            "blank_fast_retry_candidate duration=%.2f raw_duration=%.2f reason=%s peak=%.3f rms=%.5f voiced=%.3f voiced_run=%.3f",
+            audio_duration,
+            raw_audio_duration,
+            non_speech_reason,
+            float(non_speech_metrics.get("peak", 0.0) or 0.0),
+            float(non_speech_metrics.get("rms", 0.0) or 0.0),
+            float(non_speech_metrics.get("voiced_ratio", 0.0) or 0.0),
+            float(non_speech_metrics.get("longest_voiced_seconds", 0.0) or 0.0),
+        )
+
+        retry_start = time.perf_counter()
+        retry_text = self.asr.transcribe(audio_data)
+        retry_ms = (time.perf_counter() - retry_start) * 1000.0
+        retry_chars = len(str(retry_text or "").strip())
+        retry_words = len(str(retry_text or "").split())
+
+        if retry_chars > 0:
+            retry_used = True
+            retry_path = "fast-empty-primary-retry"
+            final_asr = self.asr
+            text = retry_text
+            self._log.info(
+                "blank_fast_retry_applied chars=%d words=%d path=%s",
+                retry_chars,
+                retry_words,
+                retry_path,
+            )
+        else:
+            self._log.info("blank_fast_retry_empty path=primary chars=0 words=0")
+
+        return text, final_asr, retry_used, retry_path, decode_ms, retry_ms
 
     def _transcribe_raw_in_chunks(
         self,
@@ -1760,6 +1856,16 @@ class EnhancedApp:
         second_pass_chars_delta = 0
         idle_resume_force_primary = False
 
+        def _capture_model_metadata(engine: Any) -> None:
+            nonlocal asr_model_id, asr_model_name, asr_device, asr_compute
+            model_cfg = getattr(engine, "model_config", None)
+            if model_cfg is None:
+                return
+            asr_model_name = str(getattr(model_cfg, "name", "") or "")
+            asr_model_id = str(getattr(model_cfg, "model_id", "") or "")
+            asr_device = str(getattr(model_cfg, "device", "") or "")
+            asr_compute = str(getattr(model_cfg, "compute_type", "") or "")
+
         try:
             original_samples = len(audio_data)
             if getattr(self.cfg, "live_checkpoint_enabled", True) and getattr(self.cfg, "live_checkpoint_inject", True):
@@ -1933,12 +2039,7 @@ class EnhancedApp:
                         engine_pick_duration,
                         force_primary=idle_resume_force_primary,
                     )
-                    model_cfg = getattr(active_asr, "model_config", None)
-                    if model_cfg is not None:
-                        asr_model_name = str(getattr(model_cfg, "name", "") or "")
-                        asr_model_id = str(getattr(model_cfg, "model_id", "") or "")
-                        asr_device = str(getattr(model_cfg, "device", "") or "")
-                        asr_compute = str(getattr(model_cfg, "compute_type", "") or "")
+                    _capture_model_metadata(active_asr)
                     self._log.info(
                         "transcription_engine path=%s model=%s model_id=%s device=%s compute=%s",
                         asr_path,
@@ -1948,9 +2049,29 @@ class EnhancedApp:
                         asr_compute,
                     )
                     self._log.info("transcription_path path=%s duration=%.2f", asr_path, audio_duration)
-                    stage_start = time.perf_counter()
-                    text = active_asr.transcribe(compacted_audio)
-                    stage_ms["asr_decode"] = (time.perf_counter() - stage_start) * 1000.0
+                    (
+                        text,
+                        active_asr,
+                        blank_fast_retry_used,
+                        blank_fast_retry_path,
+                        stage_ms["asr_decode"],
+                        blank_fast_retry_ms,
+                    ) = self._transcribe_with_fast_path_fallback(
+                        active_asr,
+                        asr_path,
+                        compacted_audio,
+                        audio_duration=audio_duration,
+                        raw_audio_duration=raw_audio_duration,
+                        is_non_speech=is_non_speech,
+                        non_speech_reason=non_speech_reason,
+                        non_speech_metrics=non_speech_metrics,
+                    )
+                    if blank_fast_retry_ms > 0.0:
+                        stage_ms["asr_retry"] = stage_ms.get("asr_retry", 0.0) + blank_fast_retry_ms
+                    if blank_fast_retry_used:
+                        retry_used = True
+                        retry_strategy = blank_fast_retry_path
+                        _capture_model_metadata(active_asr)
                 raw_transcript = text
 
                 # Quality fallback: if compaction removed a lot and transcript looks sparse/short,
@@ -2062,6 +2183,8 @@ class EnhancedApp:
                             )
                             text = retry_text
                             raw_transcript = retry_text
+                            if not within_chunked_window:
+                                _capture_model_metadata(retry_asr)
                             compacted_audio = audio_data
                             audio_duration = raw_audio_duration
                         else:
@@ -2672,6 +2795,16 @@ def main(argv=None):
             runtime_log.info("dock_started_without_tray enabled=%s", dock_enabled)
         except Exception:
             runtime_log.exception("dock_start_without_tray_failed")
+
+    if app.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+        try:
+            indicator = visual_get_indicator()
+            dock_enabled = bool(getattr(cfg, "visual_dock_enabled", True))
+            if indicator:
+                visual_set_dock_enabled(dock_enabled)
+            runtime_log.info("visual_indicator_prewarmed dock_enabled=%s ready=%s", dock_enabled, bool(indicator))
+        except Exception:
+            runtime_log.exception("visual_indicator_prewarm_failed")
 
     # Enhanced hotkey toggles with better feedback
     def toggle_code_mode():

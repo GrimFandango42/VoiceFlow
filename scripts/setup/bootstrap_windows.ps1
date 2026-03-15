@@ -44,4 +44,5 @@ if (-not $SkipSmoke) {
 
 Write-Host ""
 Write-Host "Bootstrap complete." -ForegroundColor Green
-Write-Host "Launch with: .\VoiceFlow_Quick.bat" -ForegroundColor Green
+Write-Host "Launch packaged app with: .\dist\VoiceFlow\VoiceFlow.exe" -ForegroundColor Green
+Write-Host "Use batch launchers only for source/debug workflows." -ForegroundColor DarkYellow

@@ -25,6 +25,16 @@ A:
 
 VoiceFlow keeps a clipboard fallback for focus-drift edge cases.
 
+## Q: VoiceFlow keeps pressing Enter after each transcription.
+
+A:
+
+1. Open tray -> `Auto-Enter`.
+2. Turn it off.
+3. Retry one short dictation.
+
+Default stable behavior is paste-only on release; auto-Enter is opt-in.
+
 ## Q: App is stuck in processing/transcribing.
 
 A:
@@ -99,6 +109,7 @@ A:
 
 - Config: `%LOCALAPPDATA%\LocalFlow\config.json`
 - Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+- Fallback logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow-<pid>.log`
 - Recent history: `%LOCALAPPDATA%\LocalFlow\recent_history_events.jsonl`
 - Corrections: `%LOCALAPPDATA%\LocalFlow\transcription_corrections.jsonl`
 - Adaptive patterns: `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json`

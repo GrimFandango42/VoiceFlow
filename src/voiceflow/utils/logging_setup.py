@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
 import queue
+import tempfile
 import threading
 from pathlib import Path
 
@@ -12,14 +14,15 @@ class AsyncLogger:
         self.log_dir = log_dir
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = self.log_dir / "localflow.log"
+        self.active_log_path = self.log_path
 
         self.queue: queue.Queue = queue.Queue(maxsize=1000)
         self.logger = logging.getLogger("localflow")
         self.logger.setLevel(logging.INFO)
 
-        file_handler = logging.handlers.RotatingFileHandler(
-            self.log_path, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"
-        )
+        file_handler, selected_path = self._build_file_handler()
+        if selected_path is not None:
+            self.active_log_path = selected_path
         fmt = logging.Formatter(
             fmt="%(asctime)s %(levelname)s [%(threadName)s] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
@@ -31,6 +34,38 @@ class AsyncLogger:
 
         self.listener = logging.handlers.QueueListener(self.queue, file_handler)
         self.listener.start()
+
+        if self.active_log_path != self.log_path:
+            self.logger.warning(
+                "log_path_fallback primary=%s active=%s",
+                self.log_path,
+                self.active_log_path,
+            )
+
+    def _build_file_handler(self) -> tuple[logging.Handler, Path | None]:
+        pid = os.getpid()
+        fallback_dir = Path(tempfile.gettempdir()) / "LocalFlow"
+        candidates = [
+            self.log_path,
+            self.log_dir / f"localflow-{pid}.log",
+            fallback_dir / f"localflow-{pid}.log",
+        ]
+        for candidate in candidates:
+            try:
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                handler = logging.handlers.RotatingFileHandler(
+                    candidate,
+                    maxBytes=2 * 1024 * 1024,
+                    backupCount=3,
+                    encoding="utf-8",
+                )
+                return handler, candidate
+            except PermissionError:
+                continue
+            except OSError:
+                continue
+
+        return logging.StreamHandler(), None
 
     def stop(self):
         try:

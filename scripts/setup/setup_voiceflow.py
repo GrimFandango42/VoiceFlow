@@ -511,7 +511,8 @@ class VoiceFlowInstaller:
             print("\n[SUCCESS] VoiceFlow is ready to use!")
             print("\nNext steps:")
             print("  - Run: python scripts\\dev\\quick_smoke_test.py")
-            print("  - Launch: VoiceFlow_Quick.bat")
+            print("  - Launch packaged app: dist\\VoiceFlow\\VoiceFlow.exe")
+            print("  - Use batch launchers only for source/debug workflows")
         else:
             print(f"\n[ISSUES] {summary['issues_count']} problems found")
             print("\nIssues:")
