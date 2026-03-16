@@ -30,3 +30,6 @@ def test_async_logger_falls_back_when_primary_log_file_is_locked(monkeypatch, tm
     assert created_paths[0].name == "localflow.log"
     assert alog.active_log_path.name.startswith("localflow-")
     assert alog.active_log_path.parent == tmp_path
+    assert alog.active_log_marker_path.read_text(encoding="utf-8") == str(alog.active_log_path)
+    fallback_marker = alog.active_log_path.parent / "active_log_path.txt"
+    assert fallback_marker.read_text(encoding="utf-8") == str(alog.active_log_path)

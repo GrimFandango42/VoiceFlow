@@ -50,4 +50,5 @@ python scripts\dev\quick_smoke_test.py
 Runtime log:
 
 - `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
-- fallback: `%LOCALAPPDATA%\LocalFlow\logs\localflow-<pid>.log`
+- fallback marker: `%LOCALAPPDATA%\LocalFlow\logs\active_log_path.txt`
+- fallback file: `%TEMP%\LocalFlow\localflow-<pid>.log`

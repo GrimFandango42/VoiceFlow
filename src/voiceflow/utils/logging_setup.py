@@ -15,6 +15,7 @@ class AsyncLogger:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = self.log_dir / "localflow.log"
         self.active_log_path = self.log_path
+        self.active_log_marker_path = self.log_dir / "active_log_path.txt"
 
         self.queue: queue.Queue = queue.Queue(maxsize=1000)
         self.logger = logging.getLogger("localflow")
@@ -34,6 +35,7 @@ class AsyncLogger:
 
         self.listener = logging.handlers.QueueListener(self.queue, file_handler)
         self.listener.start()
+        self._write_active_log_marker()
 
         if self.active_log_path != self.log_path:
             self.logger.warning(
@@ -41,6 +43,24 @@ class AsyncLogger:
                 self.log_path,
                 self.active_log_path,
             )
+
+    def _write_active_log_marker(self) -> None:
+        marker_text = str(self.active_log_path)
+        marker_targets = [self.active_log_marker_path]
+        if self.active_log_path.parent != self.log_dir:
+            marker_targets.append(self.active_log_path.parent / "active_log_path.txt")
+
+        seen: set[str] = set()
+        for marker in marker_targets:
+            marker_key = str(marker).lower()
+            if marker_key in seen:
+                continue
+            seen.add(marker_key)
+            try:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text(marker_text, encoding="utf-8")
+            except Exception:
+                continue
 
     def _build_file_handler(self) -> tuple[logging.Handler, Path | None]:
         pid = os.getpid()

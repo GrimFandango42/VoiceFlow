@@ -613,8 +613,7 @@ class EnhancedApp:
         )
         self._housekeeping_stop = threading.Event()
         self._housekeeping_thread: Optional[threading.Thread] = None
-        self._start_daily_learning_guardrail()
-        self._start_longrun_housekeeping_thread()
+        self._background_services_started = False
 
         print(f"[EnhancedApp] Initialized with enhanced thread management and visual indicators {'enabled' if self.visual_indicators_enabled else 'disabled'}")
         print(f"[EnhancedApp] Streaming preview: {'Enabled' if self.streaming_enabled else 'Disabled'}")
@@ -770,6 +769,19 @@ class EnhancedApp:
             daemon=True,
         )
         self._housekeeping_thread.start()
+
+    def start_background_services(self) -> None:
+        """Defer opportunistic background work until runtime surfaces are ready."""
+        if bool(getattr(self, "_background_services_started", False)):
+            return
+        self._background_services_started = True
+        self._start_daily_learning_guardrail()
+        self._start_longrun_housekeeping_thread()
+        self._log.info(
+            "background_services_started daily_learning=%s housekeeping=%s",
+            bool(getattr(self.cfg, "daily_learning_autorun_enabled", True)),
+            bool(getattr(self.cfg, "longrun_housekeeping_enabled", True)),
+        )
 
     def _recommended_soft_gc_threshold_mb(self) -> float:
         """Adaptive threshold used when config keeps soft GC on auto (0)."""
@@ -3016,6 +3028,7 @@ def main(argv=None):
                 print("[STARTUP] Warning: Model preload incomplete, first transcription may be slower")
 
         print("Ready for 24/7 background operation. Waiting for hotkey...")
+        app.start_background_services()
 
         # Add heartbeat to main loop to prove we're alive
         def heartbeat_thread():

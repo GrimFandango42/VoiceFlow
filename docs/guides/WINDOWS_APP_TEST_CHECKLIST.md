@@ -11,7 +11,8 @@
 5. Pick one profile and click `Save And Launch`.
 6. Confirm tray icon appears after runtime starts.
 7. Confirm `%LOCALAPPDATA%\LocalFlow\logs\localflow.log` is updating.
-8. If `localflow.log` is locked, confirm fallback logging works in `localflow-<pid>.log`.
+8. If `localflow.log` is locked, confirm `%LOCALAPPDATA%\LocalFlow\logs\active_log_path.txt` points to the active fallback log.
+9. Confirm the fallback log is updating in `%TEMP%\LocalFlow\localflow-<pid>.log`.
 
 ## 2) Relaunch and Runtime Health
 
