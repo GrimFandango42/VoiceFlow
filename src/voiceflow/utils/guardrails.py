@@ -674,6 +674,31 @@ def validate_config(cfg: Config) -> Config:
             )
             cfg.idle_resume_warmup_audio_seconds = 0.45
 
+        if not hasattr(cfg, 'idle_resume_retry_on_compaction'):
+            cfg.idle_resume_retry_on_compaction = True
+
+        if (
+            not hasattr(cfg, 'idle_resume_retry_min_reduction_pct')
+            or float(getattr(cfg, 'idle_resume_retry_min_reduction_pct', -1.0)) < 20.0
+            or float(getattr(cfg, 'idle_resume_retry_min_reduction_pct', -1.0)) > 95.0
+        ):
+            logger.warning(
+                "Invalid idle_resume_retry_min_reduction_pct %s, defaulting to 55.0",
+                getattr(cfg, 'idle_resume_retry_min_reduction_pct', 'None'),
+            )
+            cfg.idle_resume_retry_min_reduction_pct = 55.0
+
+        if (
+            not hasattr(cfg, 'idle_resume_retry_min_raw_audio_seconds')
+            or float(getattr(cfg, 'idle_resume_retry_min_raw_audio_seconds', -1.0)) < 2.0
+            or float(getattr(cfg, 'idle_resume_retry_min_raw_audio_seconds', -1.0)) > 120.0
+        ):
+            logger.warning(
+                "Invalid idle_resume_retry_min_raw_audio_seconds %s, defaulting to 12.0",
+                getattr(cfg, 'idle_resume_retry_min_raw_audio_seconds', 'None'),
+            )
+            cfg.idle_resume_retry_min_raw_audio_seconds = 12.0
+
         if not hasattr(cfg, 'heavy_second_pass_min_chars'):
             cfg.heavy_second_pass_min_chars = 180
         else:

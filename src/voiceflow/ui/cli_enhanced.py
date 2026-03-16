@@ -817,6 +817,59 @@ class EnhancedApp:
             self._log.debug("idle_resume_warmup_failed error=%s", exc)
             return 0.0
 
+    def _evaluate_compaction_retry_signal(
+        self,
+        *,
+        raw_audio_duration: float,
+        compaction_reduction_pct: float,
+        initial_words: int,
+        initial_chars: int,
+        idle_resume_active: bool,
+    ) -> Dict[str, Any]:
+        """Decide whether a compacted decode is suspicious enough to retry on raw audio."""
+        retry_min_reduction = float(getattr(self.cfg, "pause_compaction_retry_min_reduction_pct", 38.0))
+        retry_max_words = int(getattr(self.cfg, "pause_compaction_retry_max_words", 8))
+        min_words_per_second = float(getattr(self.cfg, "pause_compaction_retry_min_words_per_second", 1.15))
+        min_chars_per_second = float(getattr(self.cfg, "pause_compaction_retry_min_chars_per_second", 5.0))
+
+        words_per_second = initial_words / max(0.1, raw_audio_duration)
+        chars_per_second = initial_chars / max(0.1, raw_audio_duration)
+        retry_due_to_short = initial_words <= retry_max_words
+        retry_due_to_sparse = (
+            words_per_second < min_words_per_second
+            and chars_per_second < min_chars_per_second
+        )
+        idle_resume_retry_due_to_compaction = (
+            idle_resume_active
+            and bool(getattr(self.cfg, "idle_resume_retry_on_compaction", True))
+            and compaction_reduction_pct >= float(getattr(self.cfg, "idle_resume_retry_min_reduction_pct", 55.0))
+            and raw_audio_duration >= float(getattr(self.cfg, "idle_resume_retry_min_raw_audio_seconds", 12.0))
+        )
+
+        reasons: list[str] = []
+        if retry_due_to_short:
+            reasons.append("short_output")
+        if retry_due_to_sparse:
+            reasons.append("sparse_output")
+        if idle_resume_retry_due_to_compaction:
+            reasons.append("idle_resume_compaction")
+
+        retry_triggered = (
+            compaction_reduction_pct >= retry_min_reduction
+            and bool(reasons)
+        )
+
+        return {
+            "retry_triggered": bool(retry_triggered),
+            "retry_due_to_short": bool(retry_due_to_short),
+            "retry_due_to_sparse": bool(retry_due_to_sparse),
+            "idle_resume_retry_due_to_compaction": bool(idle_resume_retry_due_to_compaction),
+            "retry_min_reduction": retry_min_reduction,
+            "words_per_second": words_per_second,
+            "chars_per_second": chars_per_second,
+            "reasons": reasons,
+        }
+
     def _longrun_housekeeping_loop(self) -> None:
         interval_s = max(30.0, float(getattr(self.cfg, "longrun_health_log_interval_seconds", 900.0)))
         configured_soft_gc_mb = float(getattr(self.cfg, "longrun_soft_gc_memory_mb", 0.0) or 0.0)
@@ -2109,39 +2162,42 @@ class EnhancedApp:
                     and len(audio_data) > len(compacted_audio)
                     and raw_audio_duration >= float(getattr(self.cfg, "pause_compaction_retry_min_raw_audio_seconds", 4.0))
                 ):
-                    retry_min_reduction = float(getattr(self.cfg, "pause_compaction_retry_min_reduction_pct", 38.0))
-                    retry_max_words = int(getattr(self.cfg, "pause_compaction_retry_max_words", 8))
                     initial_words = len((text or "").split())
                     initial_chars = len((text or "").strip())
-                    min_words_per_second = float(getattr(self.cfg, "pause_compaction_retry_min_words_per_second", 1.15))
-                    min_chars_per_second = float(getattr(self.cfg, "pause_compaction_retry_min_chars_per_second", 5.0))
-                    words_per_second = initial_words / max(0.1, raw_audio_duration)
-                    chars_per_second = initial_chars / max(0.1, raw_audio_duration)
-                    retry_due_to_short = initial_words <= retry_max_words
-                    retry_due_to_sparse = (
-                        words_per_second < min_words_per_second
-                        and chars_per_second < min_chars_per_second
+                    retry_eval = self._evaluate_compaction_retry_signal(
+                        raw_audio_duration=raw_audio_duration,
+                        compaction_reduction_pct=compaction_reduction_pct,
+                        initial_words=initial_words,
+                        initial_chars=initial_chars,
+                        idle_resume_active=idle_resume_active,
                     )
+                    retry_due_to_short = bool(retry_eval["retry_due_to_short"])
+                    retry_due_to_sparse = bool(retry_eval["retry_due_to_sparse"])
+                    idle_resume_retry_due_to_compaction = bool(
+                        retry_eval["idle_resume_retry_due_to_compaction"]
+                    )
+                    retry_min_reduction = float(retry_eval["retry_min_reduction"])
+                    words_per_second = float(retry_eval["words_per_second"])
+                    chars_per_second = float(retry_eval["chars_per_second"])
+                    retry_reasons = ",".join(retry_eval["reasons"]) or "none"
                     within_primary_window = raw_audio_duration <= retry_max_raw_seconds
                     within_extended_window = (
                         raw_audio_duration > retry_max_raw_seconds
                         and raw_audio_duration <= retry_hard_max_raw_seconds
-                        and retry_due_to_sparse
+                        and (retry_due_to_sparse or idle_resume_retry_due_to_compaction)
                     )
                     within_chunked_window = (
                         retry_chunked_long_enabled
                         and raw_audio_duration > retry_hard_max_raw_seconds
                         and raw_audio_duration <= retry_chunked_max_raw_seconds
-                        and retry_due_to_sparse
+                        and (retry_due_to_sparse or idle_resume_retry_due_to_compaction)
                     )
-                    retry_triggered = (
-                        compaction_reduction_pct >= retry_min_reduction
-                        and (retry_due_to_short or retry_due_to_sparse)
-                        and (within_primary_window or within_extended_window or within_chunked_window)
+                    retry_triggered = bool(retry_eval["retry_triggered"]) and (
+                        within_primary_window or within_extended_window or within_chunked_window
                     )
                     if retry_triggered:
                         self._log.info(
-                            "pause_compaction_retry_candidate words=%d chars=%d wps=%.2f cps=%.2f reduction=%.1f%% raw_duration=%.2f window=%s",
+                            "pause_compaction_retry_candidate words=%d chars=%d wps=%.2f cps=%.2f reduction=%.1f%% raw_duration=%.2f window=%s reasons=%s idle_resume=%s",
                             initial_words,
                             initial_chars,
                             words_per_second,
@@ -2153,6 +2209,8 @@ class EnhancedApp:
                                 if within_primary_window
                                 else ("extended" if within_extended_window else "chunked")
                             ),
+                            retry_reasons,
+                            str(idle_resume_active),
                         )
                         stage_start = time.perf_counter()
                         retry_path = "primary-retry"
@@ -2192,12 +2250,13 @@ class EnhancedApp:
                             retry_used = True
                             retry_strategy = retry_path
                             self._log.info(
-                                "pause_compaction_retry_applied initial_words=%d retry_words=%d reduction=%.1f%% path=%s chunks=%d",
+                                "pause_compaction_retry_applied initial_words=%d retry_words=%d reduction=%.1f%% path=%s chunks=%d reasons=%s",
                                 initial_words,
                                 retry_words,
                                 compaction_reduction_pct,
                                 retry_path,
                                 int(retry_chunks_used),
+                                retry_reasons,
                             )
                             text = retry_text
                             raw_transcript = retry_text
@@ -2207,12 +2266,13 @@ class EnhancedApp:
                             audio_duration = raw_audio_duration
                         else:
                             self._log.info(
-                                "pause_compaction_retry_rejected initial_words=%d retry_words=%d reduction=%.1f%% path=%s chunks=%d",
+                                "pause_compaction_retry_rejected initial_words=%d retry_words=%d reduction=%.1f%% path=%s chunks=%d reasons=%s",
                                 initial_words,
                                 retry_words,
                                 compaction_reduction_pct,
                                 retry_path,
                                 int(retry_chunks_used),
+                                retry_reasons,
                             )
                     elif raw_audio_duration > retry_chunked_max_raw_seconds:
                         self._log.info(
@@ -2225,13 +2285,15 @@ class EnhancedApp:
                         and compaction_reduction_pct >= retry_min_reduction
                     ):
                         self._log.info(
-                            "pause_compaction_retry_not_sparse words=%d chars=%d wps=%.2f cps=%.2f raw_duration=%.2f max_raw=%.2f",
+                            "pause_compaction_retry_not_sparse words=%d chars=%d wps=%.2f cps=%.2f raw_duration=%.2f max_raw=%.2f reasons=%s idle_resume=%s",
                             initial_words,
                             initial_chars,
                             words_per_second,
                             chars_per_second,
                             raw_audio_duration,
                             retry_max_raw_seconds,
+                            retry_reasons,
+                            str(idle_resume_active),
                         )
 
                 # Simple hallucination detection - fast and reliable

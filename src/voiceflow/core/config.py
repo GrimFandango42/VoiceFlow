@@ -67,6 +67,9 @@ class Config:
     idle_resume_force_primary_min_audio_seconds: float = 1.8  # Skip fast path when resume utterance is sustained
     idle_resume_warmup_enabled: bool = True  # Warm ASR runtime once before first long-idle decode
     idle_resume_warmup_audio_seconds: float = 0.45  # Warmup clip duration for idle-resume guardrail
+    idle_resume_retry_on_compaction: bool = True  # Retry raw audio on the first post-idle decode when compaction was aggressive
+    idle_resume_retry_min_reduction_pct: float = 55.0  # Treat heavy post-idle compaction as suspicious sooner than general retry logic
+    idle_resume_retry_min_raw_audio_seconds: float = 12.0  # Only apply the post-idle raw retry bias to meaningful dictation
     enable_non_speech_guard: bool = True  # Reject likely sneeze/cough/throat-clear bursts before ASR
     non_speech_guard_soft_mode: bool = True  # Prefer salvage/retry over hard drop on suspected bursts
     non_speech_max_audio_seconds: float = 1.25  # Only run non-speech filter on short clips
