@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import logging
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -250,6 +251,11 @@ class DailyLearningJob:
         if base_dir is not None:
             self.manager.audit_path = self.base_dir / "adaptive_audit.jsonl"
             self.manager.patterns_path = self.base_dir / "adaptive_patterns.json"
+            self.manager._patterns = {
+                "replacements": {},
+                "token_counts": {},
+                "updated_at": int(time.time()),
+            }
             self.manager._load_patterns()
             self.manager._purge_expired()
 
@@ -627,6 +633,7 @@ class DailyLearningJob:
                 "entry_point_counts": {k: int(v) for k, v in entry_point_counts.items()},
                 "insights_path": str(self.insights_path),
             },
+            "adaptive_snapshot": self.manager.snapshot(max_rules=12, max_tokens=20),
             "paths": {
                 "base_dir": str(self.base_dir),
                 "corrections_path": str(self.corrections_path),

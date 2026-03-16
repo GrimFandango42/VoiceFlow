@@ -247,7 +247,25 @@ def load_config(defaults: Config) -> Config:
         defaults.setup_profile = str(getattr(defaults, "setup_profile", "") or "recommended")
         defaults.setup_flow_version = required_setup_flow_version
 
-    if _apply_performance_migrations(defaults):
+    try:
+        pre_validation_state = asdict(defaults)
+    except Exception:
+        pre_validation_state = None
+
+    try:
+        validated = defaults.validate()
+        if isinstance(validated, Config):
+            defaults = validated
+    except Exception:
+        pass
+
+    changed = _apply_performance_migrations(defaults)
+    try:
+        validation_changed = pre_validation_state is not None and asdict(defaults) != pre_validation_state
+    except Exception:
+        validation_changed = False
+
+    if changed or validation_changed:
         save_config(defaults)
     return defaults
 

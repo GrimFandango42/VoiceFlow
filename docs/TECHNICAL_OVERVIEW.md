@@ -90,6 +90,25 @@ Daily learning script flags (`voiceflow.ai.daily_learning`):
 - `--max-correction-items`
 - `--print-json`
 
+## Continual Learning Runtime
+
+- Runtime observation path:
+  - `ui/cli_enhanced.py` records finalized transcript deltas into `AdaptiveLearningManager`.
+- Batch refinement path:
+  - `ai/daily_learning.py` mines recent history plus saved corrections and writes a bounded report.
+- Persistence:
+  - `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json`
+  - `%LOCALAPPDATA%\LocalFlow\adaptive_audit.jsonl`
+  - `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\`
+
+Signal weighting:
+
+- `daily_user_correction` is higher-trust than `daily_auto_analysis`.
+- `manual_correction` from correction review feeds the live runtime learner immediately.
+- `runtime_transcription` remains active, but needs more repetition than explicit correction feedback to become sticky.
+- Raw snippet storage is opt-in; the default release path keeps adaptive audit data leaner.
+- Daily learning reports include an `adaptive_snapshot` with top active replacements and recent domain-token counts.
+
 ## Observability
 
 Primary runtime log:

@@ -52,6 +52,15 @@ VoiceFlow is tray-first by design.
 - Default release behavior pastes text on release without auto-sending Enter (`press_enter_after_paste=false`).
 - Visual animation quality defaults to adaptive mode (`visual_animation_quality=auto`, `visual_target_fps=28`).
 
+## Continual Learning
+
+- Runtime adaptive learning stays local and observes recurring transcript-to-final-text deltas.
+- Explicit correction signals are treated as higher-trust than auto-analysis, so accent/workflow corrections promote faster than speculative cleanup rules.
+- Saved correction-review feedback is promoted back into the active runtime learner, so the current session can adapt before the next daily batch run.
+- Raw transcript snippet storage is opt-in (`adaptive_store_raw_text=false` by default).
+- Daily learning writes a report plus an adaptive snapshot with top learned replacements and frequent recent domain tokens.
+- Inspect `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json` and `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\` to see what is sticking.
+
 ## Stable Local Test Loop
 
 1. Build the bundle with `scripts\setup\build_windows_exe.ps1`.

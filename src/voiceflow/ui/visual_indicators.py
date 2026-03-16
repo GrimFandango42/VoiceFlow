@@ -20,7 +20,7 @@ from collections import deque
 from typing import Optional, Callable, Dict, Any
 from enum import Enum
 from pathlib import Path
-from .visual_config import get_visual_config, VisualConfigManager
+from .visual_config import ColorTheme, get_visual_config, VisualConfigManager
 from ..utils.guardrails import safe_visual_update, process_visual_update_queue, with_error_recovery
 from ..utils.settings import (
     config_dir,
@@ -37,6 +37,135 @@ _ANIMATION_PREFS: Dict[str, Any] = {
     "reduced_motion": False,
     "target_fps": 28,
 }
+
+_UI_NEUTRAL_PALETTE: Dict[str, str] = {
+    "panel_bg": "#10161D",
+    "panel_surface": "#151C25",
+    "panel_surface_alt": "#1A2330",
+    "panel_border": "#253445",
+    "panel_border_soft": "#31445A",
+    "text_primary": "#E8EEF5",
+    "text_secondary": "#BECAD7",
+    "text_muted": "#8596A9",
+    "accent": "#86AEE3",
+    "accent_strong": "#5B84BC",
+    "accent_soft": "#E4EDF9",
+    "success": "#7EAD8A",
+    "warning": "#B99B66",
+    "badge_live_bg": "#1B2A22",
+    "badge_live_fg": "#B8D8C1",
+    "badge_correction_bg": "#1A2533",
+    "badge_correction_fg": "#B7D0EE",
+    "badge_retry_bg": "#2B2418",
+    "badge_retry_fg": "#E1CFAD",
+    "success_bg": "#203629",
+    "success_fg": "#CAE7D2",
+}
+
+_UI_LIGHT_PALETTE: Dict[str, str] = {
+    "panel_bg": "#F3F6FA",
+    "panel_surface": "#FFFFFF",
+    "panel_surface_alt": "#EAF0F7",
+    "panel_border": "#CCD7E3",
+    "panel_border_soft": "#B5C6D8",
+    "text_primary": "#18222C",
+    "text_secondary": "#415163",
+    "text_muted": "#6E8094",
+    "accent": "#477FC9",
+    "accent_strong": "#2F66AD",
+    "accent_soft": "#F2F7FF",
+    "success": "#46765B",
+    "warning": "#936A32",
+    "badge_live_bg": "#E4EFE7",
+    "badge_live_fg": "#365744",
+    "badge_correction_bg": "#E6EEF8",
+    "badge_correction_fg": "#35547A",
+    "badge_retry_bg": "#F3EBDD",
+    "badge_retry_fg": "#735426",
+    "success_bg": "#DDECDF",
+    "success_fg": "#2D533A",
+}
+
+_HISTORY_FILTER_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("all", "All"),
+    ("live", "Live"),
+    ("corrections", "Corrections"),
+    ("retries", "Retries"),
+)
+_CORRECTION_FEEDBACK_HANDLER: Optional[Callable[[str, str, Dict[str, Any]], None]] = None
+
+
+def _hex_to_rgb(color: str) -> tuple[int, int, int]:
+    safe = str(color or "").strip().lstrip("#")
+    if len(safe) != 6:
+        return 255, 255, 255
+    try:
+        return int(safe[0:2], 16), int(safe[2:4], 16), int(safe[4:6], 16)
+    except Exception:
+        return 255, 255, 255
+
+
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    r, g, b = [max(0, min(255, int(channel))) for channel in rgb]
+    return "#{:02X}{:02X}{:02X}".format(r, g, b)
+
+
+def _mix_color(color_a: str, color_b: str, ratio: float) -> str:
+    ratio = max(0.0, min(1.0, float(ratio)))
+    r1, g1, b1 = _hex_to_rgb(color_a)
+    r2, g2, b2 = _hex_to_rgb(color_b)
+    mixed = (
+        round(r1 + ((r2 - r1) * ratio)),
+        round(g1 + ((g2 - g1) * ratio)),
+        round(b1 + ((b2 - b1) * ratio)),
+    )
+    return _rgb_to_hex(mixed)
+
+
+def _build_ui_palette(color_scheme: Dict[str, str], theme_value: str) -> Dict[str, str]:
+    light_mode = str(theme_value or "").strip().lower() == ColorTheme.LIGHT_MODE.value
+    palette = dict(_UI_LIGHT_PALETTE if light_mode else _UI_NEUTRAL_PALETTE)
+    accent_source = str((color_scheme or {}).get("accent_color", palette["accent"]) or palette["accent"]).strip()
+    success_source = str((color_scheme or {}).get("success_color", palette["success"]) or palette["success"]).strip()
+    warning_source = str((color_scheme or {}).get("warning_color", palette["warning"]) or palette["warning"]).strip()
+
+    if light_mode:
+        palette["accent"] = _mix_color(accent_source, "#FFFFFF", 0.10)
+        palette["accent_strong"] = _mix_color(accent_source, "#000000", 0.12)
+        palette["accent_soft"] = _mix_color(accent_source, "#FFFFFF", 0.84)
+        palette["success"] = _mix_color(success_source, "#000000", 0.08)
+        palette["warning"] = _mix_color(warning_source, "#000000", 0.06)
+    else:
+        palette["accent"] = _mix_color(accent_source, "#FFFFFF", 0.18)
+        palette["accent_strong"] = _mix_color(accent_source, "#000000", 0.24)
+        palette["accent_soft"] = _mix_color(accent_source, "#FFFFFF", 0.80)
+        palette["success"] = _mix_color(success_source, "#FFFFFF", 0.16)
+        palette["warning"] = _mix_color(warning_source, "#FFFFFF", 0.08)
+
+    palette["badge_live_bg"] = _mix_color(palette["success"], palette["panel_surface"], 0.78)
+    palette["badge_live_fg"] = _mix_color(palette["success"], palette["text_primary"], 0.36)
+    palette["badge_correction_bg"] = _mix_color(palette["accent"], palette["panel_surface"], 0.74)
+    palette["badge_correction_fg"] = _mix_color(palette["accent"], palette["text_primary"], 0.28)
+    palette["badge_retry_bg"] = _mix_color(palette["warning"], palette["panel_surface"], 0.72)
+    palette["badge_retry_fg"] = _mix_color(palette["warning"], palette["text_primary"], 0.34)
+    palette["success_bg"] = _mix_color(palette["success"], palette["panel_surface"], 0.64)
+    palette["success_fg"] = _mix_color(palette["success"], palette["text_primary"], 0.40)
+    return palette
+
+
+def set_correction_feedback_handler(handler: Optional[Callable[[str, str, Dict[str, Any]], None]]) -> None:
+    global _CORRECTION_FEEDBACK_HANDLER
+    _CORRECTION_FEEDBACK_HANDLER = handler
+
+
+def _emit_correction_feedback_learning(original_text: str, corrected_text: str, metadata: Dict[str, Any]) -> None:
+    handler = _CORRECTION_FEEDBACK_HANDLER
+    if not handler:
+        return
+    try:
+        handler(str(original_text or ""), str(corrected_text or ""), dict(metadata or {}))
+    except Exception as exc:
+        logger.debug("Correction feedback learning dispatch failed: %s", exc)
 
 class TranscriptionStatus(Enum):
     """Status states for visual indication"""
@@ -66,6 +195,7 @@ class BottomScreenIndicator:
         self.history_canvas: Optional[tk.Canvas] = None
         self.history_items_frame: Optional[tk.Frame] = None
         self.history_feedback_var: Optional[tk.StringVar] = None
+        self.history_summary_var: Optional[tk.StringVar] = None
         self.history_feedback_job = None
         self.history_correction_btn: Optional[tk.Button] = None
         self.current_status = TranscriptionStatus.IDLE
@@ -144,6 +274,8 @@ class BottomScreenIndicator:
         self.history_seen_fingerprints = set()
         self.history_seen_fingerprint_order = deque(maxlen=1200)
         self.history_session_started_at = time.time()
+        self.history_active_filter = "all"
+        self.history_filter_buttons: Dict[str, tk.Button] = {}
         self.ui_actions_path: Path = config_dir() / "ui_actions.jsonl"
         self.ui_action_last_processed_ts = time.time()
         self.ui_action_seen = deque(maxlen=240)
@@ -171,6 +303,7 @@ class BottomScreenIndicator:
 
         # Configuration manager
         self.config_manager = get_visual_config()
+        self.ui_palette: Dict[str, str] = dict(_UI_NEUTRAL_PALETTE)
         self._load_live_caption_preferences()
         self._update_visual_settings()
         self.set_animation_preferences(
@@ -178,7 +311,7 @@ class BottomScreenIndicator:
             reduced_motion=bool(_ANIMATION_PREFS.get("reduced_motion", False)),
             target_fps=int(_ANIMATION_PREFS.get("target_fps", 28) or 28),
         )
-        self.visual_theme = self._select_daily_visual_theme()
+        self.visual_theme = self._default_visual_theme()
 
         # Start GUI in separate thread for background compatibility
         self._start_gui_thread()
@@ -190,15 +323,22 @@ class BottomScreenIndicator:
         """Update visual settings from configuration"""
         req_w, req_h = self.config_manager.get_overlay_dimensions()
         # Compact overlay profile: small, centered, and visually lighter.
-        self.width = int(min(560, max(380, req_w + 56)))
-        self.height = int(min(214, max(162, req_h - 12)))
-        self.wave_w = max(280, self.width - 24)
+        self.width = int(min(500, max(332, req_w + 20)))
+        self.height = int(min(182, max(142, req_h - 20)))
+        self.wave_w = max(272, self.width - 20)
         colors = self.config_manager.get_color_scheme()
+        theme_value = getattr(getattr(self.config_manager, "config", None), "theme", ColorTheme.DEFAULT)
+        theme_name = getattr(theme_value, "value", str(theme_value))
+        self.ui_palette = _build_ui_palette(colors, theme_name)
 
-        self.bg_color = colors['bg_color']
-        self.text_color = colors['text_color']
-        self.accent_color = colors['accent_color']
+        self.bg_color = self.ui_palette["panel_bg"]
+        self.text_color = self.ui_palette["text_primary"]
+        self.accent_color = self.ui_palette["accent"]
         self.error_color = colors['error_color']
+        self.visual_theme = self._default_visual_theme()
+
+    def _ui(self, key: str) -> str:
+        return str(self.ui_palette.get(key, _UI_NEUTRAL_PALETTE.get(key, "#FFFFFF")))
 
     def _load_live_caption_preferences(self) -> None:
         """Load preview presentation options from persisted runtime config."""
@@ -231,17 +371,14 @@ class BottomScreenIndicator:
             max_value=8.0,
         )
 
-    def _select_daily_visual_theme(self) -> Dict[str, str]:
-        """Rotate playful indicator theme by day to keep the experience fresh."""
-        themes = [
-            {"name": "aqua", "glyph": "~", "accent": "#00B4D8", "orb": "#90E0EF"},
-            {"name": "mint", "glyph": "*", "accent": "#2EC4B6", "orb": "#CBF3F0"},
-            {"name": "nova", "glyph": "x", "accent": "#8ECAE6", "orb": "#BDE0FE"},
-            {"name": "ice", "glyph": "o", "accent": "#7DD3FC", "orb": "#DBEAFE"},
-            {"name": "teal", "glyph": "+", "accent": "#14B8A6", "orb": "#A7F3D0"},
-        ]
-        idx = datetime.now().timetuple().tm_yday % len(themes)
-        return themes[idx]
+    def _default_visual_theme(self) -> Dict[str, str]:
+        """Use a restrained, stable palette instead of rotating accents."""
+        return {
+            "name": "studio",
+            "glyph": "",
+            "accent": self._ui("accent"),
+            "orb": self._ui("accent_soft"),
+        }
 
     def set_animation_preferences(
         self,
@@ -509,12 +646,12 @@ class BottomScreenIndicator:
         self.wave_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=96,
+            height=80,
             bg=self.transparent_key,
             highlightthickness=0,
             bd=0,
         )
-        self.wave_canvas.pack(pady=(4, 2))
+        self.wave_canvas.pack(pady=(2, 1))
         self._init_waveform_strip()
 
         # Status text
@@ -522,9 +659,9 @@ class BottomScreenIndicator:
         self.status_label = tk.Label(
             main_frame,
             textvariable=self.status_var,
-            bg="#0B1220",
-            fg="#D8E3F0",
-            font=("Segoe UI", 11, "bold")
+            bg=self._ui("panel_bg"),
+            fg=self._ui("text_primary"),
+            font=("Segoe UI", 10, "bold")
         )
         # Dock already carries status; keep overlay focused on waveform/preview.
         # status_label.pack(pady=(0, 5))
@@ -532,21 +669,21 @@ class BottomScreenIndicator:
         # Preview text for streaming transcription
         preview_card = tk.Frame(
             main_frame,
-            bg="#0F172A",
-            highlightbackground="#1E3A5F",
+            bg=self._ui("panel_surface"),
+            highlightbackground=self._ui("panel_border"),
             highlightthickness=1,
             bd=0,
-            padx=10,
-            pady=6,
+            padx=7,
+            pady=4,
         )
-        preview_card.pack(fill=tk.X, padx=8, pady=(0, 2))
+        preview_card.pack(fill=tk.X, padx=6, pady=(0, 1))
         self.preview_var = tk.StringVar(value="")
         self.preview_label = tk.Label(
             preview_card,
             textvariable=self.preview_var,
-            bg="#0F172A",
-            fg="#F7FBFF",
-            font=("Segoe UI", max(10, int(self.live_caption_font_size)), "bold"),
+            bg=self._ui("panel_surface"),
+            fg=self._ui("text_primary"),
+            font=("Segoe UI", max(10, int(self.live_caption_font_size) - 1), "bold"),
             wraplength=self.wave_w - 36,
             justify=tk.LEFT,
             anchor="w",
@@ -623,7 +760,14 @@ class BottomScreenIndicator:
         self._speech_level = 0.0
         self._silence_floor_est = 0.0
 
-        self.wave_baseline = self.wave_canvas.create_line(left, base, right, base, fill="#1F2937", width=1)
+        self.wave_baseline = self.wave_canvas.create_line(
+            left,
+            base,
+            right,
+            base,
+            fill=self._ui("panel_border"),
+            width=1,
+        )
         self.wave_line = None
         self.wave_line_glow = None
         self.wave_fill = None
@@ -636,7 +780,7 @@ class BottomScreenIndicator:
             smooth=True,
             splinesteps=22,
             width=2,
-            fill="#67E8F9",
+            fill=_mix_color(self.visual_theme["accent"], "#FFFFFF", 0.24),
         )
         self.wave_trail_glow = self.wave_canvas.create_line(
             left,
@@ -646,7 +790,7 @@ class BottomScreenIndicator:
             smooth=True,
             splinesteps=22,
             width=8,
-            fill="#0EA5E9",
+            fill=_mix_color(self.visual_theme["accent"], "#FFFFFF", 0.10),
         )
         self.wave_line_glow = self.wave_canvas.create_line(
             left,
@@ -656,7 +800,7 @@ class BottomScreenIndicator:
             smooth=True,
             splinesteps=24,
             width=6,
-            fill="#0EA5E9",
+            fill=_mix_color(self.visual_theme["accent"], "#FFFFFF", 0.16),
         )
         self.wave_line = self.wave_canvas.create_line(
             left,
@@ -666,10 +810,24 @@ class BottomScreenIndicator:
             smooth=True,
             splinesteps=24,
             width=2,
-            fill="#BAE6FD",
+            fill=self.visual_theme["orb"],
         )
-        self.wave_orb_glow = self.wave_canvas.create_oval(left - 6, base - 6, left + 6, base + 6, fill="#0EA5E9", outline="")
-        self.wave_orb = self.wave_canvas.create_oval(left - 3, base - 3, left + 3, base + 3, fill="#38BDF8", outline="")
+        self.wave_orb_glow = self.wave_canvas.create_oval(
+            left - 6,
+            base - 6,
+            left + 6,
+            base + 6,
+            fill=_mix_color(self.visual_theme["accent"], "#FFFFFF", 0.10),
+            outline="",
+        )
+        self.wave_orb = self.wave_canvas.create_oval(
+            left - 3,
+            base - 3,
+            left + 3,
+            base + 3,
+            fill=self.visual_theme["accent"],
+            outline="",
+        )
         self.space_star_ids = []
         self.space_star_meta = []
         self.space_core = None
@@ -690,7 +848,7 @@ class BottomScreenIndicator:
                 base - 1,
                 x + bar_w,
                 base + 1,
-                fill="#38BDF8",
+                fill=self.visual_theme["accent"],
                 outline="",
             )
             self.wave_bars.append(bar)
@@ -703,9 +861,9 @@ class BottomScreenIndicator:
                 base - 2,
                 left + 2,
                 base + 2,
-                outline="#334155",
-                width=1,
-            )
+            outline=self._ui("panel_border_soft"),
+            width=1,
+        )
             self.wave_pulse_rings.append(ring)
 
         # Spark particles riding the waveform.
@@ -716,7 +874,14 @@ class BottomScreenIndicator:
         for i in range(spark_count):
             px = left + ((i + 1) / (spark_count + 1)) * span
             py = base + random.uniform(-6.0, 6.0)
-            spark = self.wave_canvas.create_oval(px - 2, py - 2, px + 2, py + 2, fill="#38BDF8", outline="")
+            spark = self.wave_canvas.create_oval(
+                px - 2,
+                py - 2,
+                px + 2,
+                py + 2,
+                fill=self.visual_theme["accent"],
+                outline="",
+            )
             self.wave_sparks.append(spark)
             self.wave_spark_meta.append(
                 {
@@ -812,17 +977,10 @@ class BottomScreenIndicator:
         self.wave_energy_history.append(voiced)
         hist = list(self.wave_energy_history)
         phase = self._color_phase + (centroid * 1.75)
-        warm_tone = 0.5 + (0.5 * math.sin(phase))
-        cool_tone = 0.5 + (0.5 * math.sin(phase + 2.1))
-        accent_r = int(max(34, min(236, 58 + (92 * high) + (36 * warm_tone) + (26 * self._burst_energy))))
-        accent_g = int(max(90, min(242, 114 + (84 * mid) + (22 * warm_tone) + (28 * voiced))))
-        accent_b = int(max(110, min(252, 138 + (76 * low) + (34 * cool_tone))))
-        trail_color = "#{:02X}{:02X}{:02X}".format(accent_r, accent_g, accent_b)
-        glow_color = "#{:02X}{:02X}{:02X}".format(
-            min(255, accent_r + 18),
-            min(255, accent_g + 28),
-            min(255, accent_b + 36),
-        )
+        color_lift = max(0.0, min(1.0, (0.18 * high) + (0.22 * mid) + (0.30 * voiced_drive) + (0.18 * self._burst_energy)))
+        pulse_mix = 0.08 + (0.10 * (0.5 + (0.5 * math.sin(phase))))
+        trail_color = _mix_color(self.visual_theme["accent"], "#FFFFFF", color_lift * 0.26)
+        glow_color = _mix_color(self.visual_theme["accent"], "#FFFFFF", 0.18 + (color_lift * 0.38) + pulse_mix)
         low_detail = bool(
             self.reduced_motion
             or self.animation_quality == "low"
@@ -896,14 +1054,12 @@ class BottomScreenIndicator:
             top = base - h
             bottom = base + (h * (0.54 + (0.14 * front_boost)))
             self.wave_canvas.coords(bar, x0, top, x1, bottom)
-            bar_r = int(max(30, min(220, 48 + (80 * band_energy) + (46 * voiced) + (24 * warm_tone))))
-            bar_g = int(max(86, min(232, 112 + (70 * mid) + (30 * falloff) + (14 * cool_tone))))
-            bar_b = int(max(120, min(246, 146 + (68 * high) + (22 * low) + (22 * cool_tone))))
-            color = "#{:02X}{:02X}{:02X}".format(bar_r, bar_g, bar_b)
+            bar_mix = max(0.0, min(1.0, (0.16 * band_energy) + (0.22 * voiced_drive) + (0.08 * falloff)))
+            color = _mix_color(self.visual_theme["accent"], "#FFFFFF", 0.10 + (bar_mix * 0.22))
             self.wave_canvas.itemconfig(bar, fill=color)
 
         if self.wave_baseline:
-            base_color = "#1F2937" if voiced < 0.08 else "#334155"
+            base_color = self._ui("panel_border") if voiced < 0.08 else self._ui("panel_border_soft")
             self.wave_canvas.itemconfig(self.wave_baseline, fill=base_color, width=(1 if voiced < 0.2 else 2))
 
         if self.wave_orb and self.wave_orb_glow:
@@ -936,10 +1092,7 @@ class BottomScreenIndicator:
                         orb_x + ring_r,
                         orb_y + ring_r,
                     )
-                    rc_r = min(255, accent_r + 10 + (idx * 6))
-                    rc_g = min(255, accent_g + 8 + (idx * 4))
-                    rc_b = min(255, accent_b + 18 + (idx * 3))
-                    ring_color = "#{:02X}{:02X}{:02X}".format(rc_r, rc_g, rc_b)
+                    ring_color = _mix_color(self.visual_theme["accent"], "#FFFFFF", 0.16 + (0.10 * idx) + (0.14 * voiced_drive))
                     ring_w = max(1, int(1 + voiced_drive + (0.4 * (2 - idx)) + (0.4 * self._burst_energy)))
                     self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
             else:
@@ -964,10 +1117,7 @@ class BottomScreenIndicator:
                 meta["y"] = y_wave + (meta["amp"] * 0.06 * math.sin(meta["phase"] * 1.5))
                 r = spark_base * (0.72 + 0.28 * math.sin(meta["phase"] + (idx * 0.21)))
                 self.wave_canvas.coords(spark, meta["x"] - r, meta["y"] - r, meta["x"] + r, meta["y"] + r)
-                s_r = min(255, accent_r + 18 + (idx % 3) * 10)
-                s_g = min(255, accent_g + 24)
-                s_b = min(255, accent_b + 30)
-                spark_color = "#{:02X}{:02X}{:02X}".format(s_r, s_g, s_b)
+                spark_color = _mix_color(self.visual_theme["accent"], "#FFFFFF", 0.18 + (0.05 * (idx % 3)) + (0.18 * voiced_drive))
                 self.wave_canvas.itemconfig(spark, fill=spark_color)
         elif self.wave_sparks:
             for spark in self.wave_sparks:
@@ -1027,60 +1177,69 @@ class BottomScreenIndicator:
         self.dock_window = tk.Toplevel(self.root)
         self.dock_window.overrideredirect(True)
         self.dock_window.wm_attributes("-topmost", True)
-        self.dock_window.wm_attributes("-alpha", 0.88)
-        self.dock_window.configure(bg="#0B1220")
+        self.dock_window.wm_attributes("-alpha", 0.92)
+        self.dock_window.configure(bg=self._ui("panel_bg"))
 
-        dock_w, dock_h = 430, 30
+        dock_w, dock_h = 372, 26
         x = (screen_width - dock_w) // 2
-        y = screen_height - dock_h - 86
+        y = screen_height - dock_h - 80
         self.dock_window.geometry(f"{dock_w}x{dock_h}+{x}+{y}")
 
-        dock_frame = tk.Frame(self.dock_window, bg="#0B1220", highlightthickness=1, highlightbackground="#1E293B")
+        dock_frame = tk.Frame(
+            self.dock_window,
+            bg=self._ui("panel_bg"),
+            highlightthickness=1,
+            highlightbackground=self._ui("panel_border"),
+        )
         dock_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.dock_var = tk.StringVar(value="vf ready")
+        self.dock_var = tk.StringVar(value="Ready")
         dock_label = tk.Label(
             dock_frame,
             textvariable=self.dock_var,
-            bg="#0B1220",
-            fg="#B6C2CF",
-            font=("Segoe UI", 9, "bold"),
+            bg=self._ui("panel_bg"),
+            fg=self._ui("text_secondary"),
+            font=("Segoe UI", 8, "bold"),
             anchor="w",
-            padx=10,
+            padx=8,
         )
         dock_label.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         history_btn = tk.Button(
             dock_frame,
-            text="Recent History",
+            text="History",
             command=self._toggle_history_panel,
-            bg="#111827",
-            fg="#D1D5DB",
-            activebackground="#1F2937",
-            activeforeground="#FFFFFF",
+            bg=self._ui("panel_surface"),
+            fg=self._ui("text_secondary"),
+            activebackground=self._ui("panel_surface_alt"),
+            activeforeground=self._ui("text_primary"),
             relief=tk.FLAT,
-            padx=10,
-            pady=2,
+            padx=8,
+            pady=1,
             font=("Segoe UI", 8, "bold"),
             cursor="hand2",
+            highlightthickness=0,
+            bd=0,
         )
-        history_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=3)
+        history_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=2)
 
         minimize_btn = tk.Button(
             dock_frame,
-            text="Minimize to Tray",
+            text="Hide",
             command=lambda: self._set_dock_enabled_ui(False),
-            bg="#111827",
-            fg="#D1D5DB",
-            activebackground="#1F2937",
-            activeforeground="#FFFFFF",
+            bg=self._ui("panel_surface"),
+            fg=self._ui("text_secondary"),
+            activebackground=self._ui("panel_surface_alt"),
+            activeforeground=self._ui("text_primary"),
             relief=tk.FLAT,
-            padx=10,
-            pady=2,
+            padx=8,
+            pady=1,
             font=("Segoe UI", 8, "bold"),
             cursor="hand2",
+            highlightthickness=0,
+            bd=0,
         )
-        minimize_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=3)
+        minimize_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=2)
         if not self.dock_enabled:
             self.dock_window.withdraw()
 
@@ -1091,105 +1250,153 @@ class BottomScreenIndicator:
         self.history_window = tk.Toplevel(self.root)
         self.history_window.overrideredirect(True)
         self.history_window.wm_attributes("-topmost", True)
-        self.history_window.wm_attributes("-alpha", 0.95)
-        self.history_window.configure(bg="#0B1220")
+        self.history_window.wm_attributes("-alpha", 0.97)
+        self.history_window.configure(bg=self._ui("panel_bg"))
 
-        panel_w, panel_h = 560, 240
+        panel_w, panel_h = 500, 208
         x = (screen_width - panel_w) // 2
         y = screen_height - panel_h - 58
         self.history_geometry_compact = f"{panel_w}x{panel_h}+{x}+{y}"
-        self.history_geometry_expanded = f"{panel_w}x460+{x}+{max(20, y - 220)}"
+        self.history_geometry_expanded = f"{panel_w}x392+{x}+{max(20, y - 184)}"
         self.history_window.geometry(self.history_geometry_compact)
 
-        frame = tk.Frame(self.history_window, bg="#0B1220", highlightthickness=1, highlightbackground="#1E293B")
+        frame = tk.Frame(
+            self.history_window,
+            bg=self._ui("panel_bg"),
+            highlightthickness=1,
+            highlightbackground=self._ui("panel_border"),
+        )
         frame.pack(fill=tk.BOTH, expand=True)
 
         header = tk.Label(
             frame,
-            text="Recent Transcriptions",
-            bg="#0B1220",
-            fg="#C7D2FE",
-            font=("Segoe UI", 10, "bold"),
+            text="Recent History",
+            bg=self._ui("panel_bg"),
+            fg=self._ui("text_primary"),
+            font=("Segoe UI", 9, "bold"),
             anchor="w",
-            padx=10,
-            pady=6,
+            padx=8,
+            pady=4,
         )
         header.pack(fill=tk.X)
 
-        actions = tk.Frame(frame, bg="#0B1220")
-        actions.pack(fill=tk.X, padx=8, pady=(0, 6))
+        actions = tk.Frame(frame, bg=self._ui("panel_bg"))
+        actions.pack(fill=tk.X, padx=8, pady=(0, 4))
 
         self.history_toggle_btn = tk.Button(
             actions,
             text="Expand",
             command=self._toggle_history_expanded,
-            bg="#111827",
-            fg="#D1D5DB",
-            activebackground="#1F2937",
-            activeforeground="#FFFFFF",
+            bg=self._ui("panel_surface"),
+            fg=self._ui("text_secondary"),
+            activebackground=self._ui("panel_surface_alt"),
+            activeforeground=self._ui("text_primary"),
             relief=tk.FLAT,
-            padx=10,
-            pady=2,
-            font=("Segoe UI", 9, "bold"),
+            padx=8,
+            pady=1,
+            font=("Segoe UI", 8, "bold"),
+            bd=0,
+            highlightthickness=0,
         )
         self.history_toggle_btn.pack(side=tk.LEFT)
 
         self.history_correction_btn = tk.Button(
             actions,
-            text="Corrections: Off",
+            text="Review",
             command=self._toggle_history_correction_mode,
-            bg="#111827",
-            fg="#D1D5DB",
-            activebackground="#1F2937",
-            activeforeground="#FFFFFF",
+            bg=self._ui("panel_surface"),
+            fg=self._ui("text_secondary"),
+            activebackground=self._ui("panel_surface_alt"),
+            activeforeground=self._ui("text_primary"),
             relief=tk.FLAT,
-            padx=10,
-            pady=2,
-            font=("Segoe UI", 9, "bold"),
+            padx=8,
+            pady=1,
+            font=("Segoe UI", 8, "bold"),
+            bd=0,
+            highlightthickness=0,
         )
-        self.history_correction_btn.pack(side=tk.LEFT, padx=(6, 0))
+        self.history_correction_btn.pack(side=tk.LEFT, padx=(4, 0))
 
         close_btn = tk.Button(
             actions,
             text="Close",
             command=self._toggle_history_panel,
-            bg="#111827",
-            fg="#D1D5DB",
-            activebackground="#1F2937",
-            activeforeground="#FFFFFF",
+            bg=self._ui("panel_surface"),
+            fg=self._ui("text_secondary"),
+            activebackground=self._ui("panel_surface_alt"),
+            activeforeground=self._ui("text_primary"),
             relief=tk.FLAT,
-            padx=10,
-            pady=2,
-            font=("Segoe UI", 9, "bold"),
+            padx=8,
+            pady=1,
+            font=("Segoe UI", 8, "bold"),
+            bd=0,
+            highlightthickness=0,
         )
         close_btn.pack(side=tk.RIGHT)
+
+        filters = tk.Frame(frame, bg=self._ui("panel_bg"))
+        filters.pack(fill=tk.X, padx=8, pady=(0, 4))
+        self.history_filter_buttons = {}
+        for key, label in _HISTORY_FILTER_OPTIONS:
+            btn = tk.Button(
+                filters,
+                text=label,
+                command=lambda value=key: self._set_history_filter(value),
+                bg=self._ui("panel_surface"),
+                fg=self._ui("text_muted"),
+                activebackground=self._ui("panel_surface_alt"),
+                activeforeground=self._ui("text_primary"),
+                relief=tk.FLAT,
+                padx=7,
+                pady=1,
+                font=("Segoe UI", 8, "bold"),
+                bd=0,
+                highlightthickness=0,
+                cursor="hand2",
+            )
+            btn.pack(side=tk.LEFT, padx=(0, 4))
+            self.history_filter_buttons[key] = btn
+        self._refresh_history_filter_buttons()
+
+        self.history_summary_var = tk.StringVar(value="")
+        summary_label = tk.Label(
+            frame,
+            textvariable=self.history_summary_var,
+            bg=self._ui("panel_bg"),
+            fg=self._ui("text_muted"),
+            font=("Segoe UI", 8),
+            anchor="w",
+            padx=8,
+            pady=1,
+        )
+        summary_label.pack(fill=tk.X)
 
         self.history_feedback_var = tk.StringVar(value="")
         feedback_label = tk.Label(
             frame,
             textvariable=self.history_feedback_var,
-            bg="#0B1220",
-            fg="#93C5FD",
+            bg=self._ui("panel_bg"),
+            fg=self._ui("text_muted"),
             font=("Segoe UI", 8),
             anchor="w",
-            padx=10,
-            pady=2,
+            padx=8,
+            pady=1,
         )
         feedback_label.pack(fill=tk.X)
 
-        list_container = tk.Frame(frame, bg="#0F172A")
+        list_container = tk.Frame(frame, bg=self._ui("panel_surface"))
         list_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
         self.history_canvas = tk.Canvas(
             list_container,
-            bg="#0F172A",
+            bg=self._ui("panel_surface"),
             highlightthickness=0,
             bd=0,
         )
         scrollbar = tk.Scrollbar(list_container, orient=tk.VERTICAL, command=self.history_canvas.yview)
         self.history_canvas.configure(yscrollcommand=scrollbar.set)
 
-        self.history_items_frame = tk.Frame(self.history_canvas, bg="#0F172A")
+        self.history_items_frame = tk.Frame(self.history_canvas, bg=self._ui("panel_surface"))
         history_window_id = self.history_canvas.create_window((0, 0), window=self.history_items_frame, anchor="nw")
 
         def _on_items_configure(_event):
@@ -1287,6 +1494,34 @@ class BottomScreenIndicator:
 
     def toggle_recent_history(self):
         self._queue_ui_action(self._toggle_history_panel, (), {})
+
+    def _set_history_filter(self, filter_key: str) -> None:
+        candidate = str(filter_key or "all").strip().lower()
+        allowed = {key for key, _label in _HISTORY_FILTER_OPTIONS}
+        if candidate not in allowed:
+            candidate = "all"
+        self.history_active_filter = candidate
+        self._refresh_history_filter_buttons()
+        self._render_history_panel()
+
+    def _refresh_history_filter_buttons(self) -> None:
+        for key, button in self.history_filter_buttons.items():
+            active = key == self.history_active_filter
+            try:
+                button.configure(
+                    bg=(self._ui("accent_strong") if active else self._ui("panel_surface")),
+                    fg=(self._ui("accent_soft") if active else self._ui("text_muted")),
+                    activebackground=(
+                        _mix_color(self._ui("accent_strong"), "#FFFFFF", 0.08)
+                        if active
+                        else self._ui("panel_surface_alt")
+                    ),
+                    activeforeground=(
+                        self._ui("accent_soft") if active else self._ui("text_primary")
+                    ),
+                )
+            except Exception:
+                pass
 
     def open_recent_history(self):
         """Open history panel without toggle side-effects."""
@@ -1431,7 +1666,7 @@ class BottomScreenIndicator:
             self.history_review_pinned = False
         if self.history_correction_btn:
             self.history_correction_btn.configure(
-                text=("Corrections: On" if self.history_correction_mode else "Corrections: Off")
+                text=("Review On" if self.history_correction_mode else "Review")
             )
         self._render_history_panel()
 
@@ -1480,6 +1715,8 @@ class BottomScreenIndicator:
                 "audio_duration": round(float(item.get("audio_duration", 0.0)), 3),
                 "processing_time": round(float(item.get("processing_time", 0.0)), 3),
                 "full_text": str(item.get("full_text", "")),
+                "retry_used": bool(item.get("retry_used", False)),
+                "source_kind": str(item.get("source_kind", "live")),
             },
             ensure_ascii=True,
             sort_keys=True,
@@ -1506,6 +1743,120 @@ class BottomScreenIndicator:
             return flat
         tail_len = max(12, max_len - 3)
         return "..." + flat[-tail_len:]
+
+    @staticmethod
+    def _normalize_history_seed_rows(
+        history_lines: list[str],
+        correction_lines: list[str],
+        *,
+        session_started_at: float,
+    ) -> list[Dict[str, Any]]:
+        records: list[tuple[str, str]] = [("live", raw) for raw in history_lines]
+        records.extend(("correction", raw) for raw in correction_lines)
+        if not records:
+            return []
+
+        window = list(records[-220:])
+        fallback_base_epoch = float(session_started_at) - max(1.0, len(window) * 0.01 + 1.0)
+        normalized: list[Dict[str, Any]] = []
+        for idx, (source_kind, raw) in enumerate(window):
+            line = str(raw or "").strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+
+            full_text = str(
+                payload.get("full_text")
+                or payload.get("corrected_text")
+                or payload.get("original_text")
+                or ""
+            ).strip()
+            if not full_text:
+                continue
+
+            preview = str(payload.get("preview", "")).strip()
+            try:
+                event_epoch = float(payload.get("event_epoch", 0.0) or 0.0)
+            except Exception:
+                event_epoch = 0.0
+            if event_epoch <= 0.0:
+                event_epoch = BottomScreenIndicator._infer_event_epoch(
+                    payload.get("local_ts") or payload.get("ts")
+                )
+            if event_epoch <= 0.0:
+                event_epoch = fallback_base_epoch + (idx * 0.01)
+
+            ts_value = payload.get("local_ts") or payload.get("ts") or datetime.now().strftime("%H:%M:%S")
+            normalized.append(
+                {
+                    "ts": str(ts_value),
+                    "event_epoch": event_epoch,
+                    "updated_epoch": event_epoch,
+                    "audio_duration": float(payload.get("audio_duration", 0.0) or 0.0),
+                    "processing_time": float(payload.get("processing_time", 0.0) or 0.0),
+                    "rtf": float(payload.get("rtf", 0.0) or 0.0),
+                    "preview": preview if preview else BottomScreenIndicator._history_preview_text(full_text),
+                    "full_text": full_text,
+                    "retry_used": bool(payload.get("retry_used", False)),
+                    "source_kind": source_kind,
+                }
+            )
+
+        normalized.sort(key=lambda item: (float(item.get("event_epoch", 0.0) or 0.0), str(item.get("ts", ""))))
+        return normalized
+
+    @staticmethod
+    def _filter_history_rows(rows: list[Dict[str, Any]], filter_key: str) -> list[Dict[str, Any]]:
+        selected = str(filter_key or "all").strip().lower()
+        if selected == "live":
+            return [row for row in rows if str(row.get("source_kind", "live")) == "live"]
+        if selected == "corrections":
+            return [row for row in rows if str(row.get("source_kind", "")) == "correction"]
+        if selected == "retries":
+            return [row for row in rows if bool(row.get("retry_used", False))]
+        return list(rows)
+
+    @staticmethod
+    def _describe_history_rows(rows: list[Dict[str, Any]], filter_key: str) -> str:
+        selected = str(filter_key or "all").strip().lower()
+        total = len(rows)
+        live_count = sum(1 for row in rows if str(row.get("source_kind", "live")) == "live")
+        correction_count = sum(1 for row in rows if str(row.get("source_kind", "")) == "correction")
+        retry_count = sum(1 for row in rows if bool(row.get("retry_used", False)))
+
+        if total <= 0:
+            if selected == "corrections":
+                return "No saved corrections yet."
+            if selected == "retries":
+                return "No retry-backed captures yet."
+            if selected == "live":
+                return "No live captures yet."
+            return "No recent items yet."
+
+        if selected == "live":
+            return f"Showing {live_count} live capture{'s' if live_count != 1 else ''}."
+        if selected == "corrections":
+            return f"Showing {correction_count} saved correction{'s' if correction_count != 1 else ''}."
+        if selected == "retries":
+            return f"Showing {retry_count} retry-backed capture{'s' if retry_count != 1 else ''}."
+
+        return (
+            f"{total} item{'s' if total != 1 else ''}: "
+            f"{live_count} live, {correction_count} correction{'s' if correction_count != 1 else ''}, "
+            f"{retry_count} retr{'ies' if retry_count != 1 else 'y'}."
+        )
+
+    def _history_source_badge(self, item: Dict[str, Any]) -> tuple[str, str, str]:
+        if str(item.get("source_kind", "live")) == "correction":
+            return "Correction", self._ui("badge_correction_bg"), self._ui("badge_correction_fg")
+        if bool(item.get("retry_used", False)):
+            return "Retry", self._ui("badge_retry_bg"), self._ui("badge_retry_fg")
+        return "Live", self._ui("badge_live_bg"), self._ui("badge_live_fg")
 
     @staticmethod
     def _infer_event_epoch(ts_value: Any) -> float:
@@ -1599,6 +1950,8 @@ class BottomScreenIndicator:
                 "rtf": float(item.get("rtf", 0.0)),
                 "preview": str(item.get("preview", "")),
                 "full_text": str(item.get("full_text", "")),
+                "retry_used": bool(item.get("retry_used", False)),
+                "source_kind": str(item.get("source_kind", "live")),
             }
             append_jsonl_bounded(
                 self.history_store_path,
@@ -1611,8 +1964,7 @@ class BottomScreenIndicator:
             logger.debug(f"Failed to append history store: {e}")
 
     def _sync_history_from_store(self) -> None:
-        lines: list[str] = []
-        lines.extend(
+        history_lines = list(
             read_text_tail_lines(
                 self.history_store_path,
                 max_lines=220,
@@ -1620,73 +1972,37 @@ class BottomScreenIndicator:
                 max_line_chars=8192,
             )
         )
-
-        # Fallback: seed history view from saved correction records.
-        if not lines:
-            lines.extend(
-                read_text_tail_lines(
-                    self.history_correction_feedback_path,
-                    max_lines=220,
-                    max_bytes=1048576,
-                    max_line_chars=8192,
-                )
+        correction_lines = list(
+            read_text_tail_lines(
+                self.history_correction_feedback_path,
+                max_lines=220,
+                max_bytes=1048576,
+                max_line_chars=8192,
             )
-
-        if not lines:
+        )
+        seeded_rows = self._normalize_history_seed_rows(
+            history_lines,
+            correction_lines,
+            session_started_at=float(self.history_session_started_at),
+        )
+        if not seeded_rows:
             return
 
-        # Keep read lightweight while still recovering context across process restarts.
-        window = list(lines[-160:])
-        fallback_base_epoch = float(self.history_session_started_at) - max(1.0, len(window) * 0.01 + 1.0)
-        for idx, raw in enumerate(window):
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except Exception:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            full_text = str(
-                payload.get("full_text")
-                or payload.get("corrected_text")
-                or payload.get("original_text")
-                or ""
-            ).strip()
-            if not full_text:
-                continue
-            preview = str(payload.get("preview", "")).strip()
-            try:
-                event_epoch = float(payload.get("event_epoch", 0.0) or 0.0)
-            except Exception:
-                event_epoch = 0.0
-            if event_epoch <= 0.0:
-                event_epoch = self._infer_event_epoch(payload.get("ts"))
-            if event_epoch <= 0.0:
-                # Legacy records without stable timestamps should preserve append order
-                # and remain older than current-session events.
-                event_epoch = fallback_base_epoch + (idx * 0.01)
-            item_like = {
-                "ts": str(payload.get("ts", datetime.now().strftime("%H:%M:%S"))),
-                "event_epoch": event_epoch,
-                "updated_epoch": event_epoch,
-                "audio_duration": float(payload.get("audio_duration", 0.0)),
-                "processing_time": float(payload.get("processing_time", 0.0)),
-                "rtf": float(payload.get("rtf", 0.0)),
-                "preview": preview if preview else self._history_preview_text(full_text),
-                "full_text": full_text,
-            }
+        for item_like in seeded_rows:
             fingerprint = self._history_item_fingerprint(item_like)
             if fingerprint in self.history_seen_fingerprints:
                 continue
             self._remember_history_fingerprint(fingerprint)
 
             merge_target = self._get_active_correction_target()
-            if merge_target and float(item_like.get("event_epoch", 0.0) or 0.0) >= float(self.history_session_started_at):
+            if (
+                merge_target
+                and str(item_like.get("source_kind", "live")) == "live"
+                and float(item_like.get("event_epoch", 0.0) or 0.0) >= float(self.history_session_started_at)
+            ):
                 self._merge_history_item(
                     merge_target,
-                    full_text,
+                    str(item_like.get("full_text", "")),
                     float(item_like.get("audio_duration", 0.0)),
                     float(item_like.get("processing_time", 0.0)),
                     event_ts=str(item_like.get("ts", "")),
@@ -1727,6 +2043,7 @@ class BottomScreenIndicator:
         }
         if self._append_correction_feedback(payload):
             self.history_last_saved_corrections[item_id] = (original_text, corrected_text)
+            _emit_correction_feedback_learning(original_text, corrected_text, payload)
             self._show_history_feedback("Saved correction feedback.")
         else:
             self._show_history_feedback("Save failed.")
@@ -1790,18 +2107,20 @@ class BottomScreenIndicator:
 
         if self.history_correction_btn:
             self.history_correction_btn.configure(
-                text=("Corrections: On" if self.history_correction_mode else "Corrections: Off")
+                text=("Review On" if self.history_correction_mode else "Review")
             )
 
         for child in self.history_items_frame.winfo_children():
             child.destroy()
 
         if not self.recent_transcriptions:
+            if self.history_summary_var:
+                self.history_summary_var.set(self._describe_history_rows([], self.history_active_filter))
             empty = tk.Label(
                 self.history_items_frame,
                 text="No transcriptions yet in this session.",
-                bg="#0F172A",
-                fg="#9CA3AF",
+                bg=self._ui("panel_surface"),
+                fg=self._ui("text_muted"),
                 font=("Segoe UI", 9),
                 anchor="w",
                 justify=tk.LEFT,
@@ -1819,6 +2138,24 @@ class BottomScreenIndicator:
             ),
             reverse=True,
         )
+        if self.history_summary_var:
+            self.history_summary_var.set(self._describe_history_rows(rows, self.history_active_filter))
+
+        rows = self._filter_history_rows(rows, self.history_active_filter)
+        if not rows:
+            empty = tk.Label(
+                self.history_items_frame,
+                text="No items match this filter yet.",
+                bg=self._ui("panel_surface"),
+                fg=self._ui("text_muted"),
+                font=("Segoe UI", 9),
+                anchor="w",
+                justify=tk.LEFT,
+                padx=10,
+                pady=8,
+            )
+            empty.pack(fill=tk.X)
+            return
         if not self.history_expanded:
             rows = rows[:8]
         if self.history_correction_mode:
@@ -1840,14 +2177,14 @@ class BottomScreenIndicator:
 
             card = tk.Frame(
                 self.history_items_frame,
-                bg="#111827",
+                bg=self._ui("panel_surface_alt"),
                 highlightthickness=1,
-                highlightbackground="#1E293B",
+                highlightbackground=self._ui("panel_border"),
             )
-            card.pack(fill=tk.X, padx=0, pady=4)
+            card.pack(fill=tk.X, padx=0, pady=3)
 
-            header = tk.Frame(card, bg="#111827")
-            header.pack(fill=tk.X, padx=8, pady=(6, 2))
+            header = tk.Frame(card, bg=self._ui("panel_surface_alt"))
+            header.pack(fill=tk.X, padx=8, pady=(5, 2))
 
             meta = tk.Label(
                 header,
@@ -1857,8 +2194,8 @@ class BottomScreenIndicator:
                     proc=item["processing_time"],
                     rtf=item["rtf"],
                 ),
-                bg="#111827",
-                fg="#93C5FD",
+                bg=self._ui("panel_surface_alt"),
+                fg=self._ui("text_muted"),
                 font=("Consolas", 8, "bold"),
                 anchor="w",
                 justify=tk.LEFT,
@@ -1866,19 +2203,43 @@ class BottomScreenIndicator:
             )
             meta.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+            badge_text, badge_bg, badge_fg = self._history_source_badge(item)
+            source_badge = tk.Label(
+                header,
+                text=badge_text,
+                bg=badge_bg,
+                fg=badge_fg,
+                font=("Segoe UI", 7, "bold"),
+                padx=6,
+                pady=1,
+            )
+            source_badge.pack(side=tk.LEFT, padx=(0, 6))
+
             if self.history_correction_mode:
                 edit_btn = tk.Button(
                     header,
                     text=("Editing" if is_correction_target else "Correct"),
                     command=lambda i=item_id: self._select_history_correction_item(i),
-                    bg=("#1D4ED8" if is_correction_target else "#111827"),
-                    fg=("#DBEAFE" if is_correction_target else "#60A5FA"),
-                    activebackground=("#2563EB" if is_correction_target else "#111827"),
-                    activeforeground="#DBEAFE",
+                    bg=(
+                        self._ui("accent_strong")
+                        if is_correction_target
+                        else self._ui("panel_surface_alt")
+                    ),
+                    fg=(
+                        self._ui("accent_soft")
+                        if is_correction_target
+                        else self._ui("text_secondary")
+                    ),
+                    activebackground=(
+                        _mix_color(self._ui("accent_strong"), "#FFFFFF", 0.08)
+                        if is_correction_target
+                        else self._ui("panel_surface")
+                    ),
+                    activeforeground=self._ui("text_primary"),
                     relief=tk.FLAT,
                     bd=0,
                     highlightthickness=0,
-                    padx=8,
+                    padx=7,
                     pady=1,
                     font=("Segoe UI", 8, "bold"),
                     cursor="hand2",
@@ -1889,14 +2250,14 @@ class BottomScreenIndicator:
                 header,
                 text="Copy",
                 command=lambda txt=full_text: self._copy_history_item(txt),
-                bg="#1E3A8A",
-                fg="#DBEAFE",
-                activebackground="#1D4ED8",
-                activeforeground="#FFFFFF",
+                bg=self._ui("panel_surface"),
+                fg=self._ui("text_secondary"),
+                activebackground=self._ui("panel_surface_alt"),
+                activeforeground=self._ui("text_primary"),
                 relief=tk.FLAT,
                 bd=0,
                 highlightthickness=0,
-                padx=8,
+                padx=7,
                 pady=1,
                 font=("Segoe UI", 8, "bold"),
                 cursor="hand2",
@@ -1904,19 +2265,19 @@ class BottomScreenIndicator:
             copy_btn.pack(side=tk.RIGHT)
 
             if is_correction_target:
-                compare = tk.Frame(card, bg="#111827")
+                compare = tk.Frame(card, bg=self._ui("panel_surface_alt"))
                 compare.pack(fill=tk.X, padx=8, pady=(0, 8))
 
-                left_col = tk.Frame(compare, bg="#111827")
+                left_col = tk.Frame(compare, bg=self._ui("panel_surface_alt"))
                 left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
-                right_col = tk.Frame(compare, bg="#111827")
+                right_col = tk.Frame(compare, bg=self._ui("panel_surface_alt"))
                 right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
 
                 left_label = tk.Label(
                     left_col,
                     text="Original",
-                    bg="#111827",
-                    fg="#9CA3AF",
+                    bg=self._ui("panel_surface_alt"),
+                    fg=self._ui("text_muted"),
                     font=("Segoe UI", 8, "bold"),
                     anchor="w",
                 )
@@ -1925,12 +2286,12 @@ class BottomScreenIndicator:
                 original_msg = tk.Label(
                     left_col,
                     text=full_text,
-                    bg="#0F172A",
-                    fg="#D1D5DB",
+                    bg=self._ui("panel_surface"),
+                    fg=self._ui("text_secondary"),
                     font=("Segoe UI", 9),
                     anchor="nw",
                     justify=tk.LEFT,
-                    wraplength=250,
+                    wraplength=232,
                     padx=8,
                     pady=6,
                 )
@@ -1939,8 +2300,8 @@ class BottomScreenIndicator:
                 right_label = tk.Label(
                     right_col,
                     text="Corrected",
-                    bg="#111827",
-                    fg="#9CA3AF",
+                    bg=self._ui("panel_surface_alt"),
+                    fg=self._ui("text_muted"),
                     font=("Segoe UI", 8, "bold"),
                     anchor="w",
                 )
@@ -1952,13 +2313,13 @@ class BottomScreenIndicator:
                     right_col,
                     height=editor_height,
                     wrap=tk.WORD,
-                    bg="#0F172A",
-                    fg="#E5E7EB",
-                    insertbackground="#E5E7EB",
+                    bg=self._ui("panel_surface"),
+                    fg=self._ui("text_primary"),
+                    insertbackground=self._ui("text_primary"),
                     relief=tk.FLAT,
                     bd=1,
                     highlightthickness=1,
-                    highlightbackground="#334155",
+                    highlightbackground=self._ui("panel_border_soft"),
                     font=("Segoe UI", 9),
                     padx=6,
                     pady=6,
@@ -1970,17 +2331,17 @@ class BottomScreenIndicator:
                 )
                 editor.pack(fill=tk.BOTH, expand=True)
 
-                correction_actions = tk.Frame(right_col, bg="#111827")
+                correction_actions = tk.Frame(right_col, bg=self._ui("panel_surface_alt"))
                 correction_actions.pack(fill=tk.X, pady=(4, 0))
 
                 save_btn = tk.Button(
                     correction_actions,
                     text="Save Feedback",
                     command=lambda itm=item, w=editor: self._save_history_correction(itm, w),
-                    bg="#065F46",
-                    fg="#D1FAE5",
-                    activebackground="#047857",
-                    activeforeground="#ECFDF5",
+                    bg=self._ui("success_bg"),
+                    fg=self._ui("success_fg"),
+                    activebackground=_mix_color(self._ui("success_bg"), "#FFFFFF", 0.08),
+                    activeforeground=self._ui("text_primary"),
                     relief=tk.FLAT,
                     bd=0,
                     highlightthickness=0,
@@ -1995,10 +2356,10 @@ class BottomScreenIndicator:
                     correction_actions,
                     text="Copy Corrected",
                     command=lambda w=editor: self._copy_history_text_widget(w),
-                    bg="#1E3A8A",
-                    fg="#DBEAFE",
-                    activebackground="#1D4ED8",
-                    activeforeground="#FFFFFF",
+                    bg=self._ui("panel_surface"),
+                    fg=self._ui("text_secondary"),
+                    activebackground=self._ui("panel_surface_alt"),
+                    activeforeground=self._ui("text_primary"),
                     relief=tk.FLAT,
                     bd=0,
                     highlightthickness=0,
@@ -2012,28 +2373,28 @@ class BottomScreenIndicator:
                 message = tk.Label(
                     card,
                     text=display_text,
-                    bg="#111827",
-                    fg="#D1D5DB",
+                    bg=self._ui("panel_surface_alt"),
+                    fg=self._ui("text_secondary"),
                     font=("Segoe UI", 9),
                     anchor="w",
                     justify=tk.LEFT,
-                    wraplength=520,
+                    wraplength=470,
                     padx=8,
                     pady=0,
                 )
                 message.pack(fill=tk.X, pady=(0, 6))
 
             if can_expand and not is_correction_target:
-                actions = tk.Frame(card, bg="#111827")
+                actions = tk.Frame(card, bg=self._ui("panel_surface_alt"))
                 actions.pack(fill=tk.X, padx=8, pady=(0, 6))
                 expand_btn = tk.Button(
                     actions,
                     text=("Less" if show_full else "More"),
                     command=lambda i=item_id: self._toggle_history_item_details(i),
-                    bg="#111827",
-                    fg="#60A5FA",
-                    activebackground="#111827",
-                    activeforeground="#93C5FD",
+                    bg=self._ui("panel_surface_alt"),
+                    fg=self._ui("accent"),
+                    activebackground=self._ui("panel_surface_alt"),
+                    activeforeground=self._ui("accent_soft"),
                     relief=tk.FLAT,
                     bd=0,
                     highlightthickness=0,
@@ -2185,6 +2546,7 @@ class BottomScreenIndicator:
             ),
             "compaction_reduction_pct": float(event_meta.get("compaction_reduction_pct", 0.0) or 0.0),
             "retry_used": bool(event_meta.get("retry_used", False)),
+            "source_kind": "live",
             "transcription_path": str(event_meta.get("transcription_path", "")),
             "idle_resume_active": bool(event_meta.get("idle_resume_active", False)),
         }
@@ -2218,17 +2580,16 @@ class BottomScreenIndicator:
             self.dock_var.set("")
             return
         status_value = (status or self.current_status).value
-        status_label = "ready" if status_value == "idle" else status_value
-        tail = "use buttons"
+        status_label = "Ready" if status_value == "idle" else status_value.title()
+        tail = "History"
         if last_item:
-            tail = "last: {dur:.1f}s->{proc:.2f}s ({rtf:.2f}x)".format(
+            tail = "Last {dur:.1f}s -> {proc:.2f}s".format(
                 dur=last_item["audio_duration"],
                 proc=last_item["processing_time"],
-                rtf=last_item["rtf"],
             )
         elif status_value in ("listening", "processing", "transcribing", "complete"):
-            tail = "live"
-        self.dock_var.set(f"vf {status_label}  |  {tail}")
+            tail = "Live"
+        self.dock_var.set(f"{status_label} | {tail}")
     
     @with_error_recovery(fallback_value=None)
     def show_status(self, status: TranscriptionStatus, message: str = None, duration: float = None):

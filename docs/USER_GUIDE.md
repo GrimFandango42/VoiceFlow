@@ -134,12 +134,22 @@ VoiceFlow keeps personalization enabled:
 - Correction review workflow
 - Daily learning from correction data
 - Local engineering terms dictionary support
+- Local adaptive replacement patterns for recurring accent and work-domain misses
 
 Fastest way to improve accent-specific output:
 
 1. Open `Correction Review` from tray.
 2. Correct recurring misses.
 3. Let daily learning process those corrections.
+4. Check the latest report in `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\` for the active rules/tokens VoiceFlow is promoting.
+
+Learning trust model:
+
+- Explicit correction feedback is higher-trust than auto-analysis and promotes faster.
+- Saved correction-review feedback also feeds the live runtime learner, so the next dictation in the same session can benefit sooner.
+- Routine runtime observations still learn, but they need more repetition before they auto-apply.
+- Raw transcript snippet storage is off by default; enable it only if you want local debugging breadcrumbs.
+- Daily reports now include both top replacement rules and common recent domain tokens so you can see whether the system is adapting to your work vocabulary.
 
 Long-idle reliability defaults:
 

@@ -327,6 +327,7 @@ try:
         get_indicator as visual_get_indicator,
         set_dock_enabled as visual_set_dock_enabled,
         set_animation_preferences as visual_set_animation_preferences,
+        set_correction_feedback_handler as visual_set_correction_feedback_handler,
     )
     VISUAL_INDICATORS_AVAILABLE = True
 except ImportError:
@@ -345,6 +346,7 @@ except ImportError:
     def visual_get_indicator(): return None
     def visual_set_dock_enabled(enabled): pass
     def visual_set_animation_preferences(quality="auto", reduced_motion=False, target_fps=28): pass
+    def visual_set_correction_feedback_handler(handler): pass
 
 
 class EnhancedTranscriptionManager:
@@ -1706,6 +1708,22 @@ class EnhancedApp:
 
         self.postprocess_executor.submit(_task)
 
+    def handle_manual_correction_feedback(
+        self,
+        original_text: str,
+        corrected_text: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self.adaptive_learning:
+            return
+        raw = str(original_text or "").strip()
+        corrected = str(corrected_text or "").strip()
+        if not raw or not corrected or raw == corrected:
+            return
+        meta = dict(metadata or {})
+        meta["source"] = "manual_correction"
+        self._observe_adaptive_async(raw, corrected, meta)
+
     def start_recording(self):
         """Enhanced recording start with better error handling"""
         try:
@@ -2522,6 +2540,7 @@ class EnhancedApp:
                     raw_transcript if 'raw_transcript' in locals() else text,
                     text,
                     {
+                        "source": "runtime_transcription",
                         "model_tier": getattr(self.cfg, "model_tier", ""),
                         "code_mode": bool(self.code_mode),
                         "course_corrected": course_corrected,
@@ -2758,6 +2777,11 @@ def main(argv=None):
     injector_backend = create_injector_backend(cfg, platform_name=current_platform)
     app = EnhancedApp(cfg, injector_backend=injector_backend)
     app_ref["instance"] = app
+    if VISUAL_INDICATORS_AVAILABLE:
+        try:
+            visual_set_correction_feedback_handler(app.handle_manual_correction_feedback)
+        except Exception:
+            runtime_log.exception("visual_correction_feedback_handler_register_failed")
 
     # Enhanced tray support with visual indicators
     tray = None
@@ -2862,6 +2886,10 @@ def main(argv=None):
             app.shutdown()
         except Exception:
             pass
+        try:
+            visual_set_correction_feedback_handler(None)
+        except Exception:
+            pass
         return 0
     
     try:
@@ -2926,6 +2954,10 @@ def main(argv=None):
             stop_idle_monitoring()
             listener.stop()
             app.shutdown()
+        except Exception:
+            pass
+        try:
+            visual_set_correction_feedback_handler(None)
         except Exception:
             pass
 

@@ -121,8 +121,33 @@ These modules are the highest-value seams for macOS/Linux forks:
 - `src/voiceflow/ai/course_corrector.py`
 - `src/voiceflow/ai/command_mode.py`
 - `src/voiceflow/ai/adaptive_memory.py`
+- `src/voiceflow/ai/daily_learning.py`
 
 These are intentionally optional and can be disabled for speed-first operation.
+
+## Continual Learning Architecture
+
+VoiceFlow currently has two learning loops:
+
+1. Runtime loop
+   - `ui/cli_enhanced.py` sends finalized transcript deltas into `ai/adaptive_memory.py`.
+   - This produces bounded local replacement rules plus recent token frequency data.
+2. Batch loop
+   - `ai/daily_learning.py` replays saved correction-review feedback and recent history.
+   - It promotes higher-trust user corrections faster than low-trust auto-analysis and writes auditable daily reports.
+
+Current behavior:
+
+- Correction review is the strongest input for accent and work-domain adaptation.
+- Saved correction review now feeds the active runtime learner as a same-session signal instead of waiting entirely for the next batch pass.
+- Runtime observations remain active for repeated organic misses.
+- Daily reports expose both top learned replacement rules and recent domain-token signals.
+
+Near-term roadmap:
+
+- Expand from token-level replacement rules into short phrase and project-vocabulary patterns.
+- Add a user-facing rule inspector so learned replacements can be reviewed, pinned, or removed from the tray UI.
+- Add per-destination formatting preferences so terminal/chat/document outputs can learn different style expectations.
 
 ## Runtime Concurrency Model
 

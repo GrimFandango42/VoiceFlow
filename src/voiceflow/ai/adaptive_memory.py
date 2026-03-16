@@ -69,7 +69,8 @@ class AdaptiveLearningManager:
         replacements = self._patterns.get("replacements", {})
 
         for entry in replacements.values():
-            if entry.get("count", 0) < self.min_count:
+            score = float(entry.get("score", entry.get("count", 0)))
+            if score < float(self.min_count):
                 continue
             if not self._is_fresh(entry.get("last_seen", 0), now):
                 continue
@@ -100,6 +101,9 @@ class AdaptiveLearningManager:
             return
 
         now = int(time.time())
+        meta = dict(metadata or {})
+        source_key = self._normalize_source(meta)
+        weight = self._observation_weight(source_key)
         learned_pairs = self._extract_replacements(raw, final)
         replacements = self._patterns.setdefault("replacements", {})
 
@@ -109,11 +113,16 @@ class AdaptiveLearningManager:
                 "from": src,
                 "to": dst,
                 "count": 0,
+                "score": 0.0,
                 "first_seen": now,
                 "last_seen": now,
+                "sources": {},
             })
             current["count"] = int(current.get("count", 0)) + 1
+            current["score"] = round(float(current.get("score", current.get("count", 0))) + weight, 3)
             current["last_seen"] = now
+            sources = current.setdefault("sources", {})
+            sources[source_key] = int(sources.get(source_key, 0)) + 1
             replacements[key] = current
 
         # Keep only the most recently updated rules.
@@ -130,12 +139,38 @@ class AdaptiveLearningManager:
             normalized = token.lower()
             if len(normalized) < 3 or normalized in STOP_WORDS:
                 continue
-            token_counts[normalized] = int(token_counts.get(normalized, 0)) + 1
+            current_token = token_counts.get(normalized, {"token": normalized, "count": 0, "last_seen": now})
+            if isinstance(current_token, dict):
+                count_value = int(current_token.get("count", 0))
+            else:
+                count_value = int(current_token or 0)
+                current_token = {"token": normalized, "count": count_value, "last_seen": now}
+            current_token["token"] = normalized
+            current_token["count"] = count_value + 1
+            current_token["last_seen"] = now
+            token_counts[normalized] = current_token
 
         self._patterns["updated_at"] = now
-        self._append_event(raw, final, learned_pairs, metadata or {}, now)
+        self._append_event(raw, final, learned_pairs, meta, now)
         self._save_patterns()
         self._purge_expired()
+
+    @staticmethod
+    def _normalize_source(metadata: Dict[str, Any]) -> str:
+        source = str(metadata.get("source", "") or "").strip().lower()
+        return source or "runtime_transcription"
+
+    @staticmethod
+    def _observation_weight(source: str) -> float:
+        weighted_sources = {
+            "daily_user_correction": 1.5,
+            "correction_feedback": 1.5,
+            "manual_correction": 1.5,
+            "daily_instruction_pass": 1.0,
+            "runtime_transcription": 1.0,
+            "daily_auto_analysis": 0.5,
+        }
+        return float(weighted_sources.get(str(source or "").strip().lower(), 1.0))
 
     def _extract_replacements(self, raw_text: str, final_text: str) -> List[Tuple[str, str]]:
         raw_tokens = _tokenize(raw_text)
@@ -217,6 +252,29 @@ class AdaptiveLearningManager:
         }
         self._patterns["replacements"] = fresh
 
+        token_counts = self._patterns.get("token_counts", {})
+        fresh_tokens: Dict[str, Dict[str, Any]] = {}
+        fallback_last_seen = int(self._patterns.get("updated_at", 0) or 0)
+        for key, value in token_counts.items():
+            if isinstance(value, dict):
+                token_name = str(value.get("token", key) or key).strip().lower()
+                token_count = int(value.get("count", 0) or 0)
+                last_seen = int(value.get("last_seen", fallback_last_seen) or fallback_last_seen)
+            else:
+                token_name = str(key or "").strip().lower()
+                token_count = int(value or 0)
+                last_seen = fallback_last_seen
+            if not token_name or token_count <= 0:
+                continue
+            if not self._is_fresh(last_seen, cutoff=cutoff):
+                continue
+            fresh_tokens[token_name] = {
+                "token": token_name,
+                "count": token_count,
+                "last_seen": last_seen,
+            }
+        self._patterns["token_counts"] = fresh_tokens
+
         if not self.audit_path.exists():
             return
 
@@ -254,3 +312,48 @@ class AdaptiveLearningManager:
         if source_word[:1].isupper():
             return replacement[:1].upper() + replacement[1:]
         return replacement.lower()
+
+    def snapshot(self, *, max_rules: int = 12, max_tokens: int = 20) -> Dict[str, Any]:
+        replacements = []
+        for entry in self._patterns.get("replacements", {}).values():
+            count = int(entry.get("count", 0) or 0)
+            score = float(entry.get("score", count))
+            sources = entry.get("sources", {})
+            replacements.append(
+                {
+                    "from": str(entry.get("from", "")),
+                    "to": str(entry.get("to", "")),
+                    "count": count,
+                    "score": score,
+                    "last_seen": int(entry.get("last_seen", 0) or 0),
+                    "sources": {
+                        str(k): int(v)
+                        for k, v in dict(sources).items()
+                        if str(k).strip()
+                    },
+                }
+            )
+        replacements.sort(
+            key=lambda item: (float(item.get("score", 0.0)), int(item.get("count", 0)), int(item.get("last_seen", 0))),
+            reverse=True,
+        )
+
+        tokens = []
+        for key, value in self._patterns.get("token_counts", {}).items():
+            if isinstance(value, dict):
+                token_name = str(value.get("token", key) or key).strip().lower()
+                token_count = int(value.get("count", 0) or 0)
+            else:
+                token_name = str(key or "").strip().lower()
+                token_count = int(value or 0)
+            if not token_name or token_count <= 0:
+                continue
+            tokens.append({"token": token_name, "count": token_count})
+        tokens.sort(key=lambda item: (int(item.get("count", 0)), str(item.get("token", ""))), reverse=True)
+
+        return {
+            "activation_threshold": float(self.min_count),
+            "retention_hours": int(self.retention_hours),
+            "top_replacements": replacements[: max(1, int(max_rules))],
+            "top_tokens": tokens[: max(1, int(max_tokens))],
+        }

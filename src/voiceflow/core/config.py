@@ -197,8 +197,6 @@ class Config:
     skip_buffer_integrity_checks: bool = False  # Enable buffer validation (recommended)
     minimal_segment_processing: bool = True  # Skip non-essential segment processing
     disable_fallback_detection: bool = True  # Skip fallback phrase detection for speed
-    use_enhanced_post_processing: bool = True  # Enable enhanced text formatting (capitalization, punctuation)
-
     # Visual Indicators Configuration
     visual_indicators_enabled: bool = True  # Enable visual feedback when recording
     enable_visual_demo: bool = True  # Enable visual demo feature
@@ -236,7 +234,7 @@ class Config:
 
     # Adaptive Learning (privacy-first, local-only, temporary)
     adaptive_learning_enabled: bool = True  # Learn recurring speech patterns locally
-    adaptive_store_raw_text: bool = True  # Keep short local snippets for debugging
+    adaptive_store_raw_text: bool = False  # Keep short local snippets only when explicitly enabled
     adaptive_retention_hours: int = 72  # Auto-purge learning and audit records
     adaptive_min_count: int = 3  # Repetition count required before auto-apply
     adaptive_max_rules: int = 200  # Cap learned replacements to bound memory
