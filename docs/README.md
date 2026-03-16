@@ -9,6 +9,7 @@ This is the maintained documentation set for the current runtime.
 - FAQ / quick troubleshooting: [`guides/FAQ.md`](guides/FAQ.md)
 - Launch guide: [`HOW_TO_LAUNCH.md`](HOW_TO_LAUNCH.md)
 - Build and packaging: [`BUILD_GUIDE.md`](BUILD_GUIDE.md)
+- Security and privacy: [`guides/SECURITY_AND_PRIVACY.md`](guides/SECURITY_AND_PRIVACY.md)
 
 ## Technical
 

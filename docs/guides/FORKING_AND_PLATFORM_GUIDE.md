@@ -42,6 +42,18 @@ Keep these areas stable while porting:
 - WSL is useful for development tooling, tests, and model/runtime experimentation.
 - For full desktop hotkey/injection/tray behavior, run a native desktop path (Windows/macOS/Linux host), not pure headless WSL.
 
+### Native platform realities
+
+- Linux:
+  - X11 and Wayland behave differently. Do not assume one injection or hotkey path will cover both.
+  - Plan for a clipboard-first fallback if native direct injection is restricted by compositor or desktop environment policy.
+- macOS:
+  - Expect Microphone, Accessibility, and Input Monitoring permission flows to be part of first-run UX.
+  - Treat a signed app bundle, a documented manual permission path, or both as part of the porting story.
+- Both:
+  - Keep setup instructions explicit about permissions, tray lifecycle, and how users relaunch the packaged app.
+  - Preserve the config format where possible so docs, learning files, and migration logic stay shared across forks.
+
 ### Step 1: Bring up core runtime in terminal mode
 
 - Start with `voiceflow.ui.cli_enhanced` and disable tray/injection assumptions as needed.
@@ -70,6 +82,9 @@ Keep these areas stable while porting:
 
 - Create bootstrap/build scripts for your OS.
 - Keep runtime config format stable to reduce fork drift.
+- Recommended release targets:
+  - macOS: app bundle plus notarized DMG or ZIP.
+  - Linux: AppImage, distro packages, or a documented clipboard-first CLI mode if desktop integration is incomplete.
 
 ## Testing Guidance For Forks
 
@@ -95,9 +110,11 @@ Keep these areas stable while porting:
 - Linux:
   - test X11 and Wayland separately
   - verify global hotkeys under your desktop environment
+  - verify clipboard fallback behavior when direct injection is blocked
 - macOS:
   - verify Accessibility/Input Monitoring permission flow
   - verify menu bar app lifecycle and clipboard behavior
+  - verify packaged relaunch after permission grants and system restarts
 
 ## Config Notes For Forks
 

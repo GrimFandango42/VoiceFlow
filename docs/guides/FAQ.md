@@ -39,7 +39,7 @@ Default stable behavior is paste-only on release; auto-Enter is opt-in.
 
 A:
 
-1. Confirm you are on `v3.1.5` or newer.
+1. Confirm you are on a current stable build or a freshly rebuilt local bundle.
 2. Fully exit VoiceFlow, then relaunch.
 3. Confirm only one runtime instance is active.
 4. Check log lines for active device routing:
@@ -69,10 +69,7 @@ Yes. In startup flow, Step 1 is intentionally required before Step 2:
 
 Step 2 controls are locked/dimmed until Step 1 completes.
 
-Visual reference:
-
-![Setup Step 1 required](../../assets/setup-startup-step1-required.png)
-![Setup Step 2 unlocked](../../assets/setup-startup-step2-unlocked.png)
+Public docs intentionally omit live setup screenshots until sanitized captures are available.
 
 ## Q: Transcription is fast but quality/formatting looks rough.
 

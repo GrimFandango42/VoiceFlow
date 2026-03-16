@@ -30,10 +30,12 @@ pytest -q tests\runtime
 - Preserve local-first behavior by default.
 - Prefer focused changes over broad refactors.
 - Update docs in the same PR when behavior changes.
+- Keep screenshots and demo assets sanitized. Do not commit images that expose a real desktop, personal workspace details, or unrelated applications.
 
 ## PR Checklist
 
 - [ ] Change is scoped and explained.
 - [ ] Runtime tests pass locally.
 - [ ] Docs updated (if needed).
+- [ ] Screenshots/assets are cropped, staged, or redacted if any UI imagery is included.
 - [ ] Risks/regressions called out.

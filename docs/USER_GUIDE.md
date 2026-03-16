@@ -85,6 +85,7 @@ Speed-first defaults now separate lightweight cleanup from aggressive rewrites:
   - Useful if you observed over-correction in normal dictation.
 - `destination_aware_formatting=true`
   - Keeps line wrapping/paragraph shaping suited to target app.
+  - Terminal and PowerShell targets stay mostly prose-first, with stronger breaks reserved for clear section changes and spoken lists.
 
 If quality drops mid-session:
 
@@ -112,25 +113,18 @@ Visual indicator animation is now configurable with performance-aware defaults:
 
 You can tune these fields in config if your system needs smoother visuals or lower motion.
 
-## Visual Setup Documentation
+## Documentation Screenshot Hygiene
 
-For visually guided onboarding docs/FAQ updates, capture these setup states:
+Public docs should stay focused on VoiceFlow itself, not whatever happened to be open on the author's desktop.
 
-1. Startup wizard before hardware check (Step 1 emphasized, Step 2 locked).
-2. Startup wizard during hardware check.
-3. Startup wizard after hardware check (Step 2 unlocked, profile selected).
+Use this standard when adding screenshots:
 
-Recommended asset naming:
+1. Crop tightly to the VoiceFlow surface or use a neutral sample background.
+2. Do not expose real project tabs, taskbar items, account names, usernames, or other workspace context.
+3. If surrounding UI must stay visible for clarity, blur or fully redact non-VoiceFlow content.
+4. Prefer sample apps such as a blank terminal or Notepad over a real working desktop.
 
-- `assets/setup-startup-step1-required.png`
-- `assets/setup-startup-check-running.png`
-- `assets/setup-startup-step2-unlocked.png`
-
-Current reference screenshots:
-
-![Startup setup - Step 1 required](../assets/setup-startup-step1-required.png)
-![Startup setup - Hardware check running](../assets/setup-startup-check-running.png)
-![Startup setup - Step 2 unlocked](../assets/setup-startup-step2-unlocked.png)
+The current open-source docs intentionally avoid embedding live setup screenshots until sanitized replacements are available.
 
 ## Accent and Personalization
 

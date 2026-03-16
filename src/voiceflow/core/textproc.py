@@ -443,6 +443,7 @@ def format_transcript_text(text: str) -> str:
     text = _improve_punctuation(text)
     text = _fix_sentence_breaks(text)
     text = _normalize_numbered_list_layout(text)
+    text = _format_spoken_inline_lists(text)
     text = _fix_sentence_capitalization(text)
 
     return text
@@ -497,14 +498,22 @@ def format_transcript_for_destination(
         return formatted
 
     profile = infer_destination_profile(destination)
-    # Keep formatting readable but reduce over-fragmentation for medium dictation.
-    long_form = len(formatted) >= 180 or float(audio_duration) >= 6.5
-    if long_form and profile != "terminal":
-        formatted = _insert_light_paragraph_breaks(formatted)
-        formatted = _rebalance_paragraphs_for_readability(formatted, profile=profile)
-        formatted = _merge_short_paragraphs_for_readability(formatted, profile=profile)
+    # Keep formatting readable without turning ordinary pause points into paragraphs.
+    long_form = len(formatted) >= 220 or float(audio_duration) >= 8.0
+    if long_form:
+        if _has_explicit_paragraph_signals(formatted):
+            formatted = _insert_light_paragraph_breaks(formatted)
+        if profile == "terminal":
+            formatted = _merge_short_paragraphs_for_readability(formatted, profile=profile)
+        else:
+            if _should_rebalance_paragraphs(formatted, profile=profile, audio_duration=audio_duration):
+                formatted = _rebalance_paragraphs_for_readability(formatted, profile=profile)
+            formatted = _merge_short_paragraphs_for_readability(formatted, profile=profile)
 
     if destination and not bool(destination.get("destination_wrap_enabled", True)):
+        return formatted
+
+    if not _should_hard_wrap_for_destination(profile, destination):
         return formatted
 
     wrap_width = _estimate_wrap_width(destination, profile)
@@ -565,6 +574,24 @@ def _estimate_wrap_width(destination: Optional[Mapping[str, Any]], profile: str)
     return max(52, min(104, estimated_chars - 2))
 
 
+def _should_hard_wrap_for_destination(
+    profile: str,
+    destination: Optional[Mapping[str, Any]],
+) -> bool:
+    """
+    Only emit hard line breaks for destinations that truly benefit from them.
+
+    Normal editors, documents, and chat inputs already soft-wrap text. Hard-wrapping
+    prose there creates fake formatting artifacts that look like paragraph breaks.
+    """
+    if destination and not bool(destination.get("destination_wrap_enabled", True)):
+        return False
+    # Pre-injection hard wrapping creates literal newlines in target apps. Let the
+    # destination surface handle visual wrapping unless a future target explicitly
+    # opts into fixed-width output.
+    return False
+
+
 def _insert_light_paragraph_breaks(text: str) -> str:
     updated = text
     updated = re.sub(
@@ -580,13 +607,31 @@ def _insert_light_paragraph_breaks(text: str) -> str:
         flags=re.IGNORECASE,
     )
     updated = re.sub(
-        r"([.!?])\s+(also|however|that said|in addition|on the other hand|meanwhile|making that|to make that|that way|and now|now let's|let's start)\b",
+        r"([.!?])\s+(that said|on the other hand|meanwhile|and now|now let's|let's start)\b",
         lambda m: f"{m.group(1)}\n\n{m.group(2).capitalize()}",
         updated,
         flags=re.IGNORECASE,
     )
     updated = re.sub(
-        r",\s+(making that|to make that|and now|now let's|let's start)\b",
+        r"([.!?])\s+(in addition|separately|after that|below that)\b",
+        lambda m: f"{m.group(1)}\n\n{m.group(2).capitalize()}",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(
+        r"([.!?])\s+(okay,\s+)?(second|third|fourth|fifth|finally|lastly|otherwise)\b\s*[,:\-]?\s*",
+        lambda m: f"{m.group(1)}\n\n{_normalize_section_transition(m.group(2), m.group(3))} ",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(
+        r"([.!?:])\s*•\s*(second|third|fourth|fifth|finally|lastly)\b\s*[,:\-]?\s*",
+        lambda m: f"{m.group(1)}\n\n{m.group(2).capitalize()}, ",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(
+        r",\s+(and now|now let's|let's start)\b",
         lambda m: f",\n\n{m.group(1).capitalize()}",
         updated,
         flags=re.IGNORECASE,
@@ -613,6 +658,86 @@ def _insert_light_paragraph_breaks(text: str) -> str:
     return "\n\n".join(paragraphs)
 
 
+def _has_explicit_paragraph_signals(text: str) -> bool:
+    lower = str(text or "").lower()
+    if not lower.strip():
+        return False
+
+    explicit_phrases = (
+        "new paragraph",
+        "next point",
+        "another thing",
+        "new topic",
+        "switching topics",
+        "end of topic ",
+        "end of option ",
+        "topic one",
+        "topic two",
+        "topic three",
+        "option one",
+        "option two",
+        "option three",
+        "and now",
+        "now let's",
+        "let's start",
+        "on the other hand",
+        "that said",
+        "meanwhile",
+        "in addition",
+        "separately",
+        "after that",
+        "below that",
+    )
+    if any(phrase in lower for phrase in explicit_phrases):
+        return True
+
+    if re.search(
+        r"(?:^|[.!?]\s+)(?:okay,\s+)?(?:second|third|fourth|fifth|finally|lastly|otherwise)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+
+    if re.search(r"(?:^|\n)\s*(?:[-•]|\d+\.)\s+", text):
+        return True
+
+    return False
+
+
+def _normalize_section_transition(prefix: str | None, marker: str) -> str:
+    lead = f"{(prefix or '').strip()} {marker}".strip()
+    if not lead:
+        return ""
+    lead = lead[:1].upper() + lead[1:]
+    if not lead.endswith(","):
+        lead += ","
+    return lead
+
+
+def _should_rebalance_paragraphs(text: str, *, profile: str, audio_duration: float) -> bool:
+    parts = [part.strip() for part in re.split(r"\n{2,}", text or "") if part.strip()]
+    if not parts:
+        return False
+
+    sentence_count = sum(len([s for s in re.split(r"(?<=[.!?])\s+", part) if s.strip()]) for part in parts)
+    max_part_chars = max((len(part) for part in parts), default=0)
+    total_words = len(re.findall(r"\b[\w']+\b", text or ""))
+    avg_sentence_words = total_words / max(1, sentence_count)
+
+    if profile == "chat":
+        return (
+            sentence_count >= 8
+            and max_part_chars >= 700
+            and avg_sentence_words >= 20.0
+        )
+
+    return (
+        sentence_count >= 10
+        and max_part_chars >= 1200
+        and avg_sentence_words >= 20.0
+    )
+
+
 def _rebalance_paragraphs_for_readability(text: str, profile: str) -> str:
     """Split dense blocks into shorter paragraphs for faster scanning."""
     parts = [part.strip() for part in re.split(r"\n{2,}", text or "") if part.strip()]
@@ -620,17 +745,17 @@ def _rebalance_paragraphs_for_readability(text: str, profile: str) -> str:
         return (text or "").strip()
 
     if profile == "editor":
-        max_sentences = 4
+        max_sentences = 5
     elif profile == "document":
-        max_sentences = 3
+        max_sentences = 4
     elif profile == "chat":
-        max_sentences = 2
-    else:
         max_sentences = 3
+    else:
+        max_sentences = 4
     output: list[str] = []
     for part in parts:
         sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", part) if s.strip()]
-        if len(sentences) <= max_sentences:
+        if len(sentences) <= max_sentences or len(part) < 220:
             output.append(part)
             continue
         chunk: list[str] = []
@@ -662,8 +787,21 @@ def _merge_short_paragraphs_for_readability(text: str, profile: str) -> str:
         "another thing",
         "new topic",
         "switching topics",
-        "making that",
-        "to make that",
+        "that said",
+        "on the other hand",
+        "meanwhile",
+        "in addition",
+        "separately",
+        "after that",
+        "below that",
+        "okay, second",
+        "second",
+        "third",
+        "fourth",
+        "fifth",
+        "finally",
+        "lastly",
+        "otherwise",
     )
 
     merged: list[str] = []
@@ -1224,6 +1362,119 @@ def _normalize_numbered_list_layout(text: str) -> str:
         normalized.append(stripped)
 
     return "\n".join([ln for ln in normalized if ln])
+
+
+def _format_spoken_inline_lists(text: str) -> str:
+    """Convert spoken inline list structure into readable bullets and paragraphs."""
+    if not text.strip():
+        return text
+
+    updated = text
+    updated = re.sub(
+        r"\b(points?|items?|things?|topics?|bullets?)\s*[:;,. -]{2,}",
+        lambda m: f"{m.group(1)}:",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(
+        r"\b(lay it out as|listed out as|goes like|looks like)\s+(?=1\.\s+)",
+        lambda m: f"{m.group(1)}:\n",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = re.sub(
+        r"(\b(?:points?|items?|things?|topics?|bullets?)\b:\s*)(?=1\.\s+)",
+        lambda m: f"{m.group(1).rstrip()}\n",
+        updated,
+        flags=re.IGNORECASE,
+    )
+    updated = _collapse_adjacent_list_markers(updated)
+
+    lower = updated.lower()
+    spoken_list_context = bool(
+        re.search(
+            r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
+            r"(?:points|items|things|topics|bullets)\b",
+            lower,
+        )
+    )
+    spoken_list_context = spoken_list_context or bool(
+        re.search(r"\b(?:lay it out as|listed out as|goes like|looks like)\b", lower)
+    )
+
+    if spoken_list_context:
+        updated = _convert_numbered_list_block_to_bullets(updated)
+        updated = re.sub(r"(?m)^•\s+(?:\d+\.\s+)+", "• ", updated)
+        updated = re.sub(r"(?m)^•\s+•\s+", "• ", updated)
+        updated = re.sub(
+            r"(?m)^(• [^\n]+?)(?:[.:])\s*(Ideally|Below that|After that|Then I'd|Then I|Let's see)\b",
+            r"\1.\n\n\2",
+            updated,
+        )
+
+    updated = re.sub(r":(?=[A-Za-z])", ": ", updated)
+    updated = re.sub(r"\n{3,}", "\n\n", updated)
+    return updated.strip()
+
+
+def _collapse_adjacent_list_markers(text: str) -> str:
+    """Collapse malformed repeated markers like '2. 3. item' down to the last marker."""
+    repeated_marker_re = re.compile(r"(?m)^((?:\d+\.\s+){2,})(?=[A-Za-z])")
+
+    previous = None
+    updated = text
+    while updated != previous:
+        previous = updated
+        updated = repeated_marker_re.sub(
+            lambda m: re.findall(r"\d+\.", m.group(1))[-1] + " ",
+            updated,
+        )
+    return updated
+
+
+def _convert_numbered_list_block_to_bullets(text: str) -> str:
+    """Convert spoken numbered-point lists into bullet lines."""
+    lines = text.splitlines()
+    numbered_indexes = [
+        idx for idx, line in enumerate(lines)
+        if re.match(r"^\s*\d+\.\s+", line)
+    ]
+    if len(numbered_indexes) < 2:
+        return text
+
+    normalized: list[str] = []
+    idx = 0
+    while idx < len(lines):
+        stripped = lines[idx].strip()
+        if not stripped:
+            normalized.append("")
+            idx += 1
+            continue
+
+        marker_only = re.match(r"^\d+\.\s*$", stripped)
+        if marker_only:
+            next_idx = idx + 1
+            while next_idx < len(lines) and not lines[next_idx].strip():
+                next_idx += 1
+            if next_idx < len(lines):
+                next_stripped = re.sub(r"^(?:\d+\.\s+)+", "", lines[next_idx].strip())
+                if next_stripped and not re.match(r"^\d+\.\s*$", next_stripped):
+                    normalized.append(f"• {next_stripped}")
+                    idx = next_idx + 1
+                    continue
+            idx += 1
+            continue
+
+        if re.match(r"^\d+\.\s+", stripped):
+            stripped = re.sub(r"^(?:\d+\.\s+)+", "", stripped)
+            normalized.append(f"• {stripped}")
+            idx += 1
+            continue
+
+        normalized.append(lines[idx])
+        idx += 1
+
+    return "\n".join(normalized)
 
 
 def format_example_transcript(text: str) -> str:

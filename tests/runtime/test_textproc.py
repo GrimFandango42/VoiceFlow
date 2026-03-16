@@ -133,7 +133,7 @@ def test_infer_destination_profile():
     assert infer_destination_profile({"process_name": "WINWORD.EXE"}) == "document"
 
 
-def test_format_transcript_for_destination_chat_wrap():
+def test_format_transcript_for_destination_chat_keeps_plain_prose_soft_wrapped():
     src = (
         "okay this is a long transcript and also we need this to be easier to read in a chat window "
         "because otherwise it turns into one giant wall of text and that is harder to scan quickly."
@@ -147,11 +147,11 @@ def test_format_transcript_for_destination_chat_wrap():
         },
         audio_duration=9.0,
     )
-    assert "\n" in out
+    assert "\n" not in out
     assert "Also" in out or "also" in out
 
 
-def test_format_transcript_for_destination_inserts_paragraph_breaks_for_medium_dictation():
+def test_format_transcript_for_destination_keeps_medium_dictation_as_one_paragraph_when_transition_is_weak():
     src = (
         "this is a medium length dictation sample that should feel easier to read, also it needs clearer "
         "paragraph breaks for scanning because otherwise everything lands in one dense block and is hard to review quickly."
@@ -161,23 +161,55 @@ def test_format_transcript_for_destination_inserts_paragraph_breaks_for_medium_d
         destination={"process_name": "notepad.exe", "window_width": 780},
         audio_duration=5.4,
     )
-    assert "\n\nAlso" in out
+    assert "\n\n" not in out
 
 
-def test_format_transcript_for_destination_rebalances_long_dense_paragraph():
+def test_format_transcript_for_destination_keeps_single_topic_long_dictation_as_one_block():
     src = (
-        "this is sentence one about planning. this is sentence two with implementation details. "
-        "this is sentence three with risk notes. this is sentence four with rollout steps."
+        "I'd still say the formatting of the paragraphs isn't perfect. I'll kind of start talking right now. "
+        "Specifically, this response that I'm giving you as something that has been transcribed through voice flow. "
+        "And you should be able to see where line breaks, paragraph breaks, and things like that exist that feel "
+        "unnecessary compared to kind of the whole text that I'm putting out. So this is in its entirety about a "
+        "30 to 60 second transcription that I'm going through and I have pauses and things in the middle, evaluate "
+        "where you end up putting line breaks here and take a stab at what ideally should have been kind of a start "
+        "to finish nicely formatted output and evaluate what changes you might need to make into the post processing "
+        "engine for the formatting to make sure that the final text. That is formatted looks good overall yeah so "
+        "that's about it."
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={"process_name": "Cursor.exe", "window_width": 920},
+        audio_duration=42.0,
+    )
+    assert "\n" not in out
+
+
+def test_format_transcript_for_destination_rebalances_very_long_dense_paragraph():
+    src = (
+        "this is sentence one about planning and it includes extra context about resourcing, milestones, and the "
+        "tradeoffs we still need to confirm before rollout. this is sentence two with implementation details that "
+        "cover the service boundaries, migration path, and the instrumentation we need for debugging. this is "
+        "sentence three with risk notes that call out fallback behavior, support load, and edge cases around partial "
+        "failures in production. this is sentence four with rollout steps that explain the phased release, operator "
+        "checkpoints, and validation expectations for the first wave. this is sentence five with testing notes that "
+        "cover regression scope, representative audio samples, and the success criteria we expect before signoff. "
+        "this is sentence six with follow-up actions for documentation, cleanup, and ownership after the release "
+        "stabilizes. this is sentence seven with ownership details across engineering, product, and support so the "
+        "work does not drift after launch. this is sentence eight with next week timing and sequencing so the plan "
+        "stays readable even though the dictation itself is long and still dense enough to merit a visual split. "
+        "this is sentence nine with additional implementation detail, exception handling, and cleanup expectations "
+        "so the final paragraph remains intentionally heavy. this is sentence ten with rollout nuance, owner "
+        "handoffs, and follow-through items that keep the overall block long and structurally dense."
     )
     out = format_transcript_for_destination(
         src,
         destination={"process_name": "notepad.exe", "window_width": 920},
-        audio_duration=8.0,
+        audio_duration=24.0,
     )
     assert out.count("\n\n") >= 1
 
 
-def test_format_transcript_for_destination_breaks_before_making_that():
+def test_format_transcript_for_destination_keeps_making_that_in_same_paragraph():
     src = (
         "the workflow is mostly working now and we are saving corrections. making that easier to keep open "
         "during repeated dictation cycles would improve speed."
@@ -187,7 +219,8 @@ def test_format_transcript_for_destination_breaks_before_making_that():
         destination={"process_name": "notepad.exe", "window_width": 900},
         audio_duration=7.5,
     )
-    assert "\n\nMaking that" in out
+    assert "\n\nMaking that" not in out
+    assert "Making that easier" in out
 
 
 def test_format_transcript_for_destination_splits_unpunctuated_topic_transition():
@@ -201,6 +234,106 @@ def test_format_transcript_for_destination_splits_unpunctuated_topic_transition(
         audio_duration=8.0,
     )
     assert "end of topic one.\n\nAnd now" in out
+
+
+def test_format_transcript_for_destination_terminal_still_hard_wraps():
+    src = (
+        "this is a long transcript intended for terminal output where a bounded width can still help "
+        "keep inline prose readable when the destination is a shell style surface."
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={"process_name": "WindowsTerminal.exe", "window_width": 720},
+        audio_duration=9.0,
+    )
+    assert "\n" not in out
+
+
+def test_format_transcript_for_destination_terminal_keeps_explicit_paragraph_breaks():
+    src = (
+        "the first paragraph explains the baseline behavior and why the current output is closer to usable. "
+        "in addition, the next paragraph should stay visually separate even for terminal destinations."
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={"process_name": "WindowsTerminal.exe", "window_width": 1029},
+        audio_duration=16.0,
+    )
+    assert "\n\nIn addition" in out
+
+
+def test_format_transcript_for_destination_converts_spoken_points_to_bullets():
+    src = (
+        "i want to see how bullet points work as well. if i talk through three points where i kind of lay it out as "
+        "1. item one here. 2. item two here. 2. 3. item three here. ideally i'd want those listed out as "
+        "three bullets, then i'd start below that."
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={"process_name": "Code.exe", "window_width": 900},
+        audio_duration=20.0,
+    )
+    assert "• Item one here." in out
+    assert "• Item two here." in out
+    assert "• Item three here." in out
+    assert "2. 3." not in out
+    assert "\n\nIdeally" in out
+
+
+def test_format_transcript_for_destination_repairs_fragmented_spoken_list_lines():
+    src = (
+        "i want you to see how bullet points work as well. so if i talk through three points where i kind of lay it "
+        "out as 1. is talking about something. 2.\n\nis talking about. 2. 3. is talking about a third topic. "
+        "ideally i'd want those listed out as three bullets."
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={"process_name": "WindowsTerminal.exe", "window_width": 1000},
+        audio_duration=28.0,
+    )
+    assert "• Is talking about something." in out
+    assert out.count("• Is talking about.") >= 1
+    assert "• Is talking about a third topic." in out
+    assert "\n2.\n" not in out
+    assert "2. 3." not in out
+
+
+def test_format_transcript_for_destination_keeps_long_feedback_sample_to_few_paragraphs():
+    src = (
+        "okay, things seem to be working. quality is good. speed of transcription is good. i like the visualization "
+        "overall as well now. so the thing to still fix probably is how we're separating line breaks. i feel like "
+        "we're adding too many line breaks specifically when i type into a terminal. again, it doesn't matter for "
+        "the quality of transcript. since i'm primarily talking to an ai agent, but it helps me sometimes to read "
+        "things in a way that would be more digestible, in a way how you'd expect kind of a blob of text to be "
+        "written out when people write to each other. so again, take a stab at what i have typed out here. it has "
+        "entirely been done with the voice flow transcription. i feel like we're going overboard in adding line "
+        "breaks, but i also so don't want to go down completely the other end, which was the issue we had before "
+        "where we had no paragraph breaks, and it was just one giant lump of text. in addition, i want you to see "
+        "how bullet points work as well."
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={"process_name": "Code.exe", "window_width": 668},
+        audio_duration=55.0,
+    )
+    assert out.count("\n\n") <= 1
+    assert "\n\nIn addition" in out
+
+
+def test_format_transcript_for_destination_terminal_splits_feedback_sections_on_spoken_ordinals():
+    src = (
+        "the terminal output is better and the punctuation looks good overall. okay, second, commit all changes to "
+        "git and evaluate the read me for updates. third, look at the mac and linux directions as well. otherwise, "
+        "keep going and make the changes happen."
+    )
+    out = format_transcript_for_destination(
+        src,
+        destination={"process_name": "WindowsTerminal.exe", "window_width": 1000},
+        audio_duration=24.0,
+    )
+    assert "\n\nOkay, second," in out
+    assert "\n\nThird," in out
+    assert "\n\nOtherwise," in out
 
 
 def test_format_transcript_text_splits_long_run_on_clause():

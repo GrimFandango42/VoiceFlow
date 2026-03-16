@@ -40,6 +40,7 @@ VoiceFlow is tray-first by design.
 - Setup wizard includes `Run Hardware Check` to quickly re-detect GPU/CPU defaults.
 - Recent History and Correction Review are available from the tray for fast feedback loops.
 - Current runtime does not include a separate "Command Center" window. The active control surfaces are tray + overlay/dock + history/review panels.
+- Public docs should use cropped or staged VoiceFlow UI captures only; do not publish screenshots that expose real desktop apps, tabs, taskbars, or personal workspace context.
 
 ## Transcription Quality Defaults
 
@@ -71,6 +72,7 @@ Known good rollback: [Latest stable release](https://github.com/GrimFandango42/V
 - [Build and Packaging](docs/BUILD_GUIDE.md)
 - [Technical Overview](docs/TECHNICAL_OVERVIEW.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Security + Privacy Operations](docs/guides/SECURITY_AND_PRIVACY.md)
 - [Forking + Platform Porting](docs/guides/FORKING_AND_PLATFORM_GUIDE.md)
 
 ## License

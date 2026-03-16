@@ -28,6 +28,16 @@ This guide summarizes the practical security model for running VoiceFlow in day-
 4. Keep adaptive retention bounded (`adaptive_retention_hours`) for privacy hygiene.
 5. Review local logs before sharing diagnostics.
 
+## Screenshot And Demo Hygiene
+
+If you publish docs, bug reports, or release notes with images:
+
+1. Crop to the VoiceFlow window whenever possible.
+2. Do not publish screenshots that show real project names, editor tabs, taskbar items, account names, or desktop notifications.
+3. Use staged sample apps in the background if context is needed.
+4. Blur or redact any non-VoiceFlow UI that cannot be removed cleanly.
+5. Assume all images in a public repo are effectively permanent and review them with the same care as logs or config snippets.
+
 ## Scheduler Security Notes
 
 The daily learning job uses Windows Task Scheduler and runs a local batch script:
