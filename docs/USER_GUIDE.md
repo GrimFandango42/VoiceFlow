@@ -16,8 +16,7 @@ VoiceFlow is intentionally tray-first:
 - Tray menu: primary settings and actions.
 - Overlay + dock: status and recent transcript visibility.
 - Recent History + Correction Review: fast correction loop.
-
-There is currently no separate "Command Center" window in the active runtime.
+- VoiceFlow keeps day-to-day control close to the transcription loop instead of scattering it across separate admin surfaces.
 
 ## Tray Settings Map
 
@@ -154,6 +153,7 @@ Learning trust model:
 Long-idle reliability defaults:
 
 - After extended idle gaps, VoiceFlow now applies a safer first-pass pause-compaction profile.
+- For longer first dictations after extended idle, VoiceFlow can bypass pause compaction entirely to preserve full context.
 - If output looks sparse after heavy compaction, VoiceFlow can run a bounded raw-audio retry.
 - For longer clips beyond the single-pass retry window, VoiceFlow uses chunked raw retry with overlap to recover clipped words.
 

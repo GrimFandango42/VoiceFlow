@@ -7,6 +7,9 @@ from voiceflow.ui.cli_enhanced import EnhancedApp
 
 class _DummyApp:
     _evaluate_compaction_retry_signal = EnhancedApp._evaluate_compaction_retry_signal
+    _should_skip_pause_compaction_on_idle_resume = (
+        EnhancedApp._should_skip_pause_compaction_on_idle_resume
+    )
 
     def __init__(self) -> None:
         self.cfg = SimpleNamespace(
@@ -14,6 +17,8 @@ class _DummyApp:
             pause_compaction_retry_max_words=8,
             pause_compaction_retry_min_words_per_second=1.15,
             pause_compaction_retry_min_chars_per_second=5.0,
+            idle_resume_skip_pause_compaction=True,
+            idle_resume_skip_pause_compaction_min_audio_seconds=18.0,
             idle_resume_retry_on_compaction=True,
             idle_resume_retry_min_reduction_pct=55.0,
             idle_resume_retry_min_raw_audio_seconds=12.0,
@@ -70,3 +75,25 @@ def test_general_sparse_compaction_retry_behavior_still_applies() -> None:
     assert result["retry_triggered"] is True
     assert "short_output" in result["reasons"]
     assert "sparse_output" in result["reasons"]
+
+
+def test_idle_resume_long_clip_skips_pause_compaction() -> None:
+    app = _DummyApp()
+
+    assert app._should_skip_pause_compaction_on_idle_resume(
+        raw_audio_duration=61.92,
+        idle_resume_active=True,
+    ) is True
+
+
+def test_short_or_non_idle_clip_keeps_pause_compaction_enabled() -> None:
+    app = _DummyApp()
+
+    assert app._should_skip_pause_compaction_on_idle_resume(
+        raw_audio_duration=12.0,
+        idle_resume_active=True,
+    ) is False
+    assert app._should_skip_pause_compaction_on_idle_resume(
+        raw_audio_duration=61.92,
+        idle_resume_active=False,
+    ) is False

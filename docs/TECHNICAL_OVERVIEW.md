@@ -31,6 +31,7 @@ Performance-sensitive fields:
 - `enable_pause_compaction`
 - `pause_compaction_retry_*` (raw/chunked retry guardrails for sparse output)
 - `idle_resume_guard_*` (first-utterance safety policy after long idle periods)
+- `idle_resume_skip_pause_compaction*` (prefer raw completeness for the first long post-idle utterance)
 
 Stability and behavior fields:
 
@@ -45,7 +46,7 @@ Stability and behavior fields:
 ## Tray vs Advanced Controls
 
 - Primary user configuration surface: tray menu + overlay/dock panels.
-- No separate command-center window is active in the current runtime.
+- Primary interaction surfaces are the setup wizard, tray menu, overlay/dock, and history/review panels.
 - Advanced tuning remains available through config/env/script controls below.
 
 ## Hardware Selection Strategy

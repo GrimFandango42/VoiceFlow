@@ -870,6 +870,21 @@ class EnhancedApp:
             "reasons": reasons,
         }
 
+    def _should_skip_pause_compaction_on_idle_resume(
+        self,
+        *,
+        raw_audio_duration: float,
+        idle_resume_active: bool,
+    ) -> bool:
+        if not idle_resume_active:
+            return False
+        if not bool(getattr(self.cfg, "idle_resume_skip_pause_compaction", True)):
+            return False
+        min_seconds = float(
+            getattr(self.cfg, "idle_resume_skip_pause_compaction_min_audio_seconds", 18.0)
+        )
+        return raw_audio_duration >= min_seconds
+
     def _longrun_housekeeping_loop(self) -> None:
         interval_s = max(30.0, float(getattr(self.cfg, "longrun_health_log_interval_seconds", 900.0)))
         configured_soft_gc_mb = float(getattr(self.cfg, "longrun_soft_gc_memory_mb", 0.0) or 0.0)
@@ -1991,17 +2006,30 @@ class EnhancedApp:
                         float(getattr(self.cfg, "idle_resume_force_primary_min_audio_seconds", 1.8)),
                     )
 
+            skip_pause_compaction = self._should_skip_pause_compaction_on_idle_resume(
+                raw_audio_duration=raw_audio_duration,
+                idle_resume_active=idle_resume_active,
+            )
             compaction_overrides: Dict[str, float] = {}
-            if idle_resume_active:
+            if idle_resume_active and not skip_pause_compaction:
                 compaction_overrides["keep_ms"] = float(
                     getattr(self.cfg, "idle_resume_compaction_keep_silence_ms", 140)
                 )
                 compaction_overrides["max_reduction_pct"] = float(
                     getattr(self.cfg, "idle_resume_compaction_max_reduction_pct", 68.0)
                 )
-            stage_start = time.perf_counter()
-            compacted_audio = self._compact_pauses(audio_data, overrides=compaction_overrides)
-            stage_ms["pause_compaction"] = (time.perf_counter() - stage_start) * 1000.0
+            if skip_pause_compaction:
+                compacted_audio = audio_data
+                stage_ms["pause_compaction"] = 0.0
+                self._log.info(
+                    "idle_resume_pause_compaction_bypassed raw_duration=%.2f min_seconds=%.2f",
+                    raw_audio_duration,
+                    float(getattr(self.cfg, "idle_resume_skip_pause_compaction_min_audio_seconds", 18.0)),
+                )
+            else:
+                stage_start = time.perf_counter()
+                compacted_audio = self._compact_pauses(audio_data, overrides=compaction_overrides)
+                stage_ms["pause_compaction"] = (time.perf_counter() - stage_start) * 1000.0
             audio_duration = len(compacted_audio) / self.cfg.sample_rate if len(compacted_audio) > 0 else 0.0
             compacted_audio_duration = audio_duration
             compaction_reduction_pct = 0.0

@@ -39,7 +39,7 @@ VoiceFlow is tray-first by design.
 - Batch launchers remain useful for source debugging, not as the default daily test path.
 - Setup wizard includes `Run Hardware Check` to quickly re-detect GPU/CPU defaults.
 - Recent History and Correction Review are available from the tray for fast feedback loops.
-- Current runtime does not include a separate "Command Center" window. The active control surfaces are tray + overlay/dock + history/review panels.
+- Core control surfaces are the setup wizard, tray menu, overlay/dock, and history/review panels.
 - Public docs should use cropped or staged VoiceFlow UI captures only; do not publish screenshots that expose real desktop apps, tabs, taskbars, or personal workspace context.
 
 ## Transcription Quality Defaults
@@ -51,6 +51,7 @@ VoiceFlow is tray-first by design.
 - Destination-aware formatting remains enabled by default for readability.
 - Default release behavior pastes text on release without auto-sending Enter (`press_enter_after_paste=false`).
 - Visual animation quality defaults to adaptive mode (`visual_animation_quality=auto`, `visual_target_fps=28`).
+- The first long dictation after extended idle favors completeness over aggressive pause compaction.
 
 ## Continual Learning
 

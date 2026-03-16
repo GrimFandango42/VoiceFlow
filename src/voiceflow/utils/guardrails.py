@@ -674,6 +674,20 @@ def validate_config(cfg: Config) -> Config:
             )
             cfg.idle_resume_warmup_audio_seconds = 0.45
 
+        if not hasattr(cfg, 'idle_resume_skip_pause_compaction'):
+            cfg.idle_resume_skip_pause_compaction = True
+
+        if (
+            not hasattr(cfg, 'idle_resume_skip_pause_compaction_min_audio_seconds')
+            or float(getattr(cfg, 'idle_resume_skip_pause_compaction_min_audio_seconds', -1.0)) < 2.0
+            or float(getattr(cfg, 'idle_resume_skip_pause_compaction_min_audio_seconds', -1.0)) > 300.0
+        ):
+            logger.warning(
+                "Invalid idle_resume_skip_pause_compaction_min_audio_seconds %s, defaulting to 18.0",
+                getattr(cfg, 'idle_resume_skip_pause_compaction_min_audio_seconds', 'None'),
+            )
+            cfg.idle_resume_skip_pause_compaction_min_audio_seconds = 18.0
+
         if not hasattr(cfg, 'idle_resume_retry_on_compaction'):
             cfg.idle_resume_retry_on_compaction = True
 

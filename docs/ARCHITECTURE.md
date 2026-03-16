@@ -8,7 +8,7 @@ This document describes the current VoiceFlow runtime architecture in this repos
 - Windows-first desktop workflow (primary validated path)
 - push-to-talk recording with release-time transcription and text injection
 
-It intentionally does not describe archived/legacy Tauri, React, or Rust designs.
+It focuses on the Python runtime that ships from this repository today.
 
 ## System Overview
 

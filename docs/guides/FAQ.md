@@ -56,6 +56,16 @@ A:
 3. Keep one active VoiceFlow instance.
 4. Retry with a short and then long sample to compare timing.
 
+## Q: The first dictation after a long break looks incomplete.
+
+A:
+
+1. Confirm you are on a current stable build.
+2. Retry one natural sentence or paragraph to let the resume guardrails settle.
+3. If it repeats, review `%LOCALAPPDATA%\LocalFlow\logs\localflow.log` for `transcription_idle_resume_guard` around that attempt.
+
+Current builds favor transcript completeness over pause compaction on the first longer post-idle utterance, then fall back to raw-audio retry if the result still looks clipped.
+
 ## Q: Setup wizard only lets me run hardware check first. Is that expected?
 
 A:
@@ -94,11 +104,11 @@ A:
 
 For deep tuning, see `docs/USER_GUIDE.md` and `docs/TECHNICAL_OVERVIEW.md`.
 
-## Q: Is there a separate command-center settings window?
+## Q: Where do I change settings and review recent transcripts?
 
 A:
 
-Not in the current active runtime. Configuration is setup-wizard + tray-first, plus overlay/dock and history/review panels.
+Use the setup wizard for first-run defaults and the tray menu for day-to-day controls. Recent History and Correction Review are also available directly from the tray.
 
 ## Q: Where are config, logs, and user-learning files?
 
