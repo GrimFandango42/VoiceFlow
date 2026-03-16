@@ -175,6 +175,11 @@ _CONTEXTUAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bsee[\s-]*el[\s-]*eye\b", re.IGNORECASE), "CLI"),
     (re.compile(r"\bc[\s-]*l[\s-]*i\b", re.IGNORECASE), "CLI"),
     (re.compile(r"\bci[\s-]*cd\b", re.IGNORECASE), "CI/CD"),
+    (re.compile(r"\bcloud[\s-]*code\b", re.IGNORECASE), "Claude Code"),
+    (re.compile(r"\bclaude[\s-]*code\b", re.IGNORECASE), "Claude Code"),
+    (re.compile(r"\bcloud[\s-]*desktop\b", re.IGNORECASE), "Claude Desktop"),
+    (re.compile(r"\bclaude[\s-]*desktop\b", re.IGNORECASE), "Claude Desktop"),
+    (re.compile(r"\bcloud\b(?=,\s*(?:the\s+)?(?:ai|coding)\s+assistant\b)", re.IGNORECASE), "Claude"),
 )
 
 _TECH_TERM_CACHE_KEY: tuple[str, float] | None = None
@@ -1113,14 +1118,52 @@ def _apply_sentence_level_disambiguation(text: str, *, aggressive: bool) -> str:
         elif whether_context and not weather_context:
             sentence = re.sub(r"\bweather\b", "whether", sentence, flags=re.IGNORECASE)
 
+        infra_cloud_context = any(
+            phrase in lower
+            for phrase in [
+                "aws",
+                "azure",
+                "gcp",
+                "google cloud",
+                "icloud",
+                "cloud provider",
+                "cloud storage",
+                "cloud deployment",
+                "cloud environment",
+                "cloud environments",
+                "public cloud",
+                "private cloud",
+                "multi-cloud",
+                "kubernetes",
+                "terraform",
+                "vpc",
+                "rds",
+                "eks",
+            ]
+        )
+        safe_claude_context = any(
+            phrase in lower
+            for phrase in [
+                "anthropic",
+                "claude code",
+                "claude desktop",
+                "cloud code",
+                "cloud desktop",
+            ]
+        )
+        if safe_claude_context and not infra_cloud_context:
+            sentence = re.sub(r"\bcloud\b", "Claude", sentence, flags=re.IGNORECASE)
+            sentence = re.sub(r"\bcloud's\b", "Claude's", sentence, flags=re.IGNORECASE)
+
         if aggressive:
-            # Claude vs cloud disambiguation for coding-assistant context.
+            # Claude vs cloud disambiguation for broader coding-assistant context.
             claude_context = any(
                 phrase in lower
                 for phrase in [
                     "anthropic",
                     "claude",
                     "claude code",
+                    "claude desktop",
                     "coding assistant",
                     "llm",
                     "prompt",
@@ -1130,23 +1173,6 @@ def _apply_sentence_level_disambiguation(text: str, *, aggressive: bool) -> str:
                     "chatgpt",
                     "copilot",
                     "vs code",
-                ]
-            )
-            infra_cloud_context = any(
-                phrase in lower
-                for phrase in [
-                    "aws",
-                    "azure",
-                    "gcp",
-                    "google cloud",
-                    "icloud",
-                    "cloud provider",
-                    "cloud storage",
-                    "kubernetes",
-                    "terraform",
-                    "vpc",
-                    "rds",
-                    "eks",
                 ]
             )
             if claude_context and not infra_cloud_context:

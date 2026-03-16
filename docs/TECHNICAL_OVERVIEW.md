@@ -72,6 +72,7 @@ Power-user controls are environment-based:
   - Launcher/build preference for `venv` over `.venv-gpu`.
 - `VOICEFLOW_TERMS_PATH` / `VOICEFLOW_TECHNICAL_TERMS_PATH`
   - Override technical terms file path.
+  - Default local path is `%LOCALAPPDATA%\LocalFlow\engineering_terms.json` when present.
 - `VOICEFLOW_KEEP_CODE_MODE_DEFAULT=1`
   - Preserve default code mode behavior.
 - `VOICEFLOW_FEEDBACK_AUDIO=1`
@@ -123,6 +124,11 @@ Useful event lines:
 - `transcription_timing`
 - `asr_cuda_init_failed`
 - `asr_runtime_fallback`
+
+Log discovery helper:
+
+- `%LOCALAPPDATA%\LocalFlow\logs\active_log_path.txt`
+  - Points to the live log file when runtime falls back away from `localflow.log`.
 
 ## Runtime Test Suite
 

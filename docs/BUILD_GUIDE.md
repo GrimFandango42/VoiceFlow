@@ -90,7 +90,7 @@ Manual stable release from GitHub UI:
 1. Open `Actions` -> `Windows Executable CI/CD` -> `Run workflow`.
 2. Set:
    - `publish_tag_release=true`
-   - `release_version=vX.Y.Z` (example: `v3.1.4`)
+   - `release_version=vX.Y.Z` (example: `v3.1.8`)
 3. Run on `main`.
 
 Published stable asset names (used by README download links):

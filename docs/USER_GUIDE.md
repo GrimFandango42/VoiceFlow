@@ -133,6 +133,7 @@ VoiceFlow keeps personalization enabled:
 - Correction review workflow
 - Daily learning from correction data
 - Local engineering terms dictionary support
+- Built-in normalization for recurring coding-tool names such as `Claude Code` and `Claude Desktop`
 - Local adaptive replacement patterns for recurring accent and work-domain misses
 
 Fastest way to improve accent-specific output:
@@ -141,6 +142,7 @@ Fastest way to improve accent-specific output:
 2. Correct recurring misses.
 3. Let daily learning process those corrections.
 4. Check the latest report in `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\` for the active rules/tokens VoiceFlow is promoting.
+5. If you have stable house-style vocabulary, add it to `%LOCALAPPDATA%\LocalFlow\engineering_terms.json` (example seed files live in `docs/examples/`).
 
 Learning trust model:
 

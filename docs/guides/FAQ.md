@@ -102,6 +102,10 @@ A:
 .\VoiceFlow_DailyLearning.bat
 ```
 
+4. For repeated house-style terms, add local overrides in `%LOCALAPPDATA%\LocalFlow\engineering_terms.json`.
+
+Current builds already normalize a few recurring coding-tool phrases such as `Claude Code` and `Claude Desktop`; use the local terms file for anything more specific to your accent or workflow.
+
 For deep tuning, see `docs/USER_GUIDE.md` and `docs/TECHNICAL_OVERVIEW.md`.
 
 ## Q: Where do I change settings and review recent transcripts?

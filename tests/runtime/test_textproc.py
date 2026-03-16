@@ -80,8 +80,28 @@ def test_normalize_context_terms_aggressive_rules_are_opt_in():
     text = "cloud code works well for coding assistant prompts"
     safe = normalize_context_terms(text, aggressive=False, light=True)
     aggressive = normalize_context_terms(text, aggressive=True, light=True)
-    assert "cloud code" in safe.lower()
+    assert "Claude Code" in safe
     assert "Claude Code" in aggressive
+
+
+def test_normalize_context_terms_safe_defaults_fix_claude_product_names():
+    text = "i switch between cloud code and cloud desktop while reviewing prompts"
+    normalized = normalize_context_terms(text, aggressive=False, light=True)
+    assert "Claude Code" in normalized
+    assert "Claude Desktop" in normalized
+
+
+def test_normalize_context_terms_safe_defaults_fix_claude_ai_assistant_phrase():
+    text = "cloud, the ai assistant, did a better job on that diff"
+    normalized = normalize_context_terms(text, aggressive=False, light=True)
+    assert normalized.startswith("Claude, the ai assistant")
+
+
+def test_normalize_context_terms_safe_defaults_keep_google_cloud():
+    text = "we deploy to google cloud and aws for the current rollout"
+    normalized = normalize_context_terms(text, aggressive=False, light=True)
+    assert "google cloud" in normalized.lower()
+    assert "Claude" not in normalized
 
 
 def test_second_pass_cleanup_safe_pass_is_low_risk():

@@ -58,11 +58,14 @@ Output:
 ### 2) Build Installer EXE
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup\build_windows_installer.ps1 -AppVersion 3.0.0
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup\build_windows_installer.ps1
 ```
 
 Output:
-- `dist\installer\VoiceFlow-Setup-3.0.0.exe`
+- `dist\installer\VoiceFlow-Setup-<version>.exe`
+
+By default, the installer build now reads the release version from `pyproject.toml`.
+Pass `-AppVersion <version>` only when you intentionally need to override it.
 
 If Inno Setup is not installed:
 - install manually from <https://jrsoftware.org/isdl.php>

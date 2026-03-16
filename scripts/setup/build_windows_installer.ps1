@@ -1,6 +1,6 @@
 param(
     [string]$PythonExe = "",
-    [string]$AppVersion = "3.0.0",
+    [string]$AppVersion = "",
     [string]$IsccPath = "",
     [switch]$SkipBuild,
     [switch]$InstallInnoSetup
@@ -38,7 +38,29 @@ function Resolve-IsccPath {
     return ""
 }
 
+function Resolve-AppVersion {
+    param(
+        [string]$RepoRoot,
+        [string]$ExplicitVersion
+    )
+
+    if ($ExplicitVersion) {
+        return $ExplicitVersion
+    }
+
+    $pyproject = Join-Path $RepoRoot "pyproject.toml"
+    if (Test-Path $pyproject) {
+        $match = Select-String -Path $pyproject -Pattern '^\s*version\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if ($match -and $match.Matches.Count -gt 0) {
+            return $match.Matches[0].Groups[1].Value
+        }
+    }
+
+    throw "Unable to resolve AppVersion. Pass -AppVersion explicitly or define [project].version in pyproject.toml."
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$AppVersion = Resolve-AppVersion -RepoRoot $repoRoot -ExplicitVersion $AppVersion
 $bundleDir = Join-Path $repoRoot "dist\VoiceFlow"
 $issFile = Join-Path $repoRoot "packaging\windows\VoiceFlowSetup.iss"
 

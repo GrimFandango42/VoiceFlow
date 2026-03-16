@@ -15,7 +15,11 @@
     "oath": "OAuth",
     "oat": "OAuth",
     "see el eye": "CLI",
-    "c l i": "CLI"
+    "c l i": "CLI",
+    "cloud code": "Claude Code",
+    "claude code": "Claude Code",
+    "cloud desktop": "Claude Desktop",
+    "claude desktop": "Claude Desktop"
   },
   "technical_regex": [
     {

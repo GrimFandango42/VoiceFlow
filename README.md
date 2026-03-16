@@ -58,9 +58,11 @@ VoiceFlow is tray-first by design.
 - Runtime adaptive learning stays local and observes recurring transcript-to-final-text deltas.
 - Explicit correction signals are treated as higher-trust than auto-analysis, so accent/workflow corrections promote faster than speculative cleanup rules.
 - Saved correction-review feedback is promoted back into the active runtime learner, so the current session can adapt before the next daily batch run.
+- Built-in terminology cleanup already biases common coding-tool phrasing such as `Claude Code` and `Claude Desktop` without forcing risky blanket `cloud -> Claude` rewrites.
 - Raw transcript snippet storage is opt-in (`adaptive_store_raw_text=false` by default).
 - Daily learning writes a report plus an adaptive snapshot with top learned replacements and frequent recent domain tokens.
 - Inspect `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json` and `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\` to see what is sticking.
+- Add personal/work-domain overrides in `%LOCALAPPDATA%\LocalFlow\engineering_terms.json` if you want a local terminology file on top of the built-in rules.
 
 ## Stable Local Test Loop
 
