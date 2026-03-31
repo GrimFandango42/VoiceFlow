@@ -796,12 +796,45 @@ class EnhancedApp:
             return 960.0
         return 768.0
 
+    @staticmethod
+    def _make_warmup_speech_audio(sample_rate: int, duration: float) -> np.ndarray:
+        """Generate bandlimited speech-like noise for ASR warm-up.
+
+        Pure silence is discarded by Silero VAD before CTranslate2 is ever
+        invoked, so the CUDA decode path never runs and the GPU stays cold.
+        This function produces amplitude-modulated bandlimited noise (80–3400 Hz)
+        that passes the VAD gate and forces a full decode, priming CUDA kernels
+        and eliminating the cold-start stall on the first real utterance.
+        """
+        n = max(1, int(sample_rate * duration))
+        rng = np.random.default_rng(seed=42)
+        half = n // 2 + 1
+        freqs = np.fft.rfftfreq(n, d=1.0 / sample_rate)
+        # Speech band: 80–3400 Hz
+        in_band = (freqs >= 80) & (freqs <= 3400)
+        spectrum = np.zeros(half, dtype=complex)
+        n_in_band = int(in_band.sum())
+        spectrum[in_band] = (
+            rng.standard_normal(n_in_band) + 1j * rng.standard_normal(n_in_band)
+        )
+        signal = np.fft.irfft(spectrum, n=n).astype(np.float32)
+        # Syllabic amplitude modulation at ~4 Hz increases speech-likeness
+        t = np.arange(n, dtype=np.float32) / sample_rate
+        signal *= 0.5 + 0.5 * np.sin(2.0 * np.pi * 4.0 * t)
+        # Normalise to -18 dBFS (RMS ≈ 0.126) — loud enough for VAD detection
+        rms = float(np.sqrt(np.mean(signal ** 2)))
+        if rms > 1e-9:
+            signal *= 0.126 / rms
+        return np.clip(signal, -1.0, 1.0)
+
     def _run_idle_resume_warmup(self) -> float:
         """Warm ASR runtime once after long idle to reduce first-utterance quality dips."""
         if not bool(getattr(self.cfg, "idle_resume_warmup_enabled", True)):
             return 0.0
 
-        warmup_seconds = max(0.1, float(getattr(self.cfg, "idle_resume_warmup_audio_seconds", 0.45)))
+        # Default raised from 0.45 s to 1.5 s: the speech sample must be long
+        # enough that Silero VAD's minimum speech duration gate doesn't reject it.
+        warmup_seconds = max(0.5, float(getattr(self.cfg, "idle_resume_warmup_audio_seconds", 1.5)))
         cooldown_seconds = 300.0
         now = time.time()
         with self._idle_resume_warmup_lock:
@@ -810,8 +843,7 @@ class EnhancedApp:
             self._idle_resume_last_warmup_at = now
 
         sample_rate = max(8000, int(getattr(self.cfg, "sample_rate", 16000)))
-        warmup_samples = max(1, int(sample_rate * warmup_seconds))
-        warmup_audio = np.zeros(warmup_samples, dtype=np.float32)
+        warmup_audio = self._make_warmup_speech_audio(sample_rate, warmup_seconds)
         started = time.perf_counter()
         try:
             # Warm both paths when available; keep this short and bounded.
