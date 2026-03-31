@@ -209,6 +209,24 @@ class StreamingTranscriber:
             self._audio_buffer.append(audio.astype(np.float32))
             self._total_samples += len(audio)
 
+            # Cap the in-memory buffer at 2× partial_max_audio_seconds.
+            # _do_partial_transcription already trims to partial_max_audio_seconds
+            # at transcription time, but without this cap the buffer grows without
+            # bound during long recordings and eventually exhausts RAM.
+            max_buffer_samples = int(self.partial_max_audio_seconds * 2 * self.sample_rate)
+            if self._total_samples > max_buffer_samples:
+                excess = self._total_samples - max_buffer_samples
+                while excess > 0 and self._audio_buffer:
+                    chunk = self._audio_buffer[0]
+                    if len(chunk) <= excess:
+                        excess -= len(chunk)
+                        self._total_samples -= len(chunk)
+                        self._audio_buffer.pop(0)
+                    else:
+                        self._audio_buffer[0] = chunk[excess:]
+                        self._total_samples -= excess
+                        excess = 0
+
     def has_results(self) -> bool:
         """Check if there are pending results"""
         return not self._results_queue.empty()
