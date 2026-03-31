@@ -42,8 +42,10 @@ class AdaptiveLearningManager:
     def __init__(self, cfg: Any):
         self.enabled = bool(getattr(cfg, "adaptive_learning_enabled", True))
         self.store_raw_text = bool(getattr(cfg, "adaptive_store_raw_text", False))
-        self.retention_hours = int(getattr(cfg, "adaptive_retention_hours", 72))
+        self.retention_hours = int(getattr(cfg, "adaptive_retention_hours", 336))  # 14 days
         self.min_count = int(getattr(cfg, "adaptive_min_count", 3))
+        # User-provided corrections are high-signal; activate after fewer observations.
+        self.user_correction_min_count = int(getattr(cfg, "adaptive_user_correction_min_count", 2))
         self.max_rules = int(getattr(cfg, "adaptive_max_rules", 200))
         self._max_preview_len = int(getattr(cfg, "adaptive_snippet_chars", 200))
 
@@ -70,7 +72,19 @@ class AdaptiveLearningManager:
 
         for entry in replacements.values():
             score = float(entry.get("score", entry.get("count", 0)))
-            if score < float(self.min_count):
+            sources = entry.get("sources", {})
+            user_correction_sources = {
+                "daily_user_correction", "correction_feedback", "manual_correction"
+            }
+            has_user_correction = any(
+                k in user_correction_sources for k in sources
+            )
+            threshold = (
+                float(self.user_correction_min_count)
+                if has_user_correction
+                else float(self.min_count)
+            )
+            if score < threshold:
                 continue
             if not self._is_fresh(entry.get("last_seen", 0), now):
                 continue
