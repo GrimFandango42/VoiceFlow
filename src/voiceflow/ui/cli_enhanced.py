@@ -24,8 +24,13 @@ import numpy as np
 
 from voiceflow.core.config import Config
 from voiceflow.core.audio_enhanced import EnhancedAudioRecorder
-# Use new unified ASR engine with model tier support
-from voiceflow.core.asr_engine import ModernWhisperASR as WhisperASR
+# Use new unified ASR engine with model tier support.
+# When VOICEFLOW_MODEL_SERVER_ENABLED=1 (set by the two-process dev launcher),
+# delegate to the model server instead so hot-reloads skip model loading.
+if os.environ.get("VOICEFLOW_MODEL_SERVER_ENABLED") == "1":
+    from voiceflow.core.model_server_client import ModelServerASR as WhisperASR  # type: ignore[assignment]
+else:
+    from voiceflow.core.asr_engine import ModernWhisperASR as WhisperASR  # type: ignore[assignment]
 # Cold start elimination
 from voiceflow.core.preloader import ModelPreloader, PreloadState
 # Streaming preview
@@ -661,6 +666,9 @@ class EnhancedApp:
             fast_cfg.model_tier = fast_tier
             if fast_tier == "tiny":
                 fast_cfg.model_name = "tiny.en"
+            # Tell ModelServerASR (used in two-process dev mode) to route
+            # requests to the fast model loaded on the server.
+            fast_cfg._model_server_path = "fast"
             self.asr_fast = WhisperASR(fast_cfg)
             self._fast_preloader = ModelPreloader(self.asr_fast, on_progress=self._on_fast_preload_progress)
             self._fast_preloader.start_preload()
