@@ -49,7 +49,7 @@ import keyboard
 from voiceflow.ui.enhanced_tray import update_tray_status
 from voiceflow.ui.setup_wizard import maybe_run_startup_setup
 from voiceflow.utils.logging_setup import AsyncLogger, default_log_dir
-from voiceflow.utils.settings import config_dir, load_config, save_config
+from voiceflow.utils.settings import config_dir, load_config, save_config, append_jsonl_bounded
 from voiceflow.utils.idle_aware_monitor import (
     start_idle_monitoring, stop_idle_monitoring, record_heartbeat,
     mark_idle, mark_recording, mark_processing, mark_injecting, mark_error,
@@ -1794,14 +1794,37 @@ class EnhancedApp:
         corrected_text: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        if not self.adaptive_learning:
-            return
         raw = str(original_text or "").strip()
         corrected = str(corrected_text or "").strip()
         if not raw or not corrected or raw == corrected:
             return
         meta = dict(metadata or {})
         meta["source"] = "manual_correction"
+
+        # Persist to transcription_corrections.jsonl for the daily learning job.
+        # Skip if "local_ts" is already in metadata — that means visual_indicators.py
+        # already wrote this correction to the file via _save_history_correction.
+        if not meta.get("local_ts"):
+            try:
+                payload = {
+                    "ts": time.time(),
+                    "local_ts": datetime.now().isoformat(timespec="seconds"),
+                    "original_text": raw,
+                    "corrected_text": corrected,
+                    "source": "manual_correction",
+                }
+                append_jsonl_bounded(
+                    config_dir() / "transcription_corrections.jsonl",
+                    payload,
+                    max_file_bytes=786432,
+                    keep_lines=1000,
+                    max_line_chars=8192,
+                )
+            except Exception as exc:
+                self._log.warning("correction_persist_failed error=%s", exc)
+
+        if not self.adaptive_learning:
+            return
         self._observe_adaptive_async(raw, corrected, meta)
 
     def start_recording(self):
