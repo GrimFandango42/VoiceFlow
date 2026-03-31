@@ -244,7 +244,7 @@ class ModelConfig:
     languages: List[str] = field(default_factory=lambda: ["en"])
     supports_diarization: bool = False
     supports_word_timestamps: bool = True
-    vad_filter: bool = False
+    vad_filter: bool = True
     cpu_threads: int = 0
     asr_num_workers: int = 1
     beam_size: int = 1
@@ -885,7 +885,7 @@ class ASREngine:
         sample_rate: int = 16000,
         enable_diarization: bool = False,
         enable_word_timestamps: bool = True,
-        vad_filter: bool = False,
+        vad_filter: bool = True,
         cpu_threads: int = 0,
         asr_num_workers: int = 1,
         beam_size: int = 1,
