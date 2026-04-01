@@ -20,7 +20,7 @@ class Config:
     sample_rate: int = 16000
     channels: int = 1
     blocksize: int = 512  # frames per callback, ~64 ms at 16k
-    
+
     # Performance optimizations
     enable_batching: bool = True  # Enable VAD-based batching for 12.5x speedup
     max_batch_size: int = 4  # Process multiple segments together
@@ -149,6 +149,17 @@ class Config:
     min_peak_amplitude: float = 1e-4  # Minimum absolute peak required before declaring silence
     min_rms_amplitude: float = 5e-4  # RMS floor to help discriminate whisper-level speech
 
+    # Audio preprocessing pipeline (applied before ASR)
+    audio_preprocessing_enabled: bool = True   # Master switch for the preprocessing pipeline
+    audio_highpass_enabled: bool = True         # High-pass filter to remove HVAC/rumble noise
+    audio_highpass_cutoff_hz: float = 80.0      # Cutoff frequency in Hz (speech starts ~85 Hz)
+    audio_normalize_enabled: bool = True        # RMS normalization for consistent input levels
+    audio_normalize_target_rms: float = 0.1     # Target RMS level (0–1 scale)
+    audio_normalize_max_gain: float = 10.0      # Max amplification factor (20 dB) to protect silence
+    audio_noise_gate_enabled: bool = False      # Noise gate: suppress frames below energy threshold
+    audio_noise_gate_threshold: float = 0.005  # RMS below which a frame is gated to silence
+    audio_noise_gate_frame_ms: float = 20.0     # Analysis frame size for noise gate in milliseconds
+
     # Phase 2 Optimization: Advanced Performance Features (Research-Based)
     enable_gpu_acceleration: bool = True  # Enable GPU acceleration (6-7x speedup)
     enable_dual_model_strategy: bool = True  # tiny.en first, then small.en for quality
@@ -262,8 +273,7 @@ class Config:
     use_tray: bool = True
 
     def __post_init__(self):
-        """
-        CRITICAL GUARDRAIL: Validate configuration after initialization.
+        """CRITICAL GUARDRAIL: Validate configuration after initialization.
 
         This prevents crashes from invalid configuration values identified
         in comprehensive testing (10/40 edge case failures).
@@ -281,9 +291,8 @@ class Config:
             logger.error(f"Configuration validation failed: {e}")
             # Continue with potentially invalid config but log the issue
 
-    def validate(self) -> 'Config':
-        """
-        Manually validate the configuration.
+    def validate(self) -> Config:
+        """Manually validate the configuration.
 
         Returns:
             Validated configuration object

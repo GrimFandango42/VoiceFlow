@@ -1,66 +1,82 @@
 from __future__ import annotations
 
-import threading
-import traceback
-import sys
-import os
-import subprocess
+import ctypes
 import gc
-import re
 import json
+import logging
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+import traceback
 import wave
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, Dict, Any, Deque, Tuple
-import logging
-import time
-import ctypes
 from types import SimpleNamespace
-from queue import Queue, Empty
-from concurrent.futures import ThreadPoolExecutor, Future
-from collections import deque
+from typing import Any, Deque, Dict, Optional, Tuple
 
 import numpy as np
 
-from voiceflow.core.config import Config
 from voiceflow.core.audio_enhanced import EnhancedAudioRecorder
+from voiceflow.core.config import Config
+
 # Use new unified ASR engine with model tier support.
 # When VOICEFLOW_MODEL_SERVER_ENABLED=1 (set by the two-process dev launcher),
 # delegate to the model server instead so hot-reloads skip model loading.
 if os.environ.get("VOICEFLOW_MODEL_SERVER_ENABLED") == "1":
-    from voiceflow.core.model_server_client import ModelServerASR as WhisperASR  # type: ignore[assignment]
+    from voiceflow.core.model_server_client import (
+        ModelServerASR as WhisperASR,  # type: ignore[assignment]
+    )
 else:
-    from voiceflow.core.asr_engine import ModernWhisperASR as WhisperASR  # type: ignore[assignment]
+    from voiceflow.core.asr_engine import (
+        ModernWhisperASR as WhisperASR,  # type: ignore[assignment]
+    )
 # Cold start elimination
+import keyboard
+
 from voiceflow.core.preloader import ModelPreloader, PreloadState
+
 # Streaming preview
-from voiceflow.core.streaming import StreamingTranscriber, StreamingResult
+from voiceflow.core.streaming import StreamingResult, StreamingTranscriber
+from voiceflow.core.textproc import (
+    apply_code_mode,
+    apply_second_pass_cleanup,
+    format_transcript_for_destination,
+    format_transcript_text,
+    infer_destination_profile,
+    normalize_context_terms,
+)
 from voiceflow.platform.factory import (
     create_hotkey_backend,
     create_injector_backend,
     create_tray_backend,
     runtime_platform_name,
 )
-from voiceflow.utils.utils import is_admin, nvidia_smi_info
-from voiceflow.core.textproc import (
-    apply_code_mode,
-    apply_second_pass_cleanup,
-    format_transcript_text,
-    format_transcript_for_destination,
-    infer_destination_profile,
-    normalize_context_terms,
-)
-import keyboard
 from voiceflow.ui.enhanced_tray import update_tray_status
 from voiceflow.ui.setup_wizard import maybe_run_startup_setup
-from voiceflow.utils.logging_setup import AsyncLogger, default_log_dir
-from voiceflow.utils.settings import config_dir, load_config, save_config, append_jsonl_bounded
 from voiceflow.utils.idle_aware_monitor import (
-    start_idle_monitoring, stop_idle_monitoring, record_heartbeat,
-    mark_idle, mark_recording, mark_processing, mark_injecting, mark_error,
-    ProcessState
+    mark_error,
+    mark_idle,
+    mark_injecting,
+    mark_processing,
+    mark_recording,
+    record_heartbeat,
+    start_idle_monitoring,
+    stop_idle_monitoring,
 )
+from voiceflow.utils.logging_setup import AsyncLogger, default_log_dir
 from voiceflow.utils.process_monitor import OperationTimeout
+from voiceflow.utils.settings import (
+    append_jsonl_bounded,
+    config_dir,
+    load_config,
+    save_config,
+)
+from voiceflow.utils.utils import is_admin, nvidia_smi_info
 
 # Initialize logger for the module
 logger = logging.getLogger(__name__)
@@ -68,8 +84,7 @@ _SINGLE_INSTANCE_MUTEX = None
 
 
 def _acquire_single_instance_mutex() -> bool:
-    """
-    Prevent duplicate VoiceFlow CLI instances.
+    """Prevent duplicate VoiceFlow CLI instances.
     Duplicate listeners race on global hotkeys and cause random start/stop behavior.
     """
     global _SINGLE_INSTANCE_MUTEX
@@ -90,8 +105,7 @@ def _acquire_single_instance_mutex() -> bool:
 
 
 def _is_primary_cli_process() -> bool:
-    """
-    Extra duplicate-instance guard.
+    """Extra duplicate-instance guard.
     Keep only the oldest running `-m voiceflow.ui.cli_enhanced` process.
     """
     try:
@@ -178,8 +192,7 @@ def _list_cli_processes() -> list[tuple[int, float, int]]:
 
 
 def _enforce_single_instance() -> bool:
-    """
-    Keep only one `voiceflow.ui.cli_enhanced` process.
+    """Keep only one `voiceflow.ui.cli_enhanced` process.
     Prefer the oldest leaf process to avoid churn from short-lived bootstrap helpers.
     """
     try:
@@ -236,8 +249,7 @@ def _terminate_duplicate_parent() -> None:
 
 
 def _yield_if_bootstrap_parent(wait_seconds: float = 1.2) -> bool:
-    """
-    Some environments bootstrap a child python process with the same VoiceFlow entrypoint.
+    """Some environments bootstrap a child python process with the same VoiceFlow entrypoint.
     If this process spawned such a child, parent should exit early to avoid duplicate listeners/UI.
     Returns True when caller should exit.
     """
@@ -268,8 +280,7 @@ def _yield_if_bootstrap_parent(wait_seconds: float = 1.2) -> bool:
 
 
 def _start_bootstrap_parent_watchdog(window_seconds: float = 10.0) -> None:
-    """
-    During startup, periodically check whether this process spawned a same-entrypoint child.
+    """During startup, periodically check whether this process spawned a same-entrypoint child.
     If yes, exit parent to avoid duplicate listeners.
     """
     def _worker() -> None:
@@ -323,16 +334,39 @@ def _start_single_instance_watchdog(interval_seconds: float = 2.0) -> threading.
 # Visual indicators integration
 try:
     from voiceflow.ui.visual_indicators import (
-        show_listening, show_processing, show_transcribing,
-        show_complete, show_error, hide_status,
-        show_preview as visual_show_preview, clear_preview as visual_clear_preview,
-        record_transcription_event as visual_record_transcription_event,
-        update_audio_level as visual_update_audio_level,
-        update_audio_features as visual_update_audio_features,
+        clear_preview as visual_clear_preview,
+    )
+    from voiceflow.ui.visual_indicators import (
         get_indicator as visual_get_indicator,
-        set_dock_enabled as visual_set_dock_enabled,
+    )
+    from voiceflow.ui.visual_indicators import (
+        hide_status,
+        show_complete,
+        show_error,
+        show_listening,
+        show_processing,
+        show_transcribing,
+    )
+    from voiceflow.ui.visual_indicators import (
+        record_transcription_event as visual_record_transcription_event,
+    )
+    from voiceflow.ui.visual_indicators import (
         set_animation_preferences as visual_set_animation_preferences,
+    )
+    from voiceflow.ui.visual_indicators import (
         set_correction_feedback_handler as visual_set_correction_feedback_handler,
+    )
+    from voiceflow.ui.visual_indicators import (
+        set_dock_enabled as visual_set_dock_enabled,
+    )
+    from voiceflow.ui.visual_indicators import (
+        show_preview as visual_show_preview,
+    )
+    from voiceflow.ui.visual_indicators import (
+        update_audio_features as visual_update_audio_features,
+    )
+    from voiceflow.ui.visual_indicators import (
+        update_audio_level as visual_update_audio_level,
     )
     VISUAL_INDICATORS_AVAILABLE = True
 except ImportError:
@@ -342,7 +376,9 @@ except ImportError:
     def visual_record_transcription_event(text, audio_duration, processing_time, metadata=None):
         # Late-bind fallback: import can fail early during startup races.
         try:
-            from voiceflow.ui.visual_indicators import record_transcription_event as _record_event
+            from voiceflow.ui.visual_indicators import (
+                record_transcription_event as _record_event,
+            )
             _record_event(text, audio_duration, processing_time, metadata=metadata)
         except Exception:
             pass
@@ -356,7 +392,7 @@ except ImportError:
 
 class EnhancedTranscriptionManager:
     """Enhanced thread-safe transcription manager for long conversations"""
-    
+
     def __init__(self, max_concurrent_jobs: int = 2, worker_timeout_seconds: float = 45.0):
         self.executor = ThreadPoolExecutor(
             max_workers=max_concurrent_jobs,
@@ -366,28 +402,28 @@ class EnhancedTranscriptionManager:
         self.active_jobs: Dict[str, Future] = {}
         self.job_counter = 0
         self.lock = threading.Lock()
-        
+
         print(f"[TranscriptionManager] Initialized with {max_concurrent_jobs} worker threads")
-    
+
     def submit_transcription(self, audio_data: np.ndarray, callback: callable) -> str:
         """Submit transcription job with proper thread management"""
         with self.lock:
             self.job_counter += 1
             job_id = f"job_{self.job_counter}"
         submitted_at = time.perf_counter()
-        
+
         # Clean up completed jobs
         self._cleanup_completed_jobs()
-        
+
         # Submit new job
         future = self.executor.submit(self._transcription_worker, audio_data, callback, job_id, submitted_at)
-        
+
         with self.lock:
             self.active_jobs[job_id] = future
-        
+
         print(f"[TranscriptionManager] Started {job_id} (active jobs: {len(self.active_jobs)})")
         return job_id
-    
+
     def _transcription_worker(
         self,
         audio_data: np.ndarray,
@@ -407,7 +443,6 @@ class EnhancedTranscriptionManager:
             )
 
             # Perform transcription with timeout
-            import signal
             import threading
             result = None
             error = None
@@ -465,7 +500,7 @@ class EnhancedTranscriptionManager:
             with self.lock:
                 if job_id in self.active_jobs:
                     del self.active_jobs[job_id]
-    
+
     def _cleanup_completed_jobs(self):
         """Clean up completed jobs to prevent memory leaks"""
         with self.lock:
@@ -475,7 +510,7 @@ class EnhancedTranscriptionManager:
             ]
             for job_id in completed_jobs:
                 del self.active_jobs[job_id]
-    
+
     def shutdown(self):
         """Shutdown the transcription manager gracefully"""
         print("[TranscriptionManager] Shutting down...")
@@ -489,6 +524,7 @@ class EnhancedApp:
     def __init__(self, cfg: Config, injector_backend: Optional[Any] = None):
         self.cfg = cfg
         self.rec = EnhancedAudioRecorder(cfg)
+        self._audio_preprocessor = AudioPreprocessor(cfg)
         self.injector = injector_backend or create_injector_backend(cfg)
 
         # Cold start elimination: Create ASR and start background preloading
@@ -541,8 +577,8 @@ class EnhancedApp:
 
         if self.ai_enabled:
             try:
-                from voiceflow.ai.course_corrector import CourseCorrector
                 from voiceflow.ai.command_mode import CommandMode
+                from voiceflow.ai.course_corrector import CourseCorrector
 
                 use_correction = getattr(cfg, 'enable_course_correction', True)
                 use_commands = getattr(cfg, 'enable_command_mode', True)
@@ -1101,8 +1137,7 @@ class EnhancedApp:
         *,
         force_primary: bool = False,
     ) -> tuple[str, int]:
-        """
-        Bounded long-clip retry path when single-pass raw decode would be too expensive.
+        """Bounded long-clip retry path when single-pass raw decode would be too expensive.
         Returns (stitched_text, chunks_used).
         """
         sample_rate = max(8000, int(getattr(self.cfg, "sample_rate", 16000)))
@@ -1177,8 +1212,7 @@ class EnhancedApp:
         return " ".join(merged_words).strip(), chunks_used
 
     def _compact_pauses(self, audio_data: np.ndarray, overrides: Optional[Dict[str, float]] = None) -> np.ndarray:
-        """
-        Remove long silence spans from lengthy recordings to reduce inference time.
+        """Remove long silence spans from lengthy recordings to reduce inference time.
         Keeps a small silence margin around detected speech to preserve phrase boundaries.
         """
         options: Dict[str, float] = dict(overrides or {})
@@ -1266,8 +1300,7 @@ class EnhancedApp:
         return compacted
 
     def _detect_likely_non_speech(self, audio_data: np.ndarray) -> tuple[bool, str, Dict[str, float]]:
-        """
-        Conservative short-audio detector for sneeze/cough/throat-clear bursts.
+        """Conservative short-audio detector for sneeze/cough/throat-clear bursts.
         Returns (is_non_speech, reason, metrics).
         """
         metrics: Dict[str, float] = {}
@@ -1897,7 +1930,7 @@ class EnhancedApp:
                 current_duration = self.rec.get_current_duration()
                 if current_duration > 0:
                     print(f"[MIC] Resuming recording ({current_duration:.1f}s elapsed)")
-                    
+
         except Exception as e:
             print(f"[MIC] Audio start error: {e}")
             traceback.print_exc()
@@ -1967,8 +2000,14 @@ class EnhancedApp:
             except Exception as silence_error:
                 print(f"[MIC] Silence detection error: {silence_error}")
                 # Continue with transcription if silence detection fails
-            
+
             print(f"[MIC] Captured {audio_duration:.2f}s of audio ({len(audio)} samples)")
+
+            # Audio preprocessing pipeline: high-pass filter, RMS normalization, noise gate
+            try:
+                audio = self._audio_preprocessor.process(audio)
+            except Exception as preprocess_error:
+                self._log.warning("audio_preprocessing_failed error=%s", preprocess_error)
 
             # CRITICAL FIX: Mark as processing ONLY after validation passes
             # This prevents stuck state when early validation fails
@@ -1988,12 +2027,12 @@ class EnhancedApp:
             job_id = self.transcription_manager.submit_transcription(
                 audio, transcription_callback
             )
-            
+
         except Exception as e:
             print(f"[MIC] Audio stop error: {e}")
             traceback.print_exc()
             self._log.exception("audio_stop_error: %s", e)
-            
+
             # Update visual indicators - error status
             if self.visual_indicators_enabled:
                 update_tray_status(self.tray_controller, "error", False, f"Stop error: {e}")
@@ -2423,7 +2462,7 @@ class EnhancedApp:
 
                     # Check for very short or repetitive content
                     if len(text.strip()) < 3:
-                        print(f"[TRANSCRIPTION] Content too short - skipping")
+                        print("[TRANSCRIPTION] Content too short - skipping")
                         self._log.info("transcription_filtered reason=too_short")
                         mark_idle()
                         update_tray_status(self.tray_controller, "idle", False)
@@ -2503,7 +2542,7 @@ class EnhancedApp:
                         # For now, commands need selected text which we don't have
                         # Just log it - full command mode needs clipboard integration
                         text = ""  # Don't inject command text
-                        print(f"[AI] Command mode triggered - say command after selecting text")
+                        print("[AI] Command mode triggered - say command after selecting text")
 
                 # Apply course correction (remove false starts, filler words)
                 if text and self.course_corrector:
@@ -2735,7 +2774,7 @@ class EnhancedApp:
 
             self._last_transcription_completed_at = time.time()
             return text
-            
+
         except Exception as e:
             print(f"[TRANSCRIPTION] Error: {e}")
             traceback.print_exc()
@@ -2793,11 +2832,11 @@ class EnhancedApp:
             "session_rtf_avg": session_rtf_avg,
             "status": status,
         }
-    
+
     def shutdown(self):
         """Graceful shutdown with cleanup"""
         print("[EnhancedApp] Shutting down...")
-        
+
         # Stop recording if active
         if self.rec.is_recording():
             try:
@@ -2808,24 +2847,24 @@ class EnhancedApp:
         if self._housekeeping_thread and self._housekeeping_thread.is_alive():
             self._housekeeping_thread.join(timeout=1.5)
         self._stop_live_checkpoint_monitor()
-        
+
         # Shutdown transcription manager
         self.transcription_manager.shutdown()
         self.postprocess_executor.shutdown(wait=False)
         self.checkpoint_executor.shutdown(wait=False)
         self.injector.clear_target_window()
-        
+
         # Session summary with ASR statistics
         session_duration = time.time() - self._session_start_time
         asr_stats = self.asr.get_clean_statistics()
-        
+
         print(f"[SESSION] Duration: {session_duration:.1f}s, "
               f"Words: {self._session_word_count}, "
               f"Transcription time: {self._total_transcription_time:.1f}s")
         print(f"[ASR STATS] Recordings: {asr_stats['transcription_count']}, "
               f"Avg Speed: {asr_stats['average_speed_factor']:.1f}x, "
               f"VAD Fallback: {asr_stats['vad_fallback_triggered']}")
-        
+
         print("[EnhancedApp] Shutdown complete")
 
 
@@ -3056,7 +3095,7 @@ def main(argv=None):
         except Exception:
             pass
         return 0
-    
+
     try:
         listener.start()
         runtime_log.info("hotkey_listener_started backend=%s", type(listener).__name__)
@@ -3107,7 +3146,7 @@ def main(argv=None):
         heartbeat.start()
 
         listener.run_forever()
-        
+
     except KeyboardInterrupt:
         print("\n[MAIN] Shutdown requested...")
     except Exception as e:
