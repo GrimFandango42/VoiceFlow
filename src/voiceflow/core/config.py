@@ -20,7 +20,7 @@ class Config:
     sample_rate: int = 16000
     channels: int = 1
     blocksize: int = 512  # frames per callback, ~64 ms at 16k
-    
+
     # Performance optimizations
     enable_batching: bool = True  # Enable VAD-based batching for 12.5x speedup
     max_batch_size: int = 4  # Process multiple segments together
@@ -242,6 +242,7 @@ class Config:
     adaptive_store_raw_text: bool = False  # Keep short local snippets only when explicitly enabled
     adaptive_retention_hours: int = 72  # Auto-purge learning and audit records
     adaptive_min_count: int = 3  # Repetition count required before auto-apply
+    adaptive_user_correction_min_count: int = 2  # Lower threshold for user-driven corrections
     adaptive_max_rules: int = 200  # Cap learned replacements to bound memory
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
     longrun_housekeeping_enabled: bool = True  # periodic long-run health telemetry and cleanup hooks
@@ -262,8 +263,7 @@ class Config:
     use_tray: bool = True
 
     def __post_init__(self):
-        """
-        CRITICAL GUARDRAIL: Validate configuration after initialization.
+        """CRITICAL GUARDRAIL: Validate configuration after initialization.
 
         This prevents crashes from invalid configuration values identified
         in comprehensive testing (10/40 edge case failures).
@@ -281,9 +281,8 @@ class Config:
             logger.error(f"Configuration validation failed: {e}")
             # Continue with potentially invalid config but log the issue
 
-    def validate(self) -> 'Config':
-        """
-        Manually validate the configuration.
+    def validate(self) -> Config:
+        """Manually validate the configuration.
 
         Returns:
             Validated configuration object

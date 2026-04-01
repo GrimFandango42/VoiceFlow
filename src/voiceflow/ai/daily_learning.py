@@ -6,11 +6,12 @@ import json
 import logging
 import time
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from voiceflow.ai.adaptive_memory import AdaptiveLearningManager
 from voiceflow.core.config import Config
@@ -107,6 +108,25 @@ INSTRUCTION_THEME_RULES: Dict[str, Tuple[str, ...]] = {
         "continual learning",
     ),
 }
+
+_PAIR_WEIGHT_BY_CORRECTION_SOURCE: Dict[str, float] = {
+    "manual_correction": 1.5,
+    "user_correction": 1.0,
+}
+_AUTO_PAIR_WEIGHT = 0.5
+
+
+def _pair_weight_for_source(source: str) -> float:
+    """Return pair accumulation weight for a correction source string.
+
+    Manual corrections (user actively edited the text) are highest signal.
+    Generic user-correction records from the history UI get a standard weight.
+    Auto-analysis from the history stream gets a reduced weight.
+    """
+    return _PAIR_WEIGHT_BY_CORRECTION_SOURCE.get(
+        str(source or "").strip().lower(), 1.0
+    )
+
 
 THEME_RECOMMENDATIONS: Dict[str, str] = {
     "formatting_capitalization": "Prioritize sentence-start capitalization and punctuation consistency.",
@@ -228,6 +248,7 @@ class DailyLearningStats:
     correction_items_total: int
     correction_items_used: int
     observed_from_user_corrections: int
+    observed_from_manual_corrections: int
     observed_from_auto_analysis: int
     instructional_items_total: int
     instructional_items_used: int
@@ -293,6 +314,7 @@ class DailyLearningJob:
                     "original_text": original,
                     "corrected_text": corrected,
                     "item_id": int(payload.get("item_id", 0) or 0),
+                    "source": str(payload.get("source", "") or "").strip(),
                     "raw_payload": payload,
                 }
             )
@@ -470,8 +492,10 @@ class DailyLearningJob:
         )
 
         pair_counts: Counter[str] = Counter()
+        pair_weights: Dict[str, float] = {}
         pair_sources: Dict[str, Counter[str]] = {}
         observed_user = 0
+        observed_manual = 0
         observed_auto = 0
         used_history = 0
         used_corrections = 0
@@ -493,22 +517,30 @@ class DailyLearningJob:
             if not original or not corrected:
                 continue
             used_corrections += 1
+            item_source = item.get("source", "") or ""
+            # Preserve manual_correction source so adaptive_memory weights it at 1.5.
+            # All other correction-file entries use the generic daily batch source.
+            obs_source = item_source if item_source == "manual_correction" else "daily_user_correction"
+            pair_weight = _pair_weight_for_source(item_source)
             pairs = extract_token_replacements(original, corrected)
             for src, dst in pairs:
                 key = f"{src.lower()}->{dst.lower()}"
                 pair_counts[key] += 1
+                pair_weights[key] = round(pair_weights.get(key, 0.0) + pair_weight, 3)
                 pair_sources.setdefault(key, Counter())["user"] += 1
             if not dry_run:
                 self.manager.observe(
                     raw_text=original,
                     final_text=corrected,
                     metadata={
-                        "source": "daily_user_correction",
+                        "source": obs_source,
                         "event_date": item["event_date"],
                         "item_id": item.get("item_id", 0),
                     },
                 )
             observed_user += 1
+            if item_source == "manual_correction":
+                observed_manual += 1
 
             feedback_text = corrected if len(corrected) >= len(original) else original
             themes = self._instruction_themes(feedback_text)
@@ -538,6 +570,7 @@ class DailyLearningJob:
             for src, dst in pairs:
                 key = f"{src.lower()}->{dst.lower()}"
                 pair_counts[key] += 1
+                pair_weights[key] = round(pair_weights.get(key, 0.0) + _AUTO_PAIR_WEIGHT, 3)
                 pair_sources.setdefault(key, Counter())["auto"] += 1
             if not dry_run:
                 self.manager.observe(
@@ -568,21 +601,27 @@ class DailyLearningJob:
                 ):
                     observed_instruction += 1
 
-        top_pairs: List[Dict[str, Any]] = []
-        for key, count in pair_counts.most_common(24):
+        # Gather candidate pairs, then sort by accumulated weight so user-driven
+        # corrections rank above equally-observed auto-analysis pairs.
+        candidate_pairs: List[Dict[str, Any]] = []
+        for key, count in pair_counts.most_common(48):
             src, dst = key.split("->", 1)
             source_counts = pair_sources.get(key, Counter())
-            top_pairs.append(
+            w = round(pair_weights.get(key, float(count)), 3)
+            candidate_pairs.append(
                 {
                     "from": src,
                     "to": dst,
                     "count": int(count),
+                    "weight": w,
                     "sources": {
                         "user": int(source_counts.get("user", 0)),
                         "auto": int(source_counts.get("auto", 0)),
                     },
                 }
             )
+        candidate_pairs.sort(key=lambda x: (x["weight"], x["count"]), reverse=True)
+        top_pairs = candidate_pairs[:24]
 
         user_pair_total = int(sum(int(source.get("user", 0)) for source in pair_sources.values()))
         auto_pair_total = int(sum(int(source.get("auto", 0)) for source in pair_sources.values()))
@@ -612,6 +651,7 @@ class DailyLearningJob:
             correction_items_total=int(len(corrections)),
             correction_items_used=int(used_corrections),
             observed_from_user_corrections=int(observed_user),
+            observed_from_manual_corrections=int(observed_manual),
             observed_from_auto_analysis=int(observed_auto),
             instructional_items_total=int(instructional_total),
             instructional_items_used=int(instructional_used),
