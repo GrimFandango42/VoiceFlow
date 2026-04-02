@@ -160,6 +160,7 @@ class Config:
     audio_noise_gate_threshold: float = 0.005  # RMS below which a frame is gated to silence
     audio_noise_gate_frame_ms: float = 20.0     # Analysis frame size for noise gate in milliseconds
 
+
     # Phase 2 Optimization: Advanced Performance Features (Research-Based)
     enable_gpu_acceleration: bool = True  # Enable GPU acceleration (6-7x speedup)
     enable_dual_model_strategy: bool = True  # tiny.en first, then small.en for quality
@@ -253,6 +254,7 @@ class Config:
     adaptive_store_raw_text: bool = False  # Keep short local snippets only when explicitly enabled
     adaptive_retention_hours: int = 72  # Auto-purge learning and audit records
     adaptive_min_count: int = 3  # Repetition count required before auto-apply
+    adaptive_user_correction_min_count: int = 2  # Lower threshold for user-driven corrections
     adaptive_max_rules: int = 200  # Cap learned replacements to bound memory
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
     longrun_housekeeping_enabled: bool = True  # periodic long-run health telemetry and cleanup hooks
