@@ -4,9 +4,9 @@ import json
 import os
 import re
 import textwrap
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Dict, Any, Mapping, Optional
-
+from typing import Any, Dict, Optional
 
 SYMBOL_MAP: Dict[str, str] = {
     # Brackets
@@ -186,6 +186,9 @@ _TECH_TERM_CACHE_KEY: tuple[str, float] | None = None
 _TECH_TERM_CACHE_ALWAYS: tuple[tuple[re.Pattern[str], str], ...] = ()
 _TECH_TERM_CACHE_CONTEXTUAL: tuple[tuple[re.Pattern[str], str], ...] = ()
 
+_VOCAB_CACHE_KEY: tuple[str, float] | None = None
+_VOCAB_CACHE_RULES: tuple[tuple[re.Pattern[str], str], ...] = ()
+
 
 _TERMINAL_PROCESS_HINTS = (
     "windowsterminal",
@@ -284,6 +287,71 @@ def _resolve_technical_terms_path() -> Path:
         if Path("engineering_terms.json").exists():
             return Path("engineering_terms.json")
         return Path("technical_terms.json")
+
+
+def _resolve_vocabulary_path() -> Path:
+    override = str(os.environ.get("VOICEFLOW_VOCABULARY_PATH", "")).strip()
+    if override:
+        return Path(override).expanduser()
+    try:
+        from voiceflow.utils.settings import config_dir
+
+        return config_dir() / "custom_vocabulary.txt"
+    except Exception:
+        return Path("custom_vocabulary.txt")
+
+
+def _load_custom_vocabulary() -> tuple[tuple[re.Pattern[str], str], ...]:
+    """Load user-editable vocabulary file with mtime-based caching.
+
+    File format (custom_vocabulary.txt):
+        # Lines starting with # are comments
+        wrong phrase -> correct phrase
+        terraforce -> terraform
+        cloud desktop -> Claude Desktop
+    """
+    global _VOCAB_CACHE_KEY, _VOCAB_CACHE_RULES
+
+    path = _resolve_vocabulary_path()
+    try:
+        resolved = str(path.resolve())
+    except Exception:
+        resolved = str(path)
+
+    mtime = -1.0
+    if path.exists():
+        try:
+            mtime = float(path.stat().st_mtime)
+        except Exception:
+            mtime = -1.0
+
+    key = (resolved, mtime)
+    if _VOCAB_CACHE_KEY == key:
+        return _VOCAB_CACHE_RULES
+
+    rules: list[tuple[re.Pattern[str], str]] = []
+    if path.exists():
+        try:
+            for raw_line in path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "->" not in line:
+                    continue
+                src, _, dst = line.partition("->")
+                src, dst = src.strip(), dst.strip()
+                if not src or not dst:
+                    continue
+                try:
+                    rules.append((re.compile(rf"\b{re.escape(src)}\b", re.IGNORECASE), dst))
+                except re.error:
+                    pass
+        except Exception:
+            rules = []
+
+    _VOCAB_CACHE_KEY = key
+    _VOCAB_CACHE_RULES = tuple(rules)
+    return _VOCAB_CACHE_RULES
 
 
 def _compile_exact_term_rules(mapping: dict[str, str]) -> tuple[tuple[re.Pattern[str], str], ...]:
@@ -386,7 +454,8 @@ def _load_custom_technical_term_rules() -> tuple[tuple[tuple[re.Pattern[str], st
 
 
 def _apply_technical_term_dictionary(text: str, technical_context: bool) -> str:
-    updated = _apply_regex_rules(text, _GLOBAL_TECH_TERM_RULES)
+    updated = _apply_regex_rules(text, _load_custom_vocabulary())
+    updated = _apply_regex_rules(updated, _GLOBAL_TECH_TERM_RULES)
     if technical_context:
         updated = _apply_regex_rules(updated, _CONTEXTUAL_TECH_TERM_RULES)
     custom_always, custom_contextual = _load_custom_technical_term_rules()
@@ -422,8 +491,7 @@ def apply_code_mode(text: str, lowercase: bool = True) -> str:
 
 
 def format_transcript_text(text: str) -> str:
-    """
-    Improve transcript formatting for better readability.
+    """Improve transcript formatting for better readability.
 
     Addresses common speech-to-text formatting issues:
     - Sentence capitalization
@@ -455,8 +523,7 @@ def format_transcript_text(text: str) -> str:
 
 
 def infer_destination_profile(destination: Optional[Mapping[str, Any]]) -> str:
-    """
-    Infer output profile based on destination window metadata.
+    """Infer output profile based on destination window metadata.
 
     Profiles:
     - terminal: shells and command prompts
@@ -492,8 +559,7 @@ def format_transcript_for_destination(
     destination: Optional[Mapping[str, Any]] = None,
     audio_duration: float = 0.0,
 ) -> str:
-    """
-    Format transcript for readability with lightweight destination-aware rules.
+    """Format transcript for readability with lightweight destination-aware rules.
     """
     formatted = format_transcript_text(text)
     if not formatted.strip():
@@ -583,8 +649,7 @@ def _should_hard_wrap_for_destination(
     profile: str,
     destination: Optional[Mapping[str, Any]],
 ) -> bool:
-    """
-    Only emit hard line breaks for destinations that truly benefit from them.
+    """Only emit hard line breaks for destinations that truly benefit from them.
 
     Normal editors, documents, and chat inputs already soft-wrap text. Hard-wrapping
     prose there creates fake formatting artifacts that look like paragraph breaks.
@@ -899,8 +964,7 @@ def _apply_light_typo_corrections(text: str) -> str:
 
 
 def _apply_safe_second_pass_cleanup(text: str) -> str:
-    """
-    Deterministic, low-cost cleanup pass.
+    """Deterministic, low-cost cleanup pass.
     Keep rules conservative to preserve user intent and latency.
     """
     if not text:
@@ -918,8 +982,7 @@ def _apply_safe_second_pass_cleanup(text: str) -> str:
 
 
 def _apply_heavy_second_pass_cleanup(text: str) -> str:
-    """
-    Optional stronger cleanup.
+    """Optional stronger cleanup.
     This pass is deliberately opt-in because it can be more aggressive.
     """
     if not text:
@@ -939,8 +1002,7 @@ def _apply_heavy_second_pass_cleanup(text: str) -> str:
 
 
 def apply_second_pass_cleanup(text: str, *, heavy: bool = False) -> str:
-    """
-    Public second-pass cleanup API used by runtime postprocessing.
+    """Public second-pass cleanup API used by runtime postprocessing.
     """
     cleaned = _apply_safe_second_pass_cleanup(text or "")
     if heavy:
@@ -1504,8 +1566,7 @@ def _convert_numbered_list_block_to_bullets(text: str) -> str:
 
 
 def format_example_transcript(text: str) -> str:
-    """
-    Format the example transcript you provided to show improvements.
+    """Format the example transcript you provided to show improvements.
     This demonstrates the enhanced formatting capability.
     """
     # Your original text (cleaned up version)

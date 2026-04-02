@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 from voiceflow.core.textproc import (
     apply_code_mode,
     apply_second_pass_cleanup,
-    format_transcript_text,
     format_transcript_for_destination,
+    format_transcript_text,
     infer_destination_profile,
     normalize_context_terms,
 )
@@ -364,3 +366,101 @@ def test_format_transcript_text_splits_long_run_on_clause():
     out = format_transcript_text(src)
     assert ". And then" in out or ". Because" in out
 
+
+# ---------------------------------------------------------------------------
+# Custom vocabulary tests
+# ---------------------------------------------------------------------------
+
+def _vocab_file(tmp_path: Path, content: str) -> Path:
+    """Write a temporary vocabulary file and point the env var at it."""
+    p = tmp_path / "custom_vocabulary.txt"
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
+def test_custom_vocabulary_single_word_replacement(tmp_path):
+    vf = _vocab_file(tmp_path, "terraforce -> terraform\n")
+    os.environ["VOICEFLOW_VOCABULARY_PATH"] = str(vf)
+    try:
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None  # bust cache
+        result = normalize_context_terms("we should use terraforce for this")
+        assert "terraforce" not in result.lower()
+        assert "terraform" in result.lower()
+    finally:
+        del os.environ["VOICEFLOW_VOCABULARY_PATH"]
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None
+
+
+def test_custom_vocabulary_multi_word_phrase(tmp_path):
+    vf = _vocab_file(tmp_path, "cloud desktop -> Claude Desktop\n")
+    os.environ["VOICEFLOW_VOCABULARY_PATH"] = str(vf)
+    try:
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None
+        result = normalize_context_terms("please open cloud desktop now")
+        assert "Claude Desktop" in result
+    finally:
+        del os.environ["VOICEFLOW_VOCABULARY_PATH"]
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None
+
+
+def test_custom_vocabulary_case_insensitive_match(tmp_path):
+    vf = _vocab_file(tmp_path, "veeva -> Veeva\n")
+    os.environ["VOICEFLOW_VOCABULARY_PATH"] = str(vf)
+    try:
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None
+        result = normalize_context_terms("the VEEVA system is ready")
+        assert "Veeva" in result
+    finally:
+        del os.environ["VOICEFLOW_VOCABULARY_PATH"]
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None
+
+
+def test_custom_vocabulary_comments_and_blank_lines_ignored(tmp_path):
+    vf = _vocab_file(tmp_path, "# this is a comment\n\njohn -> John\n  \n# another comment\n")
+    os.environ["VOICEFLOW_VOCABULARY_PATH"] = str(vf)
+    try:
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None
+        result = normalize_context_terms("send this to john please")
+        assert "John" in result
+    finally:
+        del os.environ["VOICEFLOW_VOCABULARY_PATH"]
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None
+
+
+def test_custom_vocabulary_missing_file_does_not_error(tmp_path):
+    os.environ["VOICEFLOW_VOCABULARY_PATH"] = str(tmp_path / "nonexistent_vocab.txt")
+    try:
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None
+        result = normalize_context_terms("some text with no vocabulary")
+        assert "some text" in result
+    finally:
+        del os.environ["VOICEFLOW_VOCABULARY_PATH"]
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None
+
+
+def test_custom_vocabulary_mtime_cache(tmp_path):
+    vf = _vocab_file(tmp_path, "wrongword -> RightWord\n")
+    os.environ["VOICEFLOW_VOCABULARY_PATH"] = str(vf)
+    try:
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None
+        # First call loads from disk
+        r1 = normalize_context_terms("use wrongword here")
+        assert "RightWord" in r1
+        # Second call should hit cache (same mtime)
+        r2 = normalize_context_terms("use wrongword here")
+        assert r1 == r2
+    finally:
+        del os.environ["VOICEFLOW_VOCABULARY_PATH"]
+        import voiceflow.core.textproc as tp
+        tp._VOCAB_CACHE_KEY = None
