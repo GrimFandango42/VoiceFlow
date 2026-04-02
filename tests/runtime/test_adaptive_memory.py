@@ -91,7 +91,7 @@ def test_extract_learning_pairs_supports_short_phrases():
 def test_phrase_rules_apply_before_single_token_rules():
     base_dir = _test_dir("adaptive-phrase-ordering")
     try:
-        manager = _manager(base_dir, adaptive_min_count=1, adaptive_max_phrase_tokens=4)
+        manager = _manager(base_dir, adaptive_min_count=1, adaptive_user_correction_min_count=1, adaptive_max_phrase_tokens=4)
         manager.observe("cloud", "Claude", {"source": "daily_user_correction"})
         manager.observe("cloud desktop", "Claude Desktop", {"source": "daily_user_correction"})
         assert manager.apply("open cloud desktop now") == "open Claude Desktop now"

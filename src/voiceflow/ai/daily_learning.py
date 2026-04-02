@@ -768,7 +768,7 @@ class DailyLearningJob:
         # corrections rank above equally-observed auto-analysis pairs.
         candidate_pairs: List[Dict[str, Any]] = []
         for key, count in pair_counts.most_common(48):
-            src, dst = key.split("->", 1)
+            src, dst = pair_display.get(key, tuple(key.split("->", 1)))  # type: ignore[assignment]
             source_counts = pair_sources.get(key, Counter())
             w = round(pair_weights.get(key, float(count)), 3)
             candidate_pairs.append(
