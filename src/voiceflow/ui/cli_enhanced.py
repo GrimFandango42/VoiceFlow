@@ -22,6 +22,7 @@ from typing import Any, Deque, Dict, Optional, Tuple
 import numpy as np
 
 from voiceflow.core.audio_enhanced import EnhancedAudioRecorder
+from voiceflow.core.audio_preprocessing import AudioPreprocessor
 from voiceflow.core.config import Config
 
 # Use new unified ASR engine with model tier support.
