@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-VoiceFlow hot-reload dev launcher — two-process edition.
+"""VoiceFlow hot-reload dev launcher — two-process edition.
 
 Splits VoiceFlow into two processes so Whisper never has to reload on code
 changes:
@@ -41,7 +40,6 @@ import time
 import urllib.request
 from pathlib import Path
 from typing import Optional
-
 
 REPO_ROOT = Path(__file__).resolve().parent
 SRC_DIR = REPO_ROOT / "src"
@@ -141,7 +139,7 @@ def _start_model_server(port: int, env: dict[str, str]) -> subprocess.Popen:
         "--port", str(port),
     ]
     print(f"\n[dev] Starting model server: {' '.join(cmd)}", flush=True)
-    return subprocess.Popen(cmd, env=env)
+    return subprocess.Popen(cmd, env=env, cwd=str(SRC_DIR))
 
 
 def _start_app(extra_args: list[str], env: dict[str, str]) -> subprocess.Popen:
