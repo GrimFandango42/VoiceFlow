@@ -145,9 +145,14 @@ def _start_model_server(port: int, env: dict[str, str]) -> subprocess.Popen:
 
 
 def _start_app(extra_args: list[str], env: dict[str, str]) -> subprocess.Popen:
-    cmd = [sys.executable, str(ENTRY_POINT)] + extra_args
-    print(f"\n[dev] Starting app: {' '.join(cmd)}", flush=True)
-    return subprocess.Popen(cmd, env=env)
+    # Use _app_entry.py wrapper instead of -m voiceflow.ui.cli_enhanced.
+    # The singleton logic in cli_enhanced.py kills processes whose cmdline
+    # contains "-m voiceflow.ui.cli_enhanced" (psutil.terminate -> exit 15).
+    # The frozen exe was immune; this wrapper achieves the same effect.
+    entry = REPO_ROOT / "_app_entry.py"
+    cmd = [sys.executable, str(entry)] + extra_args
+    print(f"\n[dev] Starting app: {' '.join(cmd)}  (cwd={SRC_DIR})", flush=True)
+    return subprocess.Popen(cmd, env=env, cwd=str(SRC_DIR))
 
 
 # ---------------------------------------------------------------------------

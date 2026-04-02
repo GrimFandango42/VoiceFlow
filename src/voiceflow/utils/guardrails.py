@@ -759,11 +759,41 @@ def validate_config(cfg: Config) -> Config:
             logger.warning(f"Invalid adaptive_max_rules {getattr(cfg, 'adaptive_max_rules', 'None')}, defaulting to 200")
             cfg.adaptive_max_rules = 200
 
+        if not hasattr(cfg, 'adaptive_max_phrase_tokens') or cfg.adaptive_max_phrase_tokens < 1 or cfg.adaptive_max_phrase_tokens > 8:
+            logger.warning(
+                f"Invalid adaptive_max_phrase_tokens {getattr(cfg, 'adaptive_max_phrase_tokens', 'None')}, defaulting to 4"
+            )
+            cfg.adaptive_max_phrase_tokens = 4
+
         if not hasattr(cfg, 'adaptive_snippet_chars') or cfg.adaptive_snippet_chars < 50 or cfg.adaptive_snippet_chars > 2000:
             logger.warning(
                 f"Invalid adaptive_snippet_chars {getattr(cfg, 'adaptive_snippet_chars', 'None')}, defaulting to 200"
             )
             cfg.adaptive_snippet_chars = 200
+
+        if not hasattr(cfg, 'adaptive_ai_analysis_enabled'):
+            cfg.adaptive_ai_analysis_enabled = True
+
+        if (
+            not hasattr(cfg, 'adaptive_ai_analysis_max_items')
+            or int(getattr(cfg, 'adaptive_ai_analysis_max_items', 0)) < 1
+            or int(getattr(cfg, 'adaptive_ai_analysis_max_items', 0)) > 40
+        ):
+            logger.warning(
+                f"Invalid adaptive_ai_analysis_max_items {getattr(cfg, 'adaptive_ai_analysis_max_items', 'None')}, defaulting to 8"
+            )
+            cfg.adaptive_ai_analysis_max_items = 8
+
+        if (
+            not hasattr(cfg, 'adaptive_ai_analysis_max_suggestions')
+            or int(getattr(cfg, 'adaptive_ai_analysis_max_suggestions', 0)) < 1
+            or int(getattr(cfg, 'adaptive_ai_analysis_max_suggestions', 0)) > 20
+        ):
+            logger.warning(
+                "Invalid adaptive_ai_analysis_max_suggestions %s, defaulting to 8",
+                getattr(cfg, 'adaptive_ai_analysis_max_suggestions', 'None'),
+            )
+            cfg.adaptive_ai_analysis_max_suggestions = 8
 
         if not hasattr(cfg, 'command_mode_prefix') or not str(cfg.command_mode_prefix).strip():
             logger.warning("Invalid command_mode_prefix, defaulting to 'command'")

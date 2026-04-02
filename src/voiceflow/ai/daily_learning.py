@@ -9,11 +9,11 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from voiceflow.ai.adaptive_memory import AdaptiveLearningManager
+from voiceflow.ai.adaptive_memory import AdaptiveLearningManager, extract_learning_pairs
+from voiceflow.ai.llm_client import get_llm_client
 from voiceflow.core.config import Config
 from voiceflow.core.textproc import format_transcript_text, normalize_context_terms
 from voiceflow.utils.settings import config_dir, load_config
@@ -202,25 +202,7 @@ def _parse_local_date_from_hms(value: Any, file_mtime: datetime) -> Optional[dat
 
 
 def extract_token_replacements(raw_text: str, final_text: str) -> List[Tuple[str, str]]:
-    raw_words = _tokenize_words(raw_text)
-    final_words = _tokenize_words(final_text)
-    if not raw_words or not final_words:
-        return []
-    matcher = SequenceMatcher(a=[t.lower() for t in raw_words], b=[t.lower() for t in final_words])
-    matches: List[Tuple[str, str]] = []
-    for tag, a0, a1, b0, b1 in matcher.get_opcodes():
-        if tag != "replace":
-            continue
-        if (a1 - a0) != 1 or (b1 - b0) != 1:
-            continue
-        src = raw_words[a0]
-        dst = final_words[b0]
-        if src.lower() == dst.lower():
-            continue
-        if len(src) < 2 or len(dst) < 2:
-            continue
-        matches.append((src, dst))
-    return matches
+    return extract_learning_pairs(raw_text, final_text)
 
 
 def _tokenize_words(text: str) -> List[str]:
@@ -236,6 +218,21 @@ def _tokenize_words(text: str) -> List[str]:
     if token:
         chars.append("".join(token))
     return chars
+
+
+def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    body = str(text or "").strip()
+    if not body:
+        return None
+    start = body.find("{")
+    end = body.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        parsed = json.loads(body[start:end + 1])
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 @dataclass
@@ -474,6 +471,169 @@ class DailyLearningJob:
             )
         return True
 
+    def _run_ai_learning_analysis(
+        self,
+        *,
+        target_date: date,
+        corrections: List[Dict[str, Any]],
+        history_rows: List[Dict[str, Any]],
+        top_pairs: List[Dict[str, Any]],
+        top_instruction_themes: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        enabled = bool(getattr(self.cfg, "adaptive_ai_analysis_enabled", True))
+        max_items = max(1, int(getattr(self.cfg, "adaptive_ai_analysis_max_items", 8)))
+        max_suggestions = max(1, int(getattr(self.cfg, "adaptive_ai_analysis_max_suggestions", 8)))
+        result: Dict[str, Any] = {
+            "enabled": enabled,
+            "available": False,
+            "success": False,
+            "model": "",
+            "duration_ms": 0.0,
+            "error": "",
+            "summary": "",
+            "suggested_phrase_replacements": [],
+            "protected_terms": [],
+            "stopword_candidates": [],
+            "learning_system_changes": [],
+            "input_counts": {
+                "corrections": min(len(corrections), max_items),
+                "history_items": min(len(history_rows), max_items),
+                "top_pairs": min(len(top_pairs), max_suggestions),
+                "top_themes": min(len(top_instruction_themes), max_suggestions),
+            },
+        }
+        if not enabled:
+            result["error"] = "disabled"
+            return result
+
+        correction_samples = [
+            {
+                "original": item.get("original_text", ""),
+                "corrected": item.get("corrected_text", ""),
+            }
+            for item in corrections[-max_items:]
+        ]
+        history_samples = [
+            {
+                "text": item.get("full_text", ""),
+                "audio_duration": float(item.get("audio_duration", 0.0)),
+            }
+            for item in history_rows[-max_items:]
+        ]
+        prompt_payload = {
+            "target_date": target_date.isoformat(),
+            "correction_samples": correction_samples,
+            "history_samples": history_samples,
+            "top_replacement_pairs": top_pairs[:max_suggestions],
+            "top_instruction_themes": top_instruction_themes[:max_suggestions],
+            "adaptive_snapshot": self.manager.snapshot(max_rules=8, max_tokens=16),
+        }
+
+        try:
+            client = get_llm_client(model=str(getattr(self.cfg, "ai_model", "") or "").strip() or None)
+        except Exception as exc:
+            result["error"] = f"client_init_failed:{exc}"
+            return result
+
+        result["model"] = str(getattr(client, "model", "") or "")
+        try:
+            available = bool(client.is_available())
+        except Exception as exc:
+            result["error"] = f"availability_check_failed:{exc}"
+            return result
+        result["available"] = available
+        if not available:
+            result["error"] = "ollama_unavailable"
+            return result
+
+        system_prompt = (
+            "You analyze local dictation-learning data for a privacy-first transcription app. "
+            "Return JSON only. Be conservative. Base suggestions only on the provided evidence. "
+            "Prefer phrase-level corrections, protected product names, filler-word stoplist candidates, "
+            "and concrete learning-system improvements. Do not suggest risky blanket rewrites."
+        )
+        user_prompt = (
+            "Analyze this learning data and suggest what the learning system should improve.\n"
+            "Return JSON with keys: summary, suggested_phrase_replacements, protected_terms, "
+            "stopword_candidates, learning_system_changes.\n"
+            "Each suggested_phrase_replacements item must have from, to, confidence, reason.\n"
+            "Keep each list short.\n\n"
+            f"{json.dumps(prompt_payload, ensure_ascii=True, indent=2)}"
+        )
+
+        response = client.generate(
+            prompt=user_prompt,
+            system=system_prompt,
+            temperature=0.1,
+            max_tokens=700,
+        )
+        result["duration_ms"] = float(getattr(response, "duration_ms", 0.0) or 0.0)
+        result["model"] = str(getattr(response, "model", "") or result["model"])
+        if not bool(getattr(response, "success", False)):
+            result["error"] = str(getattr(response, "error", "") or "generation_failed")
+            return result
+
+        parsed = _extract_json_object(getattr(response, "text", ""))
+        if not parsed:
+            result["error"] = "invalid_json"
+            return result
+
+        result["summary"] = str(parsed.get("summary", "") or "").strip()[:600]
+        phrase_limit = max(1, int(getattr(self.cfg, "adaptive_max_phrase_tokens", 4)))
+        suggestions: List[Dict[str, str]] = []
+        for item in parsed.get("suggested_phrase_replacements", []) or []:
+            if not isinstance(item, dict):
+                continue
+            src = str(item.get("from", "") or "").strip()
+            dst = str(item.get("to", "") or "").strip()
+            confidence = str(item.get("confidence", "") or "").strip().lower() or "medium"
+            reason = str(item.get("reason", "") or "").strip()[:240]
+            if not src or not dst or src.lower() == dst.lower():
+                continue
+            if len(_tokenize_words(src)) > phrase_limit or len(_tokenize_words(dst)) > phrase_limit:
+                continue
+            suggestions.append(
+                {
+                    "from": src,
+                    "to": dst,
+                    "confidence": confidence,
+                    "reason": reason,
+                }
+            )
+            if len(suggestions) >= max_suggestions:
+                break
+        result["suggested_phrase_replacements"] = suggestions
+
+        def _normalize_text_list(values: Any, preferred_keys: Tuple[str, ...]) -> List[str]:
+            cleaned: List[str] = []
+            for value in values or []:
+                if isinstance(value, dict):
+                    text = ""
+                    for key in preferred_keys:
+                        candidate = str(value.get(key, "") or "").strip()
+                        if candidate:
+                            text = candidate
+                            break
+                    if not text:
+                        text = json.dumps(value, ensure_ascii=True)
+                else:
+                    text = str(value or "").strip()
+                if not text:
+                    continue
+                cleaned.append(text)
+                if len(cleaned) >= max_suggestions:
+                    break
+            return cleaned
+
+        result["protected_terms"] = _normalize_text_list(parsed.get("protected_terms", []), ("term", "name", "text"))
+        result["stopword_candidates"] = _normalize_text_list(parsed.get("stopword_candidates", []), ("token", "term", "text"))
+        result["learning_system_changes"] = _normalize_text_list(
+            parsed.get("learning_system_changes", []),
+            ("change", "recommendation", "text"),
+        )
+        result["success"] = True
+        return result
+
     def run(
         self,
         days_back: int = 1,
@@ -494,6 +654,7 @@ class DailyLearningJob:
         pair_counts: Counter[str] = Counter()
         pair_weights: Dict[str, float] = {}
         pair_sources: Dict[str, Counter[str]] = {}
+        pair_display: Dict[str, Tuple[str, str]] = {}
         observed_user = 0
         observed_manual = 0
         observed_auto = 0
@@ -528,6 +689,7 @@ class DailyLearningJob:
                 pair_counts[key] += 1
                 pair_weights[key] = round(pair_weights.get(key, 0.0) + pair_weight, 3)
                 pair_sources.setdefault(key, Counter())["user"] += 1
+                pair_display.setdefault(key, (src, dst))
             if not dry_run:
                 self.manager.observe(
                     raw_text=original,
@@ -572,6 +734,7 @@ class DailyLearningJob:
                 pair_counts[key] += 1
                 pair_weights[key] = round(pair_weights.get(key, 0.0) + _AUTO_PAIR_WEIGHT, 3)
                 pair_sources.setdefault(key, Counter())["auto"] += 1
+                pair_display.setdefault(key, (src, dst))
             if not dry_run:
                 self.manager.observe(
                     raw_text=raw_text,
@@ -633,6 +796,13 @@ class DailyLearningJob:
             }
             for theme, count in instructional_theme_counts.most_common(10)
         ]
+        ai_learning_analysis = self._run_ai_learning_analysis(
+            target_date=target_date,
+            corrections=corrections,
+            history_rows=history_rows,
+            top_pairs=top_pairs,
+            top_instruction_themes=top_instruction_themes,
+        )
 
         if not dry_run and instructional_used > 0:
             entry_map = insights_state.setdefault("entry_points", {})
@@ -673,6 +843,7 @@ class DailyLearningJob:
                 "entry_point_counts": {k: int(v) for k, v in entry_point_counts.items()},
                 "insights_path": str(self.insights_path),
             },
+            "ai_learning_analysis": ai_learning_analysis,
             "adaptive_snapshot": self.manager.snapshot(max_rules=12, max_tokens=20),
             "paths": {
                 "base_dir": str(self.base_dir),

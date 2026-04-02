@@ -23,9 +23,20 @@ Batch launchers remain source/debug tools.
   - `setup_completed=false`
   - `show_setup_on_startup=true`
 
+## Dev Mode (Hot-Reload, No Build Needed)
+
+For active development, use the hot-reload launcher. It runs VoiceFlow from source
+and restarts automatically when you save a `.py` file — no packaging required.
+
+```bat
+python dev.py
+```
+
+See `DEVELOPMENT.md` for options, env vars, and model-loading trade-offs.
+
 ## Local Source/Debug Launchers
 
-Use these only when debugging source behavior:
+Use these only when debugging source behavior without the watcher:
 
 - `VoiceFlow_Quick.bat`
 - `VoiceFlow.bat`

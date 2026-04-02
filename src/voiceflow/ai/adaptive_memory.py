@@ -36,6 +36,97 @@ def _tokenize(text: str) -> List[str]:
     return TOKEN_RE.findall(text)
 
 
+def _normalized_learning_phrase(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(text or "").lower())
+
+
+def _should_skip_learning_pair(src_tokens: List[str], dst_tokens: List[str]) -> bool:
+    src = " ".join(src_tokens).strip()
+    dst = " ".join(dst_tokens).strip()
+    if not src or not dst or src.lower() == dst.lower():
+        return True
+    if _normalized_learning_phrase(src) == _normalized_learning_phrase(dst):
+        return True
+    if len(src_tokens) == 1 and len(dst_tokens) == 1:
+        src_lower = src.lower()
+        dst_lower = dst.lower()
+        if src_lower.endswith("'s") and src_lower[:-2] == dst_lower:
+            return True
+        if dst_lower.endswith("'s") and dst_lower[:-2] == src_lower:
+            return True
+    if all(token.lower() in STOP_WORDS for token in (src_tokens + dst_tokens)):
+        return True
+    return False
+
+
+def _has_phrase_context_signal(raw_tokens: List[str], final_tokens: List[str]) -> bool:
+    for raw_token, final_token in zip(raw_tokens, final_tokens):
+        if final_token != final_token.lower():
+            return True
+        if raw_token != final_token:
+            return True
+    return False
+
+
+def extract_learning_pairs(
+    raw_text: str,
+    final_text: str,
+    *,
+    max_phrase_tokens: int = 4,
+) -> List[Tuple[str, str]]:
+    raw_tokens = _tokenize(raw_text)
+    final_tokens = _tokenize(final_text)
+    if not raw_tokens or not final_tokens:
+        return []
+
+    max_span = max(1, int(max_phrase_tokens or 1))
+    matches: List[Tuple[str, str]] = []
+    seen: set[Tuple[str, str]] = set()
+    matcher = SequenceMatcher(a=[t.lower() for t in raw_tokens], b=[t.lower() for t in final_tokens])
+    opcodes = matcher.get_opcodes()
+    for idx, (tag, a0, a1, b0, b1) in enumerate(opcodes):
+        if tag != "replace":
+            continue
+        src_tokens = raw_tokens[a0:a1]
+        dst_tokens = final_tokens[b0:b1]
+        if not src_tokens or not dst_tokens:
+            continue
+        if len(src_tokens) > max_span or len(dst_tokens) > max_span:
+            continue
+        if _should_skip_learning_pair(src_tokens, dst_tokens):
+            continue
+        pair = (" ".join(src_tokens), " ".join(dst_tokens))
+        if pair not in seen:
+            matches.append(pair)
+            seen.add(pair)
+
+        if idx + 1 >= len(opcodes):
+            continue
+        next_tag, na0, na1, nb0, nb1 = opcodes[idx + 1]
+        if next_tag != "equal":
+            continue
+        trailing_raw = raw_tokens[na0:na1]
+        trailing_final = final_tokens[nb0:nb1]
+        if not trailing_raw or not trailing_final:
+            continue
+        if not _has_phrase_context_signal(trailing_raw, trailing_final):
+            continue
+        max_take = min(len(trailing_raw), len(trailing_final), max_span - max(len(src_tokens), len(dst_tokens)))
+        if max_take <= 0:
+            continue
+        for take in range(1, max_take + 1):
+            phrase_src = src_tokens + trailing_raw[:take]
+            phrase_dst = dst_tokens + trailing_final[:take]
+            if _should_skip_learning_pair(phrase_src, phrase_dst):
+                continue
+            phrase_pair = (" ".join(phrase_src), " ".join(phrase_dst))
+            if phrase_pair in seen:
+                continue
+            matches.append(phrase_pair)
+            seen.add(phrase_pair)
+    return matches
+
+
 class AdaptiveLearningManager:
     """Local temporary pattern learner with retention-based purging."""
 
@@ -47,6 +138,7 @@ class AdaptiveLearningManager:
         # User-provided corrections are high-signal; activate after fewer observations.
         self.user_correction_min_count = int(getattr(cfg, "adaptive_user_correction_min_count", 2))
         self.max_rules = int(getattr(cfg, "adaptive_max_rules", 200))
+        self.max_phrase_tokens = int(getattr(cfg, "adaptive_max_phrase_tokens", 4))
         self._max_preview_len = int(getattr(cfg, "adaptive_snippet_chars", 200))
 
         base = config_dir()
@@ -69,6 +161,7 @@ class AdaptiveLearningManager:
         output = text
         now = int(time.time())
         replacements = self._patterns.get("replacements", {})
+        active_rules: List[Tuple[int, int, re.Pattern[str], str]] = []
 
         for entry in replacements.values():
             score = float(entry.get("score", entry.get("count", 0)))
@@ -95,6 +188,10 @@ class AdaptiveLearningManager:
                 continue
 
             pattern = re.compile(rf"\b{re.escape(src)}\b", re.IGNORECASE)
+            token_count = max(1, len(_tokenize(src)))
+            active_rules.append((token_count, len(src), pattern, dst))
+
+        for _, _, pattern, dst in sorted(active_rules, key=lambda item: (item[0], item[1]), reverse=True):
             output = pattern.sub(lambda m, replacement=dst: self._match_case(m.group(0), replacement), output)
 
         return output
@@ -187,26 +284,11 @@ class AdaptiveLearningManager:
         return float(weighted_sources.get(str(source or "").strip().lower(), 1.0))
 
     def _extract_replacements(self, raw_text: str, final_text: str) -> List[Tuple[str, str]]:
-        raw_tokens = _tokenize(raw_text)
-        final_tokens = _tokenize(final_text)
-        if not raw_tokens or not final_tokens:
-            return []
-
-        matches: List[Tuple[str, str]] = []
-        matcher = SequenceMatcher(a=[t.lower() for t in raw_tokens], b=[t.lower() for t in final_tokens])
-        for tag, a0, a1, b0, b1 in matcher.get_opcodes():
-            if tag != "replace":
-                continue
-            if (a1 - a0) != 1 or (b1 - b0) != 1:
-                continue
-            src = raw_tokens[a0]
-            dst = final_tokens[b0]
-            if src.lower() == dst.lower():
-                continue
-            if len(src) < 2 or len(dst) < 2:
-                continue
-            matches.append((src, dst))
-        return matches
+        return extract_learning_pairs(
+            raw_text,
+            final_text,
+            max_phrase_tokens=self.max_phrase_tokens,
+        )
 
     def _append_event(
         self,
@@ -323,6 +405,8 @@ class AdaptiveLearningManager:
     def _match_case(source_word: str, replacement: str) -> str:
         if source_word.isupper():
             return replacement.upper()
+        if any(ch.isupper() for ch in replacement[1:]):
+            return replacement
         if source_word[:1].isupper():
             return replacement[:1].upper() + replacement[1:]
         return replacement.lower()

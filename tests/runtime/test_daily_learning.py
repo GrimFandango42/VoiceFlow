@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from voiceflow.ai.daily_learning import DailyLearningJob
+from voiceflow.ai.llm_client import LLMResponse
 from voiceflow.core.config import Config
 
 
@@ -108,8 +109,34 @@ def test_daily_learning_auto_analysis_learns_from_history():
         stats = report["stats"]
         assert stats["history_items_used"] == 1
         assert stats["observed_from_auto_analysis"] == 1
-        assert any(item["to"] == "terraform" for item in report["top_replacement_pairs"])
+        assert any(item["to"].lower() == "terraform" for item in report["top_replacement_pairs"])
         assert job.manager.apply("use terraforce now") == "use terraform now"
+    finally:
+        shutil.rmtree(base_dir, ignore_errors=True)
+
+
+def test_daily_learning_auto_analysis_learns_phrase_replacements_from_history():
+    base_dir = _test_dir("daily-learning-auto-analysis-phrases")
+    try:
+        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
+        _write_jsonl(
+            base_dir / "recent_history_events.jsonl",
+            [
+                {
+                    "event_epoch": yesterday_epoch,
+                    "audio_duration": 7.2,
+                    "full_text": "please review this inside cloud desktop before the next pass",
+                }
+            ],
+        )
+
+        cfg = Config(adaptive_min_count=1, adaptive_store_raw_text=False, adaptive_max_phrase_tokens=4)
+        job = DailyLearningJob(cfg=cfg, base_dir=base_dir)
+        report = job.run(days_back=1, dry_run=False)
+
+        assert any(item["to"] == "Claude Desktop" for item in report["top_replacement_pairs"])
+        assert job.manager.apply("cloud desktop is open") == "Claude Desktop is open"
     finally:
         shutil.rmtree(base_dir, ignore_errors=True)
 
@@ -293,5 +320,66 @@ def test_manual_correction_pairs_outrank_auto_pairs():
                 f"manual pair weight {user_pair['weight']} should exceed "
                 f"auto pair weight {auto_pair['weight']}"
             )
+    finally:
+        shutil.rmtree(base_dir, ignore_errors=True)
+
+
+def test_daily_learning_ai_analysis_returns_structured_suggestions(monkeypatch):
+    base_dir = _test_dir("daily-learning-ai-analysis")
+    try:
+        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
+        _write_jsonl(
+            base_dir / "recent_history_events.jsonl",
+            [
+                {
+                    "event_epoch": yesterday_epoch,
+                    "audio_duration": 9.0,
+                    "full_text": "cloud desktop worked better than the browser for reviewing this code",
+                }
+            ],
+        )
+
+        class _FakeClient:
+            model = "fake-local"
+
+            def is_available(self) -> bool:
+                return True
+
+            def generate(self, prompt, system=None, temperature=0.1, max_tokens=500):
+                return LLMResponse(
+                    text=json.dumps(
+                        {
+                            "summary": "Phrase-level learning should protect Claude product names.",
+                            "suggested_phrase_replacements": [
+                                {
+                                    "from": "cloud desktop",
+                                    "to": "Claude Desktop",
+                                    "confidence": "high",
+                                    "reason": "Observed product-name confusion.",
+                                }
+                            ],
+                            "protected_terms": ["Claude", "Claude Desktop", "Claude Code"],
+                            "stopword_candidates": ["kind", "like"],
+                            "learning_system_changes": ["Prefer phrase-level learning before single-token rewrites."],
+                        },
+                        ensure_ascii=True,
+                    ),
+                    success=True,
+                    model=self.model,
+                    duration_ms=12.0,
+                )
+
+        monkeypatch.setattr("voiceflow.ai.daily_learning.get_llm_client", lambda model=None: _FakeClient())
+
+        cfg = Config(adaptive_min_count=1, adaptive_store_raw_text=False, adaptive_ai_analysis_enabled=True)
+        job = DailyLearningJob(cfg=cfg, base_dir=base_dir)
+        report = job.run(days_back=1, dry_run=False)
+
+        analysis = report["ai_learning_analysis"]
+        assert analysis["success"] is True
+        assert analysis["model"] == "fake-local"
+        assert analysis["suggested_phrase_replacements"][0]["to"] == "Claude Desktop"
+        assert "Claude Desktop" in analysis["protected_terms"]
     finally:
         shutil.rmtree(base_dir, ignore_errors=True)

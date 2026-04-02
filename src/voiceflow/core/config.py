@@ -256,7 +256,11 @@ class Config:
     adaptive_min_count: int = 3  # Repetition count required before auto-apply
     adaptive_user_correction_min_count: int = 2  # Lower threshold for user-driven corrections
     adaptive_max_rules: int = 200  # Cap learned replacements to bound memory
+    adaptive_max_phrase_tokens: int = 4  # Allow short phrase learning, not just single-token swaps
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
+    adaptive_ai_analysis_enabled: bool = True  # Use local LLM during daily learning to suggest higher-level learning changes
+    adaptive_ai_analysis_max_items: int = 8  # Bound history/correction samples sent to the local LLM
+    adaptive_ai_analysis_max_suggestions: int = 8  # Bound AI-proposed phrase/protected-term suggestions
     longrun_housekeeping_enabled: bool = True  # periodic long-run health telemetry and cleanup hooks
     longrun_health_log_interval_seconds: float = 900.0  # periodic memory/queue health snapshot cadence
     longrun_soft_gc_memory_mb: float = 0.0  # 0 = use adaptive threshold derived from current runtime profile

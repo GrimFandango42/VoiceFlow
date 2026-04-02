@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from uuid import uuid4
 
-from voiceflow.ai.adaptive_memory import AdaptiveLearningManager
+from voiceflow.ai.adaptive_memory import AdaptiveLearningManager, extract_learning_pairs
 from voiceflow.core.config import Config
 
 
@@ -75,5 +75,35 @@ def test_snapshot_reports_weighted_rules_and_recent_domain_tokens():
         assert top_rule["score"] == 1.5
         assert top_rule["sources"]["daily_user_correction"] == 1
         assert any(item["token"] == "terraform" for item in snapshot["top_tokens"])
+    finally:
+        shutil.rmtree(base_dir, ignore_errors=True)
+
+
+def test_extract_learning_pairs_supports_short_phrases():
+    pairs = extract_learning_pairs(
+        "open cloud desktop for this review",
+        "open Claude Desktop for this review",
+        max_phrase_tokens=4,
+    )
+    assert ("cloud desktop", "Claude Desktop") in pairs
+
+
+def test_phrase_rules_apply_before_single_token_rules():
+    base_dir = _test_dir("adaptive-phrase-ordering")
+    try:
+        manager = _manager(base_dir, adaptive_min_count=1, adaptive_max_phrase_tokens=4)
+        manager.observe("cloud", "Claude", {"source": "daily_user_correction"})
+        manager.observe("cloud desktop", "Claude Desktop", {"source": "daily_user_correction"})
+        assert manager.apply("open cloud desktop now") == "open Claude Desktop now"
+    finally:
+        shutil.rmtree(base_dir, ignore_errors=True)
+
+
+def test_low_value_contraction_drop_is_not_learned():
+    base_dir = _test_dir("adaptive-low-value-contraction")
+    try:
+        manager = _manager(base_dir, adaptive_min_count=1)
+        manager.observe("Let's", "Let", {"source": "runtime_transcription"})
+        assert manager.apply("Let's start with the first item") == "Let's start with the first item"
     finally:
         shutil.rmtree(base_dir, ignore_errors=True)

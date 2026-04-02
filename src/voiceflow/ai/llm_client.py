@@ -6,12 +6,20 @@ Supports Ollama for local inference with fast, small models.
 
 import logging
 import json
+import time
 import urllib.request
 import urllib.error
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+def _is_text_generation_model(name: str) -> bool:
+    lowered = str(name or "").strip().lower()
+    if not lowered:
+        return False
+    return "embed" not in lowered and "embedding" not in lowered
 
 
 @dataclass
@@ -41,11 +49,17 @@ class OllamaClient:
         self.model = model
         self.timeout = timeout
         self._available = None
+        self._availability_checked_at = 0.0
+        self._availability_retry_seconds = 30.0
+        self._availability_cache_seconds = 300.0
 
     def is_available(self) -> bool:
         """Check if Ollama server is running"""
         if self._available is not None:
-            return self._available
+            age = time.time() - float(self._availability_checked_at or 0.0)
+            ttl = self._availability_cache_seconds if self._available else self._availability_retry_seconds
+            if age < ttl:
+                return self._available
 
         try:
             req = urllib.request.Request(f"{self.base_url}/api/tags")
@@ -53,8 +67,16 @@ class OllamaClient:
                 self._available = response.status == 200
         except Exception:
             self._available = False
+        finally:
+            self._availability_checked_at = time.time()
 
         return self._available
+
+    def refresh_availability(self) -> bool:
+        """Force a fresh availability probe."""
+        self._availability = None
+        self._availability_checked_at = 0.0
+        return self.is_available()
 
     def generate(
         self,
@@ -115,6 +137,8 @@ class OllamaClient:
             )
 
         except urllib.error.URLError as e:
+            self._available = False
+            self._availability_checked_at = time.time()
             logger.warning(f"Ollama request failed: {e}")
             return LLMResponse(
                 text=prompt,
@@ -122,6 +146,8 @@ class OllamaClient:
                 error=str(e),
             )
         except Exception as e:
+            self._available = False
+            self._availability_checked_at = time.time()
             logger.error(f"LLM generation error: {e}")
             return LLMResponse(
                 text=prompt,
@@ -149,26 +175,41 @@ def get_llm_client(model: Optional[str] = None) -> OllamaClient:
     global _client
 
     if _client is None or (model and _client.model != model):
+        temp_client = OllamaClient()
+        available = temp_client.list_models()
+        generation_models = [name for name in available if _is_text_generation_model(name)]
+
         # Prefer smaller, faster models for transcription cleanup
-        if model is None:
-            # Try to find a suitable model
-            temp_client = OllamaClient()
-            available = temp_client.list_models()
+        preferred = [
+            "llama3.2:3b", "llama3.2:1b",
+            "llama3.1", "phi3", "gemma2",
+            "qwen2.5-coder", "qwen2.5",
+            "deepseek-r1",
+        ]
 
-            # Prefer smaller models for speed
-            preferred = [
-                "llama3.2:3b", "llama3.2:1b",
-                "qwen2.5:3b", "qwen2.5-coder:7b",
-                "phi3:mini", "gemma2:2b",
-            ]
-
+        if model:
+            exact_match = next((m for m in generation_models if m == model), None)
+            partial_match = next((m for m in generation_models if model in m or m in model), None)
+            if exact_match:
+                model = exact_match
+            elif partial_match:
+                model = partial_match
+            elif generation_models:
+                fallback = None
+                for pref in preferred:
+                    fallback = next((m for m in generation_models if pref in m), None)
+                    if fallback:
+                        break
+                model = fallback or generation_models[0]
+                logger.warning("Configured ai_model not installed locally; falling back to %s", model)
+        else:
             for pref in preferred:
-                if any(pref in m for m in available):
-                    model = next(m for m in available if pref in m)
+                if any(pref in m for m in generation_models):
+                    model = next(m for m in generation_models if pref in m)
                     break
 
-            if model is None and available:
-                model = available[0]
+            if model is None and generation_models:
+                model = generation_models[0]
             elif model is None:
                 model = "llama3.2:3b"  # Default
 
