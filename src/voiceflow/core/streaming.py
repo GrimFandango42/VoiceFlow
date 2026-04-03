@@ -1,5 +1,4 @@
-"""
-Streaming Transcription for VoiceFlow
+"""Streaming Transcription for VoiceFlow
 
 Provides real-time transcription preview while recording:
 - Periodic partial transcriptions during recording
@@ -8,12 +7,12 @@ Provides real-time transcription preview while recording:
 """
 
 import logging
+import queue
 import threading
 import time
-import queue
-from typing import Optional, Callable, List
 from dataclasses import dataclass
 from enum import Enum
+from typing import Callable, List, Optional
 
 import numpy as np
 
@@ -39,8 +38,7 @@ class StreamingResult:
 
 
 class StreamingTranscriber:
-    """
-    Provides real-time streaming transcription preview.
+    """Provides real-time streaming transcription preview.
 
     Usage:
         streamer = StreamingTranscriber(asr_engine)
@@ -68,8 +66,7 @@ class StreamingTranscriber:
         on_partial: Optional[Callable[[StreamingResult], None]] = None,
         on_final: Optional[Callable[[StreamingResult], None]] = None,
     ):
-        """
-        Initialize the streaming transcriber.
+        """Initialize the streaming transcriber.
 
         Args:
             asr_engine: ASR engine to use for transcription
@@ -160,8 +157,7 @@ class StreamingTranscriber:
         discard_final: bool = False,
         join_timeout: Optional[float] = None,
     ) -> Optional[StreamingResult]:
-        """
-        Stop streaming and get final result.
+        """Stop streaming and get final result.
 
         Returns:
             Final transcription result or None
@@ -196,8 +192,7 @@ class StreamingTranscriber:
         return final_result
 
     def add_audio(self, audio: np.ndarray) -> None:
-        """
-        Add audio chunk for processing.
+        """Add audio chunk for processing.
 
         Args:
             audio: Audio samples as numpy array
@@ -232,8 +227,7 @@ class StreamingTranscriber:
         return not self._results_queue.empty()
 
     def get_result(self, timeout: Optional[float] = None) -> Optional[StreamingResult]:
-        """
-        Get next result from queue.
+        """Get next result from queue.
 
         Args:
             timeout: Max time to wait
@@ -293,7 +287,9 @@ class StreamingTranscriber:
             if max_samples > 0 and len(audio) > max_samples:
                 audio = audio[-max_samples:]
 
-            result = self.asr.transcribe(audio)
+            # Pass previous partial result as context to improve continuity across chunks
+            context = self._last_transcription[-150:].strip() if self._last_transcription else None
+            result = self.asr.transcribe(audio, initial_prompt=context)
 
             # Handle result (could be string or TranscriptionResult)
             if hasattr(result, 'text'):
@@ -362,8 +358,7 @@ class StreamingTranscriber:
 
 # Integration with EnhancedAudioRecorder
 class StreamingAudioCallback:
-    """
-    Callback adapter to connect audio recorder with streaming transcriber.
+    """Callback adapter to connect audio recorder with streaming transcriber.
 
     Usage:
         streamer = StreamingTranscriber(asr)
@@ -383,8 +378,7 @@ class StreamingAudioCallback:
 
 # Convenience function for CLI integration
 def create_streaming_session(asr_engine, on_preview: Optional[Callable[[str], None]] = None):
-    """
-    Create a streaming transcription session.
+    """Create a streaming transcription session.
 
     Args:
         asr_engine: ASR engine
