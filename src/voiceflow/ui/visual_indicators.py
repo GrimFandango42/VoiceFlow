@@ -214,6 +214,8 @@ class BottomScreenIndicator:
         self.target_fps = 28
         self._anim_last_frame_ms = 0.0
         self._anim_load_factor = 1.0
+        self._overlay_visible = False
+        self._fade_job = None
         self.transparent_key = "#010203"
         self.status_icon_canvas = None
         self.status_icon_bg = None
@@ -594,6 +596,7 @@ class BottomScreenIndicator:
 
             # Start hidden
             self.window.withdraw()
+            self._overlay_visible = False
 
         except (tk.TclError, AttributeError, ValueError) as e:
             print(f"[VisualIndicator] Failed to setup window: {e}")
@@ -1568,6 +1571,81 @@ class BottomScreenIndicator:
         self._render_history_panel()
         self.history_window.deiconify()
         self.history_window.lift()
+
+    def _fade_in(self) -> None:
+        """Animate the overlay from transparent to full opacity."""
+        if not self.window:
+            return
+        if self._overlay_visible:
+            # Already visible — just ensure it's on top.
+            self.window.lift()
+            return
+        self._overlay_visible = True
+        if self._fade_job:
+            try:
+                self.window.after_cancel(self._fade_job)
+            except Exception:
+                pass
+            self._fade_job = None
+        target = min(0.84, self.config_manager.config.opacity)
+        try:
+            self.window.wm_attributes("-alpha", 0.0)
+            self.window.deiconify()
+            self.window.lift()
+        except Exception:
+            return
+        self._do_fade_step(0.0, target, steps=6, interval=14, step=0)
+
+    def _fade_out(self) -> None:
+        """Animate the overlay to transparent then hide it."""
+        if not self.window:
+            return
+        if not self._overlay_visible:
+            return
+        self._overlay_visible = False
+        if self._fade_job:
+            try:
+                self.window.after_cancel(self._fade_job)
+            except Exception:
+                pass
+            self._fade_job = None
+        try:
+            current = float(self.window.wm_attributes("-alpha"))
+        except Exception:
+            current = 0.84
+        self._do_fade_step(current, 0.0, steps=10, interval=22, step=0, hide_after=True)
+
+    def _do_fade_step(
+        self,
+        from_alpha: float,
+        to_alpha: float,
+        steps: int,
+        interval: int,
+        step: int,
+        hide_after: bool = False,
+    ) -> None:
+        if not self.window:
+            return
+        progress = step / max(1, steps)
+        # Ease-out for fade-in, linear for fade-out
+        eased = progress * (2.0 - progress) if to_alpha > from_alpha else progress
+        alpha = from_alpha + (to_alpha - from_alpha) * eased
+        try:
+            self.window.wm_attributes("-alpha", max(0.0, min(1.0, alpha)))
+        except Exception:
+            pass
+        if step < steps:
+            self._fade_job = self.window.after(
+                interval,
+                lambda: self._do_fade_step(from_alpha, to_alpha, steps, interval, step + 1, hide_after),
+            )
+        else:
+            self._fade_job = None
+            if hide_after:
+                try:
+                    self.window.withdraw()
+                except Exception:
+                    pass
 
     def _start_animation(self, status: TranscriptionStatus):
         if self.animation_job and self.window:
@@ -2673,8 +2751,7 @@ class BottomScreenIndicator:
             # Update progress bar and overlay visibility based on status
             pb = getattr(self, "progress_bar", None)
             if status == TranscriptionStatus.LISTENING:
-                self.window.deiconify()
-                self.window.lift()
+                self._fade_in()
                 self._init_geometric_motif(seed=(time.time_ns() & 0xFFFF))
                 if pb:
                     pb.configure(mode='indeterminate')
@@ -2682,15 +2759,13 @@ class BottomScreenIndicator:
                 self._start_animation(status)
             elif status in (TranscriptionStatus.PROCESSING, TranscriptionStatus.TRANSCRIBING):
                 # Keep overlay visible — user needs feedback that work is happening
-                self.window.deiconify()
-                self.window.lift()
+                self._fade_in()
                 if pb:
                     pb.stop()
                 self._start_animation(status)
             elif status in (TranscriptionStatus.COMPLETE, TranscriptionStatus.ERROR):
                 # Show briefly to confirm outcome; auto-hide timer in show_status handles dismiss
-                self.window.deiconify()
-                self.window.lift()
+                self._fade_in()
                 self._stop_animation()
                 if pb:
                     pb.stop()
@@ -2700,8 +2775,8 @@ class BottomScreenIndicator:
                 self._bubble_tokens.clear()
                 self._last_stream_word_count = 0
             else:
-                # IDLE — hide entirely
-                self.window.withdraw()
+                # IDLE — fade out and hide
+                self._fade_out()
                 self._stop_animation()
                 if pb:
                     pb.stop()
@@ -2793,9 +2868,8 @@ class BottomScreenIndicator:
             # Reset status to idle to prevent persistence
             self.current_status = TranscriptionStatus.IDLE
 
-            # Hide the window
-            if self.window:
-                self.window.withdraw()
+            # Fade the window out smoothly
+            self._fade_out()
 
             # Stop any progress animations
             pb = getattr(self, 'progress_bar', None)
