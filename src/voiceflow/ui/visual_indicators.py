@@ -1647,6 +1647,56 @@ class BottomScreenIndicator:
                 except Exception:
                     pass
 
+    def _set_waveform_theme(self, status: TranscriptionStatus) -> None:
+        """Update waveform accent colors to signal the current state.
+
+        The animation loop reads self.visual_theme each frame so just
+        updating it here causes the colors to shift on the next tick.
+        """
+        if status == TranscriptionStatus.LISTENING:
+            # Blue/accent — ready and capturing
+            self.visual_theme = {
+                "name": "listening",
+                "glyph": "",
+                "accent": self._ui("accent"),
+                "orb": self._ui("accent_soft"),
+            }
+        elif status == TranscriptionStatus.PROCESSING:
+            # Amber/warm — crunching audio
+            w = self._ui("warning")
+            self.visual_theme = {
+                "name": "processing",
+                "glyph": "",
+                "accent": w,
+                "orb": _mix_color(w, "#FFFFFF", 0.60),
+            }
+        elif status == TranscriptionStatus.TRANSCRIBING:
+            # Green — writing the words out
+            s = self._ui("success")
+            self.visual_theme = {
+                "name": "transcribing",
+                "glyph": "",
+                "accent": s,
+                "orb": _mix_color(s, "#FFFFFF", 0.60),
+            }
+        elif status == TranscriptionStatus.COMPLETE:
+            s = self._ui("success")
+            self.visual_theme = {
+                "name": "complete",
+                "glyph": "",
+                "accent": s,
+                "orb": _mix_color(s, "#FFFFFF", 0.80),
+            }
+        elif status == TranscriptionStatus.ERROR:
+            self.visual_theme = {
+                "name": "error",
+                "glyph": "",
+                "accent": self.error_color,
+                "orb": _mix_color(self.error_color, "#FFFFFF", 0.60),
+            }
+        else:
+            self.visual_theme = self._default_visual_theme()
+
     def _start_animation(self, status: TranscriptionStatus):
         if self.animation_job and self.window:
             self.window.after_cancel(self.animation_job)
@@ -2747,6 +2797,7 @@ class BottomScreenIndicator:
         try:
             self._refresh_dock_text(status=status)
             self._update_status_badge(status)
+            self._set_waveform_theme(status)
 
             # Update progress bar and overlay visibility based on status
             pb = getattr(self, "progress_bar", None)
