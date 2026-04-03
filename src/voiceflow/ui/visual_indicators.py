@@ -1,34 +1,36 @@
 #!/usr/bin/env python3
-"""
-VoiceFlow Visual Indicators
+"""VoiceFlow Visual Indicators
 ===========================
 Bottom-screen transcription status overlay similar to Wispr Flow
 """
 
+import json
 import logging
-import tkinter as tk
-from tkinter import ttk
+import math
+import os
+import random
+import re
 import threading
 import time
-import math
-import random
-import json
-import os
-import re
-from datetime import datetime
+import tkinter as tk
 from collections import deque
-from typing import Optional, Callable, Dict, Any
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from .visual_config import ColorTheme, get_visual_config, VisualConfigManager
-from ..utils.guardrails import safe_visual_update, process_visual_update_queue, with_error_recovery
+from typing import Any, Callable, Dict, Optional
+
+from ..utils.guardrails import (
+    safe_visual_update,
+    with_error_recovery,
+)
 from ..utils.settings import (
+    append_jsonl_bounded,
     config_dir,
     config_path,
-    append_jsonl_bounded,
-    read_text_tail_lines,
     load_json_dict_bounded,
+    read_text_tail_lines,
 )
+from .visual_config import ColorTheme, get_visual_config
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +109,7 @@ def _hex_to_rgb(color: str) -> tuple[int, int, int]:
 
 def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
     r, g, b = [max(0, min(255, int(channel))) for channel in rgb]
-    return "#{:02X}{:02X}{:02X}".format(r, g, b)
+    return f"#{r:02X}{g:02X}{b:02X}"
 
 
 def _mix_color(color_a: str, color_b: str, ratio: float) -> str:
@@ -170,15 +172,14 @@ def _emit_correction_feedback_learning(original_text: str, corrected_text: str, 
 class TranscriptionStatus(Enum):
     """Status states for visual indication"""
     IDLE = "idle"
-    LISTENING = "listening" 
+    LISTENING = "listening"
     PROCESSING = "processing"
     TRANSCRIBING = "transcribing"
     COMPLETE = "complete"
     ERROR = "error"
 
 class BottomScreenIndicator:
-    """
-    Bottom-screen overlay indicator for transcription status
+    """Bottom-screen overlay indicator for transcription status
     Similar to Wispr Flow - small, unobtrusive, informative
     Thread-safe for background hotkey calls
     """
@@ -292,6 +293,7 @@ class BottomScreenIndicator:
         self.wave_w = 460
         self.wave_h = 112
         self.word_stream_canvas = None
+        self.status_badge_frame = None
         self._bubble_tokens = deque(maxlen=16)
         self._last_stream_word_count = 0
         self._last_preview_words: list[str] = []
@@ -429,7 +431,7 @@ class BottomScreenIndicator:
         elif status == TranscriptionStatus.TRANSCRIBING:
             fps = min(fps + 3, 44)
         return int(max(16, min(84, round(1000.0 / max(12.0, float(fps))))))
-    
+
     def _start_gui_thread(self):
         """Start GUI thread for thread-safe visual indicators"""
         import queue
@@ -623,7 +625,7 @@ class BottomScreenIndicator:
         x = max(8, min(screen_width - self.width - 8, x))
         y = max(10, min(y, screen_height - self.height - reserved_bottom))
         self.window.geometry(f"{self.width}x{self.height}+{x}+{y}")
-    
+
     def _create_ui(self):
         """Create the UI elements for the status display"""
         if not self.window:
@@ -654,17 +656,41 @@ class BottomScreenIndicator:
         self.wave_canvas.pack(pady=(2, 1))
         self._init_waveform_strip()
 
-        # Status text
-        self.status_var = tk.StringVar(value="VoiceFlow Ready")
-        self.status_label = tk.Label(
-            main_frame,
-            textvariable=self.status_var,
-            bg=self._ui("panel_bg"),
-            fg=self._ui("text_primary"),
-            font=("Segoe UI", 10, "bold")
+        # Status badge row — shows current state (Listening / Processing / Transcribing / Done)
+        status_row = tk.Frame(main_frame, bg=self.transparent_key, highlightthickness=0, bd=0)
+        status_row.pack(fill=tk.X, padx=6, pady=(0, 2))
+
+        self.status_badge_frame = tk.Frame(
+            status_row,
+            bg=self._ui("panel_surface"),
+            highlightthickness=1,
+            highlightbackground=self._ui("panel_border"),
+            bd=0,
+            padx=8,
+            pady=2,
         )
-        # Dock already carries status; keep overlay focused on waveform/preview.
-        # status_label.pack(pady=(0, 5))
+        self.status_badge_frame.pack(side=tk.LEFT)
+
+        self.status_var = tk.StringVar(value="")
+        self.status_label = tk.Label(
+            self.status_badge_frame,
+            textvariable=self.status_var,
+            bg=self._ui("panel_surface"),
+            fg=self._ui("text_muted"),
+            font=("Segoe UI", 8, "bold"),
+            anchor="w",
+        )
+        self.status_label.pack()
+
+        hotkey_hint = tk.Label(
+            status_row,
+            text="Ctrl+Shift to record",
+            bg=self.transparent_key,
+            fg=self._ui("text_muted"),
+            font=("Segoe UI", 7),
+            anchor="e",
+        )
+        hotkey_hint.pack(side=tk.RIGHT, padx=4)
 
         # Preview text for streaming transcription
         preview_card = tk.Frame(
@@ -2590,11 +2616,10 @@ class BottomScreenIndicator:
         elif status_value in ("listening", "processing", "transcribing", "complete"):
             tail = "Live"
         self.dock_var.set(f"{status_label} | {tail}")
-    
+
     @with_error_recovery(fallback_value=None)
     def show_status(self, status: TranscriptionStatus, message: str = None, duration: float = None):
-        """
-        Show status indicator with message - Thread-safe with CRITICAL GUARDRAILS
+        """Show status indicator with message - Thread-safe with CRITICAL GUARDRAILS
 
         Args:
             status: TranscriptionStatus enum
@@ -2633,7 +2658,7 @@ class BottomScreenIndicator:
                     logger.error(f"Failed to queue status update: {e}")
 
         return safe_visual_update(_safe_status_update)
-    
+
     @with_error_recovery(fallback_value=None)
     def _update_ui(self, status: TranscriptionStatus, message: str):
         """Update UI elements (must run on main thread) - CRITICAL GUARDRAIL PROTECTED"""
@@ -2642,24 +2667,40 @@ class BottomScreenIndicator:
             return
 
         try:
-            # Update text
-            self.status_var.set(message)
             self._refresh_dock_text(status=status)
+            self._update_status_badge(status)
 
-            # Update progress bar based on status
+            # Update progress bar and overlay visibility based on status
             pb = getattr(self, "progress_bar", None)
             if status == TranscriptionStatus.LISTENING:
-                # Show only while actively listening.
                 self.window.deiconify()
                 self.window.lift()
-                # Fresh motif each listening cycle for a "unique every time" feel.
                 self._init_geometric_motif(seed=(time.time_ns() & 0xFFFF))
                 if pb:
                     pb.configure(mode='indeterminate')
-                    pb.start(10)  # Slow pulse
+                    pb.start(10)
                 self._start_animation(status)
+            elif status in (TranscriptionStatus.PROCESSING, TranscriptionStatus.TRANSCRIBING):
+                # Keep overlay visible — user needs feedback that work is happening
+                self.window.deiconify()
+                self.window.lift()
+                if pb:
+                    pb.stop()
+                self._start_animation(status)
+            elif status in (TranscriptionStatus.COMPLETE, TranscriptionStatus.ERROR):
+                # Show briefly to confirm outcome; auto-hide timer in show_status handles dismiss
+                self.window.deiconify()
+                self.window.lift()
+                self._stop_animation()
+                if pb:
+                    pb.stop()
+                self.progress_var.set(0)
+                if self.preview_var:
+                    self.preview_var.set("")
+                self._bubble_tokens.clear()
+                self._last_stream_word_count = 0
             else:
-                # Hide overlay once listening stops; dock/tray already show processing/transcribing states.
+                # IDLE — hide entirely
                 self.window.withdraw()
                 self._stop_animation()
                 if pb:
@@ -2671,33 +2712,66 @@ class BottomScreenIndicator:
                 self._last_stream_word_count = 0
                 if self.word_stream_canvas:
                     self.word_stream_canvas.delete("all")
-             
-            # Update colors based on status
-            color = self.text_color
-            if status == TranscriptionStatus.ERROR:
-                color = self.error_color
-            elif status in [TranscriptionStatus.LISTENING, TranscriptionStatus.PROCESSING, TranscriptionStatus.TRANSCRIBING]:
-                color = self.accent_color
-            
-            # Keep caption readability stable; only update the hidden status label color.
-            if self.status_label:
-                self.status_label.configure(fg=color)
-        
+
         except Exception as e:
             print(f"[VisualIndicator] UI update error: {e}")
-    
+
+    def _update_status_badge(self, status: TranscriptionStatus) -> None:
+        """Update the status badge label and color to reflect the current state."""
+        badge_styles = {
+            TranscriptionStatus.LISTENING: (
+                self._ui("badge_correction_bg"), self._ui("badge_correction_fg"), "Listening"
+            ),
+            TranscriptionStatus.PROCESSING: (
+                self._ui("badge_retry_bg"), self._ui("badge_retry_fg"), "Processing"
+            ),
+            TranscriptionStatus.TRANSCRIBING: (
+                self._ui("badge_live_bg"), self._ui("badge_live_fg"), "Transcribing"
+            ),
+            TranscriptionStatus.COMPLETE: (
+                self._ui("success_bg"), self._ui("success_fg"), "Done"
+            ),
+            TranscriptionStatus.ERROR: (
+                _mix_color(self.error_color, self._ui("panel_surface"), 0.72),
+                self.error_color,
+                "Error",
+            ),
+            TranscriptionStatus.IDLE: (
+                self._ui("panel_surface"), self._ui("text_muted"), ""
+            ),
+        }
+        bg, fg, label = badge_styles.get(
+            status, (self._ui("panel_surface"), self._ui("text_muted"), "")
+        )
+        badge_frame = getattr(self, "status_badge_frame", None)
+        if badge_frame:
+            try:
+                badge_frame.configure(bg=bg, highlightbackground=bg)
+            except Exception:
+                pass
+        if self.status_label:
+            try:
+                self.status_label.configure(bg=bg, fg=fg)
+            except Exception:
+                pass
+        if self.status_var:
+            try:
+                self.status_var.set(label)
+            except Exception:
+                pass
+
     def _get_default_message(self, status: TranscriptionStatus) -> str:
-        """Get default message for status"""
+        """Get default message for status (used by dock and notifications)."""
         messages = {
             TranscriptionStatus.IDLE: "VoiceFlow Ready",
             TranscriptionStatus.LISTENING: "Listening...",
-            TranscriptionStatus.PROCESSING: "🔄 Processing audio...",
-            TranscriptionStatus.TRANSCRIBING: "✍️ Transcribing...",
-            TranscriptionStatus.COMPLETE: "✅ Transcription complete",
-            TranscriptionStatus.ERROR: "❌ Transcription failed"
+            TranscriptionStatus.PROCESSING: "Processing audio...",
+            TranscriptionStatus.TRANSCRIBING: "Transcribing...",
+            TranscriptionStatus.COMPLETE: "Transcription complete",
+            TranscriptionStatus.ERROR: "Transcription failed",
         }
         return messages.get(status, "VoiceFlow")
-    
+
     def hide(self):
         """Hide the status indicator - Thread-safe"""
         if not self.gui_ready or not self.command_queue:
@@ -2839,13 +2913,13 @@ class BottomScreenIndicator:
                 except Exception:
                     pass
                 self.history_feedback_job = None
-            
+
             if self.window:
                 try:
                     self.window.after(0, self._destroy_window)
                 except Exception:
                     pass
-    
+
     def _destroy_window(self):
         """Destroy window on main thread"""
         try:
@@ -2867,11 +2941,11 @@ _indicator_lock = threading.Lock()
 def get_indicator() -> BottomScreenIndicator:
     """Get or create the global status indicator"""
     global _indicator
-    
+
     with _indicator_lock:
         if _indicator is None:
             _indicator = BottomScreenIndicator()
-    
+
     return _indicator
 
 @with_error_recovery(fallback_value=None)
@@ -3059,23 +3133,23 @@ def request_open_correction_review():
 def test_visual_indicators():
     """Test the visual indicators"""
     print("Testing VoiceFlow Visual Indicators...")
-    
+
     # Test sequence
     show_listening()
     time.sleep(2)
-    
-    show_processing() 
+
+    show_processing()
     time.sleep(2)
-    
+
     show_transcribing()
     time.sleep(2)
-    
+
     show_complete("Test transcription complete!")
     time.sleep(3)
-    
+
     show_error("Test error message")
     time.sleep(3)
-    
+
     hide_status()
     print("Visual indicator test complete")
 
