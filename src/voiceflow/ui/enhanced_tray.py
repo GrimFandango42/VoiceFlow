@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""
-Enhanced tray controller with visual indicators.
+"""Enhanced tray controller with visual indicators.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from typing import Optional, List, Callable, Dict, Any
-from datetime import datetime
+from typing import Optional
 
 # Import our models and interfaces
 try:
-    from voiceflow.models.tray_state import TrayState, TrayStatus, TrayMenuItem, Notification
     from voiceflow.models.system_performance import SystemPerformance
+    from voiceflow.models.tray_state import (
+        Notification,
+        TrayMenuItem,
+        TrayState,
+        TrayStatus,
+    )
 except ImportError:
     # Fallback for existing code compatibility
     TrayState = None
@@ -39,10 +42,17 @@ except Exception:
 
 try:
     from voiceflow.ui.visual_indicators import (
-        show_listening, show_processing, show_transcribing,
-        show_complete, show_error, hide_status,
-        TranscriptionStatus, show_transcription_status,
-        set_dock_enabled, request_open_recent_history, request_open_correction_review
+        TranscriptionStatus,
+        hide_status,
+        request_open_correction_review,
+        request_open_recent_history,
+        set_dock_enabled,
+        show_complete,
+        show_error,
+        show_listening,
+        show_processing,
+        show_transcribing,
+        show_transcription_status,
     )
     VISUAL_INDICATORS_AVAILABLE = True
 except ImportError:
@@ -58,10 +68,10 @@ def _make_status_icon(size: int = 16, status: str = "idle", recording: bool = Fa
     """Create dynamic status icons based on VoiceFlow state"""
     if Image is None:
         return None
-    
+
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    
+
     # Status-based colors
     if status == "idle":
         bg_color = (0, 120, 215, 255)  # Blue - ready
@@ -78,10 +88,10 @@ def _make_status_icon(size: int = 16, status: str = "idle", recording: bool = Fa
     else:
         bg_color = (128, 128, 128, 255)  # Gray - unknown
         mic_color = (255, 255, 255, 255)  # White
-    
+
     # Background circle
     d.ellipse((0, 0, size - 1, size - 1), fill=bg_color)
-    
+
     # Microphone glyph
     pad = 3
     if recording:
@@ -92,16 +102,16 @@ def _make_status_icon(size: int = 16, status: str = "idle", recording: bool = Fa
         # Normal microphone
         d.ellipse((pad, pad, size - pad - 1, size - pad - 3), fill=mic_color)
         d.rectangle((size // 2 - 1, size - pad - 3, size // 2 + 1, size - 1), fill=mic_color)
-    
+
     # Recording indicator (red dot)
     if recording:
         d.ellipse((size - 6, 1, size - 1, 6), fill=(255, 0, 0, 255))
-    
+
     return img
 
 class EnhancedTrayController(ITrayManager):
     """Enhanced system tray controller implementing ITrayManager interface with visual status indicators"""
-    
+
     def __init__(self, app):
         self.app = app
         self._icon: Optional[pystray.Icon] = None
@@ -109,17 +119,17 @@ class EnhancedTrayController(ITrayManager):
         self.current_status = "idle"
         self.is_recording = False
         self.status_lock = threading.Lock()
-        
+
         # Status update callbacks
         self.status_callbacks = []
 
         # Auto-reset timer for "complete" and "error" states
         self._reset_timer: Optional[threading.Timer] = None
-        
+
     def add_status_callback(self, callback):
         """Add a callback for status updates"""
         self.status_callbacks.append(callback)
-    
+
     def _notify_status_change(self, status: str, recording: bool = False):
         """Notify all callbacks of status change"""
         for callback in self.status_callbacks:
@@ -127,7 +137,7 @@ class EnhancedTrayController(ITrayManager):
                 callback(status, recording)
             except Exception as e:
                 print(f"[EnhancedTray] Status callback error: {e}")
-    
+
     def _apply_status_update(self, status: str, recording: bool = False, message: str = None) -> None:
         """Canonical tray/indicator status update path."""
         with self.status_lock:
@@ -169,7 +179,9 @@ class EnhancedTrayController(ITrayManager):
 
                                 # Hide visual indicators
                                 if VISUAL_INDICATORS_AVAILABLE:
-                                    from voiceflow.ui.visual_indicators import hide_status
+                                    from voiceflow.ui.visual_indicators import (
+                                        hide_status,
+                                    )
                                     hide_status()
 
                                 # Notify callbacks of reset
@@ -180,7 +192,7 @@ class EnhancedTrayController(ITrayManager):
                 # Start 2-second timer to reset to idle
                 self._reset_timer = threading.Timer(2.0, reset_to_idle)
                 self._reset_timer.start()
-    
+
     def _update_visual_indicator(self, status: str, recording: bool, message: str = None):
         """Update the bottom-screen visual indicator"""
         try:
@@ -189,7 +201,7 @@ class EnhancedTrayController(ITrayManager):
             elif status == "listening":
                 show_listening()
             elif status == "processing":
-                show_processing()  
+                show_processing()
             elif status == "transcribing":
                 show_transcribing()
             elif status == "complete":
@@ -198,7 +210,7 @@ class EnhancedTrayController(ITrayManager):
                 show_error(message)
         except Exception as e:
             print(f"[EnhancedTray] Visual indicator update error: {e}")
-    
+
     def _menu(self):
         """Create the tray context menu"""
         if pystray is None:
@@ -231,19 +243,30 @@ class EnhancedTrayController(ITrayManager):
                 self._notify("VoiceFlow", f"Auto-Enter: {'ON' if self.app.cfg.press_enter_after_paste else 'OFF'}")
             except Exception:
                 pass
-                
+
         def toggle_visual_indicators(icon, item):
             """Toggle visual indicators on/off"""
             if hasattr(self.app.cfg, 'visual_indicators_enabled'):
                 self.app.cfg.visual_indicators_enabled = not self.app.cfg.visual_indicators_enabled
             else:
                 self.app.cfg.visual_indicators_enabled = False
-            
+
             try:
                 from voiceflow.utils.settings import save_config
                 save_config(self.app.cfg)
                 status = "ON" if getattr(self.app.cfg, 'visual_indicators_enabled', True) else "OFF"
                 self._notify("VoiceFlow", f"Visual Indicators: {status}")
+            except Exception:
+                pass
+
+        def toggle_audio_beeps(icon, item):
+            """Toggle audio start/stop beep feedback."""
+            self.app.cfg.audio_feedback_beeps = not getattr(self.app.cfg, "audio_feedback_beeps", True)
+            try:
+                from voiceflow.utils.settings import save_config
+                save_config(self.app.cfg)
+                status = "ON" if self.app.cfg.audio_feedback_beeps else "OFF"
+                self._notify("VoiceFlow", f"Audio Beeps: {status}")
             except Exception:
                 pass
 
@@ -307,13 +330,13 @@ class EnhancedTrayController(ITrayManager):
                 self.update_status("listening", True, "Testing...")
                 time.sleep(1.5)
                 self.update_status("processing", False, "Processing test...")
-                time.sleep(1.5)  
+                time.sleep(1.5)
                 self.update_status("transcribing", False, "Transcribing test...")
                 time.sleep(1.5)
                 self.update_status("complete", False, "Test complete!")
                 time.sleep(2)
                 self.update_status("idle", False)
-            
+
             threading.Thread(target=test_sequence, daemon=True).start()
 
         def quit_app(icon, item):
@@ -321,7 +344,7 @@ class EnhancedTrayController(ITrayManager):
                 if VISUAL_INDICATORS_AVAILABLE:
                     from voiceflow.ui.visual_indicators import cleanup_indicators
                     cleanup_indicators()
-                
+
                 if self._icon:
                     self._icon.stop()
             finally:
@@ -405,6 +428,11 @@ class EnhancedTrayController(ITrayManager):
                 checked=lambda item: getattr(self.app.cfg, 'visual_indicators_enabled', True),
             ),
             pystray.MenuItem(
+                lambda item: f"Audio Beeps: {'ON' if getattr(self.app.cfg, 'audio_feedback_beeps', True) else 'OFF'}",
+                toggle_audio_beeps,
+                checked=lambda item: getattr(self.app.cfg, "audio_feedback_beeps", True),
+            ),
+            pystray.MenuItem(
                 lambda item: f"Dock: {'ON' if getattr(self.app.cfg, 'visual_dock_enabled', True) else 'OFF'}",
                 toggle_dock,
                 checked=lambda item: getattr(self.app.cfg, 'visual_dock_enabled', True),
@@ -432,10 +460,10 @@ class EnhancedTrayController(ITrayManager):
         if not TRAY_AVAILABLE:
             print("Enhanced tray disabled: pystray/Pillow not installed.")
             return
-            
+
         if self._icon is not None:
             return
-            
+
         # Create initial icon
         image = _make_status_icon(16, self.current_status, self.is_recording)
         self._icon = pystray.Icon("VoiceFlow", image, "VoiceFlow - Enhanced", self._menu())
@@ -455,12 +483,12 @@ class EnhancedTrayController(ITrayManager):
                 self.app.cfg.visual_dock_enabled = preferred_dock
             except Exception:
                 pass
-        
+
         # Welcome notification
         def _welcome():
             time.sleep(1.0)
             self._notify("VoiceFlow Enhanced", "Visual indicators active. PTT: see tray menu.")
-            
+
         threading.Thread(target=_welcome, daemon=True).start()
 
     def stop(self):
@@ -478,8 +506,7 @@ class EnhancedTrayController(ITrayManager):
 
     # ITrayManager interface implementation
     def initialize(self) -> bool:
-        """
-        Initialize the system tray
+        """Initialize the system tray
         Returns: True if successful, False otherwise
         """
         try:
@@ -490,8 +517,7 @@ class EnhancedTrayController(ITrayManager):
             return False
 
     def update_status(self, status, recording: bool = False, message: str = None) -> None:
-        """
-        Update tray status and icon - enhanced to support both interface and original signatures
+        """Update tray status and icon - enhanced to support both interface and original signatures
         Args:
             status: TrayStatus enum or string
             recording: Whether recording is active (for backward compatibility)
@@ -502,8 +528,7 @@ class EnhancedTrayController(ITrayManager):
         self._apply_status_update(status_str, recording, message)
 
     def update_menu(self, items) -> None:
-        """
-        Update tray context menu
+        """Update tray context menu
         Args:
             items: List of TrayMenuItem objects to display
         """
@@ -512,8 +537,7 @@ class EnhancedTrayController(ITrayManager):
         print(f"[EnhancedTray] Menu update requested with {len(items)} items")
 
     def show_notification(self, title: str, message: str, duration: int = 3000) -> None:
-        """
-        Show system notification
+        """Show system notification
         Args:
             title: Notification title
             message: Notification message
@@ -522,8 +546,7 @@ class EnhancedTrayController(ITrayManager):
         self._notify(title, message)
 
     def set_tooltip(self, text: str) -> None:
-        """
-        Set tray icon tooltip
+        """Set tray icon tooltip
         Args:
             text: Tooltip text (max 64 chars for Windows)
         """
@@ -535,8 +558,7 @@ class EnhancedTrayController(ITrayManager):
             self._icon.title = text
 
     def get_current_status(self):
-        """
-        Get current tray status
+        """Get current tray status
         Returns: Current status as TrayStatus enum or string
         """
         # Import TrayStatus if available
@@ -551,8 +573,7 @@ class EnhancedTrayController(ITrayManager):
         return self.current_status
 
     def register_status_callback(self, callback) -> None:
-        """
-        Register callback for status changes
+        """Register callback for status changes
         Args:
             callback: Function to call when status changes
         """

@@ -222,6 +222,7 @@ class Config:
     visual_animation_quality: str = "auto"  # auto|high|balanced|low
     visual_reduced_motion: bool = False  # reduce expensive animation effects
     visual_target_fps: int = 28  # preferred animation refresh target for auto mode
+    audio_feedback_beeps: bool = True  # short beep on recording start/stop (Windows winsound)
 
     # Output behavior
     paste_injection: bool = True  # Use clipboard paste injection by default

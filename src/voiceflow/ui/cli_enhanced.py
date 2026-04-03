@@ -12,6 +12,19 @@ import threading
 import time
 import traceback
 import wave
+
+try:
+    import winsound as _winsound
+    _WINSOUND_AVAILABLE = True
+except ImportError:
+    _WINSOUND_AVAILABLE = False
+
+
+def _play_beep(freq: int, duration_ms: int) -> None:
+    """Non-blocking beep via winsound. No-op on non-Windows."""
+    if not _WINSOUND_AVAILABLE:
+        return
+    threading.Thread(target=_winsound.Beep, args=(freq, duration_ms), daemon=True).start()
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -1919,6 +1932,10 @@ class EnhancedApp:
                     if VISUAL_INDICATORS_AVAILABLE:
                         show_listening()
 
+                # Audio feedback: high-pitched ping confirms hotkey was registered
+                if getattr(self.cfg, "audio_feedback_beeps", True):
+                    _play_beep(880, 60)
+
                 self.rec.start()
                 self._start_audio_visual_monitor()
                 if getattr(self.cfg, "live_flush_during_hold", False):
@@ -1956,6 +1973,10 @@ class EnhancedApp:
 
             audio = self.rec.stop()
             audio_duration = len(audio) / self.cfg.sample_rate if len(audio) > 0 else 0
+
+            # Audio feedback: lower tone signals recording stopped, processing starting
+            if getattr(self.cfg, "audio_feedback_beeps", True):
+                _play_beep(440, 60)
 
             # State will be marked as processing only after validation passes
 
