@@ -403,7 +403,7 @@ class ASRBackend(ABC):
         pass
 
     @abstractmethod
-    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None) -> TranscriptionResult:
+    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None, vad_filter_override: Optional[bool] = None) -> TranscriptionResult:
         """Transcribe audio"""
         pass
 
@@ -506,7 +506,7 @@ class FasterWhisperBackend(ASRBackend):
                 return str(local_prefetch)
         return resolved_id
 
-    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None) -> TranscriptionResult:
+    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None, vad_filter_override: Optional[bool] = None) -> TranscriptionResult:
         if not self.is_loaded():
             self.load()
 
@@ -517,6 +517,7 @@ class FasterWhisperBackend(ASRBackend):
             with self._lock:
                 beam_size = max(1, int(beam_size_override)) if beam_size_override else max(1, int(getattr(self.config, "beam_size", 1)))
                 best_of = max(1, int(getattr(self.config, "best_of", 1)))
+                use_vad = vad_filter_override if vad_filter_override is not None else self.config.vad_filter
                 kwargs: Dict[str, Any] = {
                     "language": "en",
                     "beam_size": beam_size,
@@ -524,9 +525,9 @@ class FasterWhisperBackend(ASRBackend):
                     "temperature": float(getattr(self.config, "temperature", 0.0)),
                     "condition_on_previous_text": bool(getattr(self.config, "condition_on_previous_text", False)),
                     "without_timestamps": True,
-                    "vad_filter": self.config.vad_filter,
+                    "vad_filter": use_vad,
                 }
-                if self.config.vad_filter:
+                if use_vad:
                     kwargs["vad_parameters"] = {
                         "threshold": 0.35,
                         "min_speech_duration_ms": 150,
@@ -539,7 +540,7 @@ class FasterWhisperBackend(ASRBackend):
             if self._should_fallback_to_cpu(exc):
                 logger.warning("CUDA runtime failure detected (%s). Falling back to CPU and retrying once.", exc)
                 self._fallback_to_cpu()
-                return self.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override)
+                return self.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
             raise
 
         segments = []
@@ -665,7 +666,7 @@ class WhisperXBackend(ASRBackend):
                 self._model = None
                 raise
 
-    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None) -> TranscriptionResult:
+    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None, vad_filter_override: Optional[bool] = None) -> TranscriptionResult:
         if not self.is_loaded():
             self.load()
 
@@ -818,7 +819,7 @@ class VoxtralBackend(ASRBackend):
                 self._model = None
                 raise
 
-    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None) -> TranscriptionResult:
+    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None, vad_filter_override: Optional[bool] = None) -> TranscriptionResult:
         if not self.is_loaded():
             self.load()
 
@@ -1015,13 +1016,14 @@ class ASREngine:
         """Check if model is loaded"""
         return self._backend is not None and self._backend.is_loaded()
 
-    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None) -> TranscriptionResult:
+    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None, vad_filter_override: Optional[bool] = None) -> TranscriptionResult:
         """Transcribe audio data.
 
         Args:
             audio: Audio data as numpy array (float32, 16kHz mono)
             initial_prompt: Optional text to condition the model on (improves continuity)
             beam_size_override: Override beam size for this call only
+            vad_filter_override: Override VAD filter setting for this call only
 
         Returns:
             TranscriptionResult with text and metadata
@@ -1042,7 +1044,7 @@ class ASREngine:
             return TranscriptionResult(text="", duration=audio_duration, processing_time=0.0)
 
         # Transcribe
-        result = self._backend.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override)
+        result = self._backend.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
 
         # Update statistics
         self.transcription_count += 1
@@ -1217,11 +1219,11 @@ class ModernWhisperASR(ASREngine):
         self.session_transcription_count = 0
         self.vad_fallback_triggered = False
 
-    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None) -> str:
+    def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None, vad_filter_override: Optional[bool] = None) -> str:
         """Legacy interface returning just text"""
         self.session_transcription_count += 1
         # Call parent's transcribe method and extract text
-        result = ASREngine.transcribe(self, audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override)
+        result = ASREngine.transcribe(self, audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
         return result.text
 
     def get_clean_statistics(self) -> dict:

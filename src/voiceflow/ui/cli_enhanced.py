@@ -1639,13 +1639,16 @@ class EnhancedApp:
                 return
             self._last_preview_text = ""
             streaming_beam = int(getattr(self.cfg, "streaming_beam_size", 2))
+            streaming_max_audio = float(getattr(self.cfg, "streaming_partial_max_audio_seconds", 8.0))
+            streaming_vad = bool(getattr(self.cfg, "streaming_vad_filter", True))
             self._streaming_transcriber = StreamingTranscriber(
                 self.asr_fast if self.asr_fast else self.asr,
                 sample_rate=self.cfg.sample_rate,
                 chunk_duration=0.85,
                 min_audio_duration=0.55,
-                partial_max_audio_seconds=6.0,
+                partial_max_audio_seconds=streaming_max_audio,
                 beam_size=streaming_beam if streaming_beam > 1 else None,
+                vad_filter=streaming_vad,
                 on_partial=self._on_streaming_preview,
             )
             self._streaming_transcriber.start()

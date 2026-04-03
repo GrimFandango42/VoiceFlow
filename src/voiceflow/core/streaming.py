@@ -64,6 +64,7 @@ class StreamingTranscriber:
         min_audio_duration: float = 0.5,  # Minimum audio before first transcription
         partial_max_audio_seconds: float = 8.0,  # Limit partial ASR window to keep cost stable
         beam_size: Optional[int] = None,  # Override beam size for partial transcriptions (None = use model default)
+        vad_filter: Optional[bool] = None,  # Override VAD filter for partial transcriptions (None = use model default)
         on_partial: Optional[Callable[[StreamingResult], None]] = None,
         on_final: Optional[Callable[[StreamingResult], None]] = None,
     ):
@@ -76,6 +77,7 @@ class StreamingTranscriber:
             min_audio_duration: Minimum audio before first transcription
             partial_max_audio_seconds: Max trailing audio used for each partial transcription
             beam_size: Override beam size for partial transcriptions (None = use model default)
+            vad_filter: Override VAD filter for partial transcriptions (None = use model default)
             on_partial: Callback for partial results
             on_final: Callback for final result
         """
@@ -85,6 +87,7 @@ class StreamingTranscriber:
         self.min_audio_duration = min_audio_duration
         self.partial_max_audio_seconds = max(1.0, float(partial_max_audio_seconds))
         self.beam_size = beam_size
+        self.vad_filter = vad_filter
         self.on_partial = on_partial
         self.on_final = on_final
 
@@ -292,7 +295,7 @@ class StreamingTranscriber:
 
             # Pass previous partial result as context to improve continuity across chunks
             context = self._last_transcription[-150:].strip() if self._last_transcription else None
-            result = self.asr.transcribe(audio, initial_prompt=context, beam_size_override=self.beam_size)
+            result = self.asr.transcribe(audio, initial_prompt=context, beam_size_override=self.beam_size, vad_filter_override=self.vad_filter)
 
             # Handle result (could be string or TranscriptionResult)
             if hasattr(result, 'text'):
