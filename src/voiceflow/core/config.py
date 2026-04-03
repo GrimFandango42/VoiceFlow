@@ -101,6 +101,7 @@ class Config:
     fallback_compute_type: str = "int8"  # CPU fallback settings
     vad_filter: bool = False  # Built-in VAD disabled (using custom VAD in ModernWhisperASR)
     beam_size: int = 1  # Greedy decoding for speed
+    streaming_beam_size: int = 2  # Beam search for streaming preview (trades ~20ms for better accuracy)
     temperature: float = 0.0  # Deterministic output
 
     # Whisper transcription settings

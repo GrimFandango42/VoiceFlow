@@ -1638,12 +1638,14 @@ class EnhancedApp:
             if self._streaming_transcriber is not None:
                 return
             self._last_preview_text = ""
+            streaming_beam = int(getattr(self.cfg, "streaming_beam_size", 2))
             self._streaming_transcriber = StreamingTranscriber(
                 self.asr_fast if self.asr_fast else self.asr,
                 sample_rate=self.cfg.sample_rate,
                 chunk_duration=0.85,
                 min_audio_duration=0.55,
                 partial_max_audio_seconds=6.0,
+                beam_size=streaming_beam if streaming_beam > 1 else None,
                 on_partial=self._on_streaming_preview,
             )
             self._streaming_transcriber.start()
