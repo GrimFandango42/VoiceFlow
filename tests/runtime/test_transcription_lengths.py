@@ -8,7 +8,6 @@ import pytest
 from voiceflow.core.asr_engine import ASREngine, TranscriptionResult
 from voiceflow.core.audio_enhanced import BoundedRingBuffer
 
-
 SAMPLE_RATE = 16000
 
 
@@ -31,7 +30,7 @@ class _FakeBackend:
     def cleanup(self) -> None:
         return None
 
-    def transcribe(self, audio: np.ndarray) -> TranscriptionResult:
+    def transcribe(self, audio: np.ndarray, **kwargs) -> TranscriptionResult:
         duration = float(len(audio) / SAMPLE_RATE)
         processing_time = duration / max(self.speed_factor, 0.01)
         return TranscriptionResult(
