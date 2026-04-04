@@ -1,5 +1,4 @@
-"""
-Streaming Transcription for VoiceFlow
+"""Streaming Transcription for VoiceFlow
 
 Provides real-time transcription preview while recording:
 - Periodic partial transcriptions during recording
@@ -8,12 +7,12 @@ Provides real-time transcription preview while recording:
 """
 
 import logging
+import queue
 import threading
 import time
-import queue
-from typing import Optional, Callable, List
 from dataclasses import dataclass
 from enum import Enum
+from typing import Callable, List, Optional
 
 import numpy as np
 
@@ -39,8 +38,7 @@ class StreamingResult:
 
 
 class StreamingTranscriber:
-    """
-    Provides real-time streaming transcription preview.
+    """Provides real-time streaming transcription preview.
 
     Usage:
         streamer = StreamingTranscriber(asr_engine)
@@ -65,11 +63,12 @@ class StreamingTranscriber:
         chunk_duration: float = 1.0,  # Process audio in 1-second chunks
         min_audio_duration: float = 0.5,  # Minimum audio before first transcription
         partial_max_audio_seconds: float = 8.0,  # Limit partial ASR window to keep cost stable
+        beam_size: Optional[int] = None,  # Override beam size for partial transcriptions (None = use model default)
+        vad_filter: Optional[bool] = None,  # Override VAD filter for partial transcriptions (None = use model default)
         on_partial: Optional[Callable[[StreamingResult], None]] = None,
         on_final: Optional[Callable[[StreamingResult], None]] = None,
     ):
-        """
-        Initialize the streaming transcriber.
+        """Initialize the streaming transcriber.
 
         Args:
             asr_engine: ASR engine to use for transcription
@@ -77,6 +76,8 @@ class StreamingTranscriber:
             chunk_duration: How often to process audio (seconds)
             min_audio_duration: Minimum audio before first transcription
             partial_max_audio_seconds: Max trailing audio used for each partial transcription
+            beam_size: Override beam size for partial transcriptions (None = use model default)
+            vad_filter: Override VAD filter for partial transcriptions (None = use model default)
             on_partial: Callback for partial results
             on_final: Callback for final result
         """
@@ -85,6 +86,8 @@ class StreamingTranscriber:
         self.chunk_duration = chunk_duration
         self.min_audio_duration = min_audio_duration
         self.partial_max_audio_seconds = max(1.0, float(partial_max_audio_seconds))
+        self.beam_size = beam_size
+        self.vad_filter = vad_filter
         self.on_partial = on_partial
         self.on_final = on_final
 
@@ -160,8 +163,7 @@ class StreamingTranscriber:
         discard_final: bool = False,
         join_timeout: Optional[float] = None,
     ) -> Optional[StreamingResult]:
-        """
-        Stop streaming and get final result.
+        """Stop streaming and get final result.
 
         Returns:
             Final transcription result or None
@@ -196,8 +198,7 @@ class StreamingTranscriber:
         return final_result
 
     def add_audio(self, audio: np.ndarray) -> None:
-        """
-        Add audio chunk for processing.
+        """Add audio chunk for processing.
 
         Args:
             audio: Audio samples as numpy array
@@ -232,8 +233,7 @@ class StreamingTranscriber:
         return not self._results_queue.empty()
 
     def get_result(self, timeout: Optional[float] = None) -> Optional[StreamingResult]:
-        """
-        Get next result from queue.
+        """Get next result from queue.
 
         Args:
             timeout: Max time to wait
@@ -293,7 +293,9 @@ class StreamingTranscriber:
             if max_samples > 0 and len(audio) > max_samples:
                 audio = audio[-max_samples:]
 
-            result = self.asr.transcribe(audio)
+            # Pass previous partial result as context to improve continuity across chunks
+            context = self._last_transcription[-150:].strip() if self._last_transcription else None
+            result = self.asr.transcribe(audio, initial_prompt=context, beam_size_override=self.beam_size, vad_filter_override=self.vad_filter)
 
             # Handle result (could be string or TranscriptionResult)
             if hasattr(result, 'text'):
@@ -362,8 +364,7 @@ class StreamingTranscriber:
 
 # Integration with EnhancedAudioRecorder
 class StreamingAudioCallback:
-    """
-    Callback adapter to connect audio recorder with streaming transcriber.
+    """Callback adapter to connect audio recorder with streaming transcriber.
 
     Usage:
         streamer = StreamingTranscriber(asr)
@@ -383,8 +384,7 @@ class StreamingAudioCallback:
 
 # Convenience function for CLI integration
 def create_streaming_session(asr_engine, on_preview: Optional[Callable[[str], None]] = None):
-    """
-    Create a streaming transcription session.
+    """Create a streaming transcription session.
 
     Args:
         asr_engine: ASR engine
