@@ -651,17 +651,17 @@ class BottomScreenIndicator:
         self.wave_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=80,
+            height=68,
             bg=self.transparent_key,
             highlightthickness=0,
             bd=0,
         )
-        self.wave_canvas.pack(pady=(2, 1))
+        self.wave_canvas.pack(pady=(1, 0))
         self._init_waveform_strip()
 
         # Status badge row — shows current state (Listening / Processing / Transcribing / Done)
         status_row = tk.Frame(main_frame, bg=self.transparent_key, highlightthickness=0, bd=0)
-        status_row.pack(fill=tk.X, padx=6, pady=(0, 2))
+        status_row.pack(fill=tk.X, padx=6, pady=(0, 1))
 
         self.status_badge_frame = tk.Frame(
             status_row,
@@ -867,33 +867,8 @@ class BottomScreenIndicator:
         self.wave_spark_meta = []
         self.wave_bars = []
 
-        bar_count = 64
-        gap = 2
-        bar_w = max(3, int((right - left - ((bar_count - 1) * gap)) / bar_count))
-        x = left
-        for _ in range(bar_count):
-            bar = self.wave_canvas.create_rectangle(
-                x,
-                base - 1,
-                x + bar_w,
-                base + 1,
-                fill=self.visual_theme["accent"],
-                outline="",
-            )
-            self.wave_bars.append(bar)
-            x += bar_w + gap
-
-        # Pulse rings around the orb for stronger speech-reactive feel.
-        for _ in range(3):
-            ring = self.wave_canvas.create_oval(
-                left - 2,
-                base - 2,
-                left + 2,
-                base + 2,
-            outline=self._ui("panel_border_soft"),
-            width=1,
-        )
-            self.wave_pulse_rings.append(ring)
+        # No equalizer bars — clean sine wave is the primary visual.
+        # No pulse rings — orb size/glow carries the speech reactivity.
 
         # Spark particles riding the waveform.
         self.wave_sparks = []
@@ -1028,11 +1003,11 @@ class BottomScreenIndicator:
                 points.extend((x, y))
             self.wave_canvas.coords(self.wave_trail_line, *points)
             self.wave_canvas.coords(self.wave_trail_glow, *points)
-            self.wave_canvas.itemconfig(self.wave_trail_line, fill=trail_color, width=(1 + (1.8 * voiced_drive)))
+            self.wave_canvas.itemconfig(self.wave_trail_line, fill=trail_color, width=(1.2 + (2.2 * voiced_drive)))
             self.wave_canvas.itemconfig(
                 self.wave_trail_glow,
                 fill=glow_color,
-                width=(2.5 + (2.8 * voiced_drive) if low_detail else (4 + (4.2 * voiced_drive) + (2.4 * self._burst_energy))),
+                width=(3.0 + (3.5 * voiced_drive) if low_detail else (5.0 + (5.5 * voiced_drive) + (2.8 * self._burst_energy))),
             )
 
         if self.wave_line and self.wave_line_glow:
@@ -1052,11 +1027,11 @@ class BottomScreenIndicator:
                 points.extend((x, y))
             self.wave_canvas.coords(self.wave_line, *points)
             self.wave_canvas.coords(self.wave_line_glow, *points)
-            self.wave_canvas.itemconfig(self.wave_line, fill=trail_color, width=(1.1 + (2.2 * voiced_drive)))
+            self.wave_canvas.itemconfig(self.wave_line, fill=trail_color, width=(1.5 + (3.2 * voiced_drive)))
             self.wave_canvas.itemconfig(
                 self.wave_line_glow,
                 fill=glow_color,
-                width=(3.0 + (7.5 * voiced_drive) + (2.0 * self._burst_energy)),
+                width=(5.0 + (10.0 * voiced_drive) + (3.0 * self._burst_energy)),
             )
 
         n = len(self.wave_bars)
@@ -1095,7 +1070,7 @@ class BottomScreenIndicator:
             span = max(1.0, float(self.wave_right - self.wave_left))
             orb_x = self.wave_left + ((0.20 + (0.64 * centroid) + (0.03 * math.sin(self.wave_phase * 0.72))) * span)
             orb_y = base + (math.sin(self.wave_phase * (0.60 + (0.40 * voiced_drive))) * (1 + (11 * voiced_drive)))
-            core_r = 2.8 + (5.8 * voiced_drive) + (4 * self._burst_energy)
+            core_r = 3.5 + (7.5 * voiced_drive) + (5.0 * self._burst_energy)
             glow_r = core_r + 6 + (7 * voiced_drive)
             self.wave_canvas.coords(self.wave_orb, orb_x - core_r, orb_y - core_r, orb_x + core_r, orb_y + core_r)
             self.wave_canvas.coords(
