@@ -238,6 +238,7 @@ class BottomScreenIndicator:
         self.ripple_phases = [0.0, 0.25, 0.5, 0.75]
         self.ripple_orb = None
         self.ripple_orb_glow = None
+        self._idle_wave_job = None
         self.wave_scan = None
         self.wave_trail_line = None
         self.wave_trail_glow = None
@@ -332,7 +333,7 @@ class BottomScreenIndicator:
         req_w, req_h = self.config_manager.get_overlay_dimensions()
         # Compact overlay profile: small, centered, and visually lighter.
         self.width = int(min(500, max(332, req_w + 20)))
-        self.height = int(min(220, max(168, req_h + 28)))
+        self.height = int(min(360, max(280, req_h + 168)))
         self.wave_w = max(272, self.width - 20)
         colors = self.config_manager.get_color_scheme()
         theme_value = getattr(getattr(self.config_manager, "config", None), "theme", ColorTheme.DEFAULT)
@@ -720,9 +721,9 @@ class BottomScreenIndicator:
             wraplength=self.wave_w - 36,
             justify=tk.LEFT,
             anchor="nw",
-            height=5,
+            height=6,
         )
-        self.preview_label.pack(fill=tk.X)
+        self.preview_label.pack(fill=tk.BOTH, expand=True)
         self.word_stream_canvas = None
 
         # Disable progress bar (was perceived as non-audio green block movement).
@@ -840,6 +841,21 @@ class BottomScreenIndicator:
         for ring in self.ripple_rings:
             self.wave_canvas.tag_raise(ring)
         self.wave_canvas.tag_raise(self.ripple_orb)
+        # Start continuous idle animation loop
+        self._start_idle_wave_loop()
+
+    def _start_idle_wave_loop(self):
+        """Run waveform animation continuously, even when not recording."""
+        if self._idle_wave_job and self.window:
+            self.window.after_cancel(self._idle_wave_job)
+            self._idle_wave_job = None
+        self._idle_wave_tick()
+
+    def _idle_wave_tick(self):
+        if not self.window or not self.wave_canvas:
+            return
+        self._animate_waveform(mode="idle")
+        self._idle_wave_job = self.window.after(35, self._idle_wave_tick)
 
     def _animate_waveform(self, mode: str = "listening"):
         if not self.wave_canvas or not self.ripple_rings:
@@ -896,43 +912,40 @@ class BottomScreenIndicator:
         # Phase advance: slow idle pulse, dramatically faster during speech/burst
         phase_rate = 0.003 + 0.062 * voiced_drive + 0.028 * self._burst_energy
 
-        # Spectrum palette: each ring has its own hue, rotates slowly with _color_phase
-        # Hue offsets (in radians): blue, teal, violet, amber — visually distinct
-        _RING_HUE_BASES = [
-            ("#5B9EE8", "#60E8D8"),   # ring 0: blue → teal
-            ("#A060E8", "#E060B8"),   # ring 1: violet → pink
-            ("#E8A060", "#E8D460"),   # ring 2: amber → gold
-            ("#60E880", "#60C8E8"),   # ring 3: green → sky
+        # Spectrum palette: 4 vivid hue pairs, each ring independent
+        _RING_COLORS = [
+            "#4FC3F7",   # ring 0: sky blue
+            "#CE93D8",   # ring 1: lavender
+            "#FFB74D",   # ring 2: amber
+            "#81C784",   # ring 3: mint green
         ]
         color_phase_offset = self._color_phase % (math.pi * 2.0)
-        color_lift = min(1.0, 0.18 * voiced_drive + 0.22 * self._burst_energy)
+        color_lift = min(1.0, 0.25 * voiced_drive + 0.30 * self._burst_energy)
 
         for i, ring in enumerate(self.ripple_rings):
             self.ripple_phases[i] = (self.ripple_phases[i] + phase_rate) % 1.0
             phase = self.ripple_phases[i]
 
-            # Ease-out expansion: fast start, slows near edge
             ease = phase ** 0.55
-
             rx = max(2.0, max_rx * ease)
             ry = max(1.5, max_ry * ease)
 
-            # Opacity: fades as ring expands; burst dramatically boosts early opacity
-            opacity = max(0.0, 1.0 - phase)
-            opacity = min(1.0, opacity + 0.30 * self._burst_energy * (1.0 - phase))
+            # Opacity: minimum 0.12 so rings always visible at idle; burst boosts early
+            opacity = max(0.12, 1.0 - phase)
+            opacity = min(1.0, opacity + 0.35 * self._burst_energy * (1.0 - phase))
 
-            if opacity < 0.04:
+            if opacity < 0.08:
                 self.wave_canvas.coords(ring, -20, -20, -18, -18)
                 continue
 
-            # Each ring cycles between its two hue endpoints, driven by color_phase
-            hue_a, hue_b = _RING_HUE_BASES[i]
-            hue_cycle = (math.sin(color_phase_offset + i * math.pi * 0.5) + 1.0) * 0.5
-            ring_base = _mix_color(hue_a, hue_b, hue_cycle)
-            # Brighten with voice level
+            # Hue shifts slowly with color_phase, each ring offset by π/2
+            hue_shift = (math.sin(color_phase_offset + i * math.pi * 0.5) + 1.0) * 0.5
+            ring_base = _mix_color(_RING_COLORS[i], "#FFFFFF", hue_shift * 0.35)
             ring_bright = _mix_color(ring_base, "#FFFFFF", color_lift)
-            ring_color = _mix_color(ring_bright, self.transparent_key, 1.0 - opacity)
-            ring_w = max(1, int((2.0 + voiced_drive * 2.5 + self._burst_energy * 1.5) * opacity))
+            # Fade toward transparent_key only for high-opacity rings, keep min brightness
+            fade_ratio = max(0.0, 1.0 - opacity) * 0.80
+            ring_color = _mix_color(ring_bright, self.transparent_key, fade_ratio)
+            ring_w = max(1, int((2.5 + voiced_drive * 2.5 + self._burst_energy * 2.0) * opacity))
 
             self.wave_canvas.coords(ring, cx - rx, cy - ry, cx + rx, cy + ry)
             self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
@@ -2858,6 +2871,12 @@ class BottomScreenIndicator:
 
     def _destroy_window(self):
         """Destroy window on main thread"""
+        try:
+            if self._idle_wave_job and self.window:
+                self.window.after_cancel(self._idle_wave_job)
+                self._idle_wave_job = None
+        except Exception:
+            pass
         try:
             if self.history_window:
                 self.history_window.destroy()
