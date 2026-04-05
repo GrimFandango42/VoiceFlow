@@ -619,7 +619,7 @@ class BottomScreenIndicator:
                 geo = self.dock_window.geometry()  # e.g. 430x30+745+1008
                 dock_y = int(geo.rsplit("+", 1)[-1])
                 # Keep animation close to the dock for a tighter visual stack.
-                y = int(dock_y - self.height - 10)
+                y = int(dock_y - self.height - 4)
             except Exception:
                 y = min(y - 12, screen_height - self.height - reserved_bottom)
         else:
@@ -651,7 +651,7 @@ class BottomScreenIndicator:
         self.wave_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=68,
+            height=80,
             bg=self.transparent_key,
             highlightthickness=0,
             bd=0,
@@ -779,7 +779,7 @@ class BottomScreenIndicator:
         if not self.wave_canvas:
             return
         self.wave_canvas.delete("all")
-        self.wave_h = int(max(92, self.wave_canvas.winfo_reqheight()))
+        self.wave_h = int(max(80, self.wave_canvas.winfo_reqheight()))
         left = 8
         right = self.wave_w - 8
         self.wave_left = left
@@ -863,12 +863,23 @@ class BottomScreenIndicator:
         self.space_glow = None
         self.space_ring = None
         self.space_arcs = []
-        self.wave_pulse_rings = []
         self.wave_spark_meta = []
         self.wave_bars = []
 
-        # No equalizer bars — clean sine wave is the primary visual.
-        # No pulse rings — orb size/glow carries the speech reactivity.
+        # Gradient orb: 8 concentric ovals simulating a bloom glow.
+        # Outermost (idx 0) is very dim; innermost (idx 7) is the bright core.
+        self.orb_layers = []
+        orb_start_color = _mix_color(self.visual_theme["accent"], self._ui("panel_bg"), 0.92)
+        for _ in range(8):
+            layer = self.wave_canvas.create_oval(-10, -10, -10, -10, fill=orb_start_color, outline="")
+            self.orb_layers.append(layer)
+
+        # Ripple rings: 3 expanding concentric outlines that animate outward on voice.
+        self.wave_pulse_rings = []
+        ring_color = _mix_color(self.visual_theme["accent"], "#FFFFFF", 0.18)
+        for _ in range(3):
+            ring = self.wave_canvas.create_oval(-10, -10, -10, -10, fill="", outline=ring_color, width=1)
+            self.wave_pulse_rings.append(ring)
 
         # Spark particles riding the waveform.
         self.wave_sparks = []
@@ -897,7 +908,9 @@ class BottomScreenIndicator:
                 }
             )
 
-        # Layer order for "space HUD" look.
+        # Layer order: baseline → wave → ripple rings → orb gradient → orb core → sparks
+        if self.wave_baseline:
+            self.wave_canvas.tag_raise(self.wave_baseline)
         if self.wave_trail_glow:
             self.wave_canvas.tag_raise(self.wave_trail_glow)
         if self.wave_trail_line:
@@ -908,19 +921,17 @@ class BottomScreenIndicator:
             self.wave_canvas.tag_raise(self.wave_line)
         for ring in self.wave_pulse_rings:
             self.wave_canvas.tag_raise(ring)
-        for bar in self.wave_bars:
-            self.wave_canvas.tag_raise(bar)
-        for spark in self.wave_sparks:
-            self.wave_canvas.tag_raise(spark)
-        if self.wave_baseline:
-            self.wave_canvas.tag_raise(self.wave_baseline)
+        for layer in getattr(self, "orb_layers", []):
+            self.wave_canvas.tag_raise(layer)
         if self.wave_orb_glow:
             self.wave_canvas.tag_raise(self.wave_orb_glow)
         if self.wave_orb:
             self.wave_canvas.tag_raise(self.wave_orb)
+        for spark in self.wave_sparks:
+            self.wave_canvas.tag_raise(spark)
 
     def _animate_waveform(self, mode: str = "listening"):
-        if not self.wave_canvas or not self.wave_bars:
+        if not self.wave_canvas:
             return
 
         # Envelope smoothing: quick attack, slower release for natural feel.
@@ -1070,8 +1081,30 @@ class BottomScreenIndicator:
             span = max(1.0, float(self.wave_right - self.wave_left))
             orb_x = self.wave_left + ((0.20 + (0.64 * centroid) + (0.03 * math.sin(self.wave_phase * 0.72))) * span)
             orb_y = base + (math.sin(self.wave_phase * (0.60 + (0.40 * voiced_drive))) * (1 + (11 * voiced_drive)))
-            core_r = 3.5 + (7.5 * voiced_drive) + (5.0 * self._burst_energy)
-            glow_r = core_r + 6 + (7 * voiced_drive)
+            # Gentle breath pulse so the orb is alive even at idle.
+            breath = 0.5 + (0.5 * math.sin(self.wave_phase * 0.22))
+            core_r = 4.0 + (8.5 * voiced_drive) + (5.0 * self._burst_energy) + (1.2 * breath * (1.0 - voiced_drive))
+            glow_r = core_r + 7 + (8 * voiced_drive)
+
+            # Gradient orb: 8 concentric layers from dim outer bloom to bright core.
+            orb_layers = getattr(self, "orb_layers", [])
+            if orb_layers:
+                n = len(orb_layers)
+                outer_r = glow_r + 14 + (6 * voiced_drive)
+                for idx in range(n):
+                    t = idx / max(1, n - 1)  # 0 = outermost, 1 = innermost
+                    layer_r = outer_r + (core_r - outer_r) * t
+                    # Color: dark dim glow → saturated accent → bright near-white core
+                    brightness = t ** 0.65
+                    hue_shift = color_lift * 0.28 + (0.18 * self._burst_energy)
+                    layer_color = _mix_color(
+                        self.visual_theme["accent"], "#FFFFFF", min(1.0, brightness * 0.55 + hue_shift)
+                    )
+                    fade_to_bg = max(0.0, (1.0 - t) * 0.88 + (1.0 - min(1.0, voiced_drive + 0.35)) * 0.18)
+                    layer_color = _mix_color(layer_color, self._ui("panel_bg"), min(1.0, fade_to_bg))
+                    self.wave_canvas.coords(orb_layers[idx], orb_x - layer_r, orb_y - layer_r, orb_x + layer_r, orb_y + layer_r)
+                    self.wave_canvas.itemconfig(orb_layers[idx], fill=layer_color)
+
             self.wave_canvas.coords(self.wave_orb, orb_x - core_r, orb_y - core_r, orb_x + core_r, orb_y + core_r)
             self.wave_canvas.coords(
                 self.wave_orb_glow,
@@ -1083,25 +1116,22 @@ class BottomScreenIndicator:
             self.wave_canvas.itemconfig(self.wave_orb, fill=trail_color)
             self.wave_canvas.itemconfig(self.wave_orb_glow, fill=glow_color)
 
-            # Orb pulse rings for stronger speech reactivity cues.
-            if not low_detail:
-                for idx, ring in enumerate(self.wave_pulse_rings):
-                    phase = (self.wave_phase * (0.34 + (idx * 0.08))) + (idx * 1.7)
-                    pulse = (0.5 + 0.5 * math.sin(phase))
-                    ring_r = glow_r + 5 + (idx * 8) + (pulse * 6) + (voiced_drive * 14)
-                    self.wave_canvas.coords(
-                        ring,
-                        orb_x - ring_r,
-                        orb_y - ring_r,
-                        orb_x + ring_r,
-                        orb_y + ring_r,
-                    )
-                    ring_color = _mix_color(self.visual_theme["accent"], "#FFFFFF", 0.16 + (0.10 * idx) + (0.14 * voiced_drive))
-                    ring_w = max(1, int(1 + voiced_drive + (0.4 * (2 - idx)) + (0.4 * self._burst_energy)))
-                    self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
-            else:
-                for ring in self.wave_pulse_rings:
-                    self.wave_canvas.itemconfig(ring, outline="", width=0)
+            # Ripple rings: always visible, more prominent during speech.
+            for idx, ring in enumerate(self.wave_pulse_rings):
+                phase = (self.wave_phase * (0.34 + (idx * 0.08))) + (idx * 1.7)
+                pulse = 0.5 + (0.5 * math.sin(phase))
+                # Rings breathe at idle; expand dramatically when speaking.
+                idle_r = glow_r + 8 + (idx * 10) + (pulse * 4)
+                speech_r = glow_r + 12 + (idx * 14) + (pulse * 8) + (voiced_drive * 18) + (self._burst_energy * 10)
+                ring_r = idle_r + (speech_r - idle_r) * voiced_drive
+                self.wave_canvas.coords(ring, orb_x - ring_r, orb_y - ring_r, orb_x + ring_r, orb_y + ring_r)
+                # Fade rings out in low-detail mode; keep subtle at idle.
+                ring_alpha = 0.08 + (0.20 * idx * 0.5) + (0.30 * voiced_drive)
+                if low_detail:
+                    ring_alpha *= 0.4
+                ring_color = _mix_color(self.visual_theme["accent"], "#FFFFFF", min(1.0, ring_alpha + color_lift * 0.18))
+                ring_w = max(1, int(1 + (voiced_drive * 1.5) + (0.5 * (2 - idx)) + (0.5 * self._burst_energy)))
+                self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
 
         # Spark particles orbiting the waveform path.
         if (not low_detail) and self.wave_sparks and self.wave_spark_meta:

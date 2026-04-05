@@ -1,92 +1,135 @@
 # VoiceFlow
 
-VoiceFlow is a Windows-first local push-to-talk transcription app.
-Hold a hotkey, speak, release, and text is injected into your active app.
-
-## Download (Latest Stable)
+**Local push-to-talk transcription for Windows.** Hold a hotkey, speak, release — your words appear in whatever app you're using. No cloud. No subscription. Runs on your hardware.
 
 [![Latest Release](https://img.shields.io/github/v/release/GrimFandango42/VoiceFlow?display_name=tag&style=for-the-badge)](https://github.com/GrimFandango42/VoiceFlow/releases/latest)
-[![Windows EXE](https://img.shields.io/badge/Windows-Download%20EXE-0078D4?style=for-the-badge&logo=windows)](https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-win64.exe)
-[![Windows Portable ZIP](https://img.shields.io/badge/Windows-Portable%20ZIP-005A9C?style=for-the-badge&logo=windows)](https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-portable-win64.zip)
+[![Windows](https://img.shields.io/badge/Windows-Supported-0078D4?style=for-the-badge&logo=windows)](https://github.com/GrimFandango42/VoiceFlow/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-| Platform | Status | Download |
-|---|---|---|
-| Windows | Supported | [Latest release assets](https://github.com/GrimFandango42/VoiceFlow/releases/latest) |
-| macOS | Community fork target | [Porting guide](docs/guides/FORKING_AND_PLATFORM_GUIDE.md) |
-| Linux | Community fork target | [Porting guide](docs/guides/FORKING_AND_PLATFORM_GUIDE.md) |
+---
 
-## 60-Second Start
+## What It Does
 
-1. Run `VoiceFlow-win64.exe` from Releases, or `dist\VoiceFlow\VoiceFlow.exe` for local packaged testing.
-2. On first run, click `Step 1: Run Hardware Check (Required)` in setup wizard.
-3. Choose a startup profile (`Recommended`, `CPU Compatible`, or `GPU Balanced`).
-4. Click `Save And Launch`.
-5. Focus Notepad (or your target app).
-6. Hold `Ctrl+Shift`, speak, then release.
-7. Confirm text appears in the target app.
+1. Hold `Ctrl+Shift` (configurable)
+2. Speak
+3. Release — text appears in your active application
 
-## Configuration UX
+VoiceFlow injects the transcribed text directly using the clipboard or keystroke simulation, whichever the app supports best.
 
-VoiceFlow is tray-first by design.
+## Features
 
-- Launchers clean stale VoiceFlow processes before each relaunch.
-- First-run setup wizard recommends defaults from detected hardware.
-- First-run startup visually emphasizes Step 1 hardware check and locks Step 2 until check completes.
-- First-run startup requires choosing a profile after hardware evaluation.
-- Primary settings are available from the tray menu (no JSON editing required for normal use).
-- Setup wizard can be reopened from tray (right-click tray icon) via `Setup & Defaults`.
-- Local end-to-end testing should use the packaged bundle executable: `dist\VoiceFlow\VoiceFlow.exe`.
-- Batch launchers remain useful for source debugging, not as the default daily test path.
-- Setup wizard includes `Run Hardware Check` to quickly re-detect GPU/CPU defaults.
-- Recent History and Correction Review are available from the tray for fast feedback loops.
-- Core control surfaces are the setup wizard, tray menu, overlay/dock, and history/review panels.
-- Public docs should use cropped or staged VoiceFlow UI captures only; do not publish screenshots that expose real desktop apps, tabs, taskbars, or personal workspace context.
+- **Fully local** — Whisper inference via [faster-whisper](https://github.com/SYSTRAN/faster-whisper), nothing leaves your machine
+- **Tray-first** — lives in the system tray, stays out of your way
+- **Live audio visualization** — animated overlay shows recording state and voice activity in real time
+- **Adaptive text cleanup** — lightweight post-processing corrects common transcription errors; learns your vocabulary over time
+- **Hardware-aware setup** — auto-detects GPU/CPU at first run and recommends the right Whisper model
+- **Hotkey injection** — works in virtually any Windows application (Notepad, VS Code, browsers, Slack, etc.)
+- **Correction workflow** — review and confirm recent transcriptions from the tray; corrections feed back into the learning system
+- **No internet required** — after initial model download, runs completely offline
 
-## Transcription Quality Defaults
+## Installation
 
-- Runtime enables a lightweight typo/spelling cleanup pass by default (`enable_light_typo_correction=true`).
-- Runtime applies a safe second-pass cleanup by default (`enable_safe_second_pass_cleanup=true`).
-- Optional heavier cleanup stays opt-in (`enable_heavy_second_pass_cleanup=false`).
-- Aggressive context rewrites are opt-in (`enable_aggressive_context_corrections=false`) to reduce over-correction risk.
-- Destination-aware formatting remains enabled by default for readability.
-- Default release behavior pastes text on release without auto-sending Enter (`press_enter_after_paste=false`).
-- Visual animation quality defaults to adaptive mode (`visual_animation_quality=auto`, `visual_target_fps=28`).
-- The first long dictation after extended idle favors completeness over aggressive pause compaction.
+### Windows (Recommended)
 
-## Continual Learning
+Download the pre-built executable from the [latest release](https://github.com/GrimFandango42/VoiceFlow/releases/latest):
 
-- Runtime adaptive learning stays local and observes recurring transcript-to-final-text deltas.
-- Explicit correction signals are treated as higher-trust than auto-analysis, so accent/workflow corrections promote faster than speculative cleanup rules.
-- Saved correction-review feedback is promoted back into the active runtime learner, so the current session can adapt before the next daily batch run.
-- Built-in terminology cleanup already biases common coding-tool phrasing such as `Claude Code` and `Claude Desktop` without forcing risky blanket `cloud -> Claude` rewrites.
-- Raw transcript snippet storage is opt-in (`adaptive_store_raw_text=false` by default).
-- Daily learning writes a report plus an adaptive snapshot with top learned replacements and frequent recent domain tokens.
-- Inspect `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json` and `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\` to see what is sticking.
-- Add personal/work-domain overrides in `%LOCALAPPDATA%\LocalFlow\engineering_terms.json` if you want a local terminology file on top of the built-in rules.
+| File | Description |
+|---|---|
+| `VoiceFlow-win64.exe` | Single-file installer, easiest to get started |
+| `VoiceFlow-portable-win64.zip` | Portable bundle, no installation needed |
 
-## Stable Local Test Loop
+Run the executable. On first launch, a setup wizard walks you through hardware detection and model selection.
 
-1. Build the bundle with `scripts\setup\build_windows_exe.ps1`.
-2. Launch `dist\VoiceFlow\VoiceFlow.exe`.
-3. If validating onboarding, start from a clean config or reopen `Setup & Defaults` from tray.
-4. Verify one short `Ctrl+Shift` dictation and one target-app injection before calling the build stable.
-5. Reserve one-file exe rebuilds for release validation; they are significantly slower than the bundle build.
+### From Source (Windows)
 
-## Stable Baseline
+```bash
+git clone https://github.com/GrimFandango42/VoiceFlow.git
+cd VoiceFlow
+python -m venv venv
+venv\Scripts\activate
+pip install -e ".[dev]"
+python voiceflow.py
+```
 
-Known good rollback: [Latest stable release](https://github.com/GrimFandango42/VoiceFlow/releases/latest) (pin specific tags for strict reproducibility).
+Requires Python 3.9+ and, for GPU acceleration, a CUDA-compatible NVIDIA GPU with appropriate drivers.
+
+### macOS / Linux
+
+VoiceFlow is Windows-first. macOS and Linux ports are community targets — see the [porting guide](docs/guides/FORKING_AND_PLATFORM_GUIDE.md) if you want to contribute platform support.
+
+## Quick Start
+
+1. On first run, the setup wizard opens automatically.
+2. Click **Run Hardware Check** — this detects your GPU/CPU and recommends a model.
+3. Select a profile (`Recommended`, `CPU Compatible`, or `GPU Balanced`) and click **Save And Launch**.
+4. Focus any app (Notepad works well for testing).
+5. Hold `Ctrl+Shift`, speak a sentence, then release.
+6. The transcribed text appears in the focused app.
+
+The tray icon is the main control surface after setup. Right-click it to access settings, history, and correction review.
+
+## Configuration
+
+All settings are accessible from the tray menu — no config file editing required for normal use.
+
+| Goal | Tray Path |
+|---|---|
+| Reopen setup wizard | `Setup & Defaults` |
+| Change push-to-talk hotkey | `PTT Hotkey` |
+| Toggle code-mode formatting | `Code Mode` |
+| Choose paste vs. keystroke injection | `Injection` |
+| Show/hide the visual overlay | `Visual Indicators` |
+| Show/hide the dock bar | `Dock` |
+| View recent transcriptions | `Recent History` |
+| Review and correct transcriptions | `Correction Review` |
+
+For a full settings reference, see the [User Guide](docs/USER_GUIDE.md).
+
+## How It Works
+
+VoiceFlow uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) for on-device speech recognition. Audio is captured from your microphone while the push-to-talk hotkey is held, then processed in two phases:
+
+1. **Streaming preview** — a short context window gives a live text preview during recording
+2. **Final pass** — the full audio chunk is transcribed on release, followed by optional text cleanup passes
+
+Text is injected into the active application via clipboard paste or simulated keystrokes depending on the app and your configured injection mode.
+
+The adaptive learning system watches the difference between raw transcriptions and your corrections over time, building a personal vocabulary map stored locally in `%LOCALAPPDATA%\LocalFlow\`.
+
+## Building from Source
+
+```bash
+# Windows — PowerShell
+.\scripts\setup\build_windows_exe.ps1
+
+# Result: dist\VoiceFlow\VoiceFlow.exe  (bundle)
+#         dist\VoiceFlow-win64.exe       (single-file)
+```
+
+See [BUILD_GUIDE.md](docs/BUILD_GUIDE.md) for full build and packaging instructions.
+
+## Contributing
+
+Contributions are welcome. Please read [CONTRIBUTING.md](docs/CONTRIBUTING.md) before opening a pull request.
+
+Quick guidelines:
+- Run `pytest tests/` before submitting — all tests must pass
+- Follow existing code style (Ruff for Python formatting)
+- For significant changes, open an issue first to discuss the approach
+- Platform ports (macOS, Linux) are especially welcome — see [FORKING_AND_PLATFORM_GUIDE.md](docs/guides/FORKING_AND_PLATFORM_GUIDE.md)
 
 ## Documentation
 
-- [Start Here](docs/README.md)
-- [User Guide (tray settings + personalization)](docs/USER_GUIDE.md)
-- [FAQ / Quick Troubleshooting](docs/guides/FAQ.md)
-- [Build and Packaging](docs/BUILD_GUIDE.md)
-- [Technical Overview](docs/TECHNICAL_OVERVIEW.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Security + Privacy Operations](docs/guides/SECURITY_AND_PRIVACY.md)
-- [Forking + Platform Porting](docs/guides/FORKING_AND_PLATFORM_GUIDE.md)
+| Document | Description |
+|---|---|
+| [User Guide](docs/USER_GUIDE.md) | Tray settings, hotkeys, correction workflow |
+| [FAQ](docs/guides/FAQ.md) | Common issues and quick fixes |
+| [Build Guide](docs/BUILD_GUIDE.md) | Building and packaging |
+| [Technical Overview](docs/TECHNICAL_OVERVIEW.md) | Runtime architecture, config keys |
+| [Architecture](docs/ARCHITECTURE.md) | Component design and data flow |
+| [Security & Privacy](docs/guides/SECURITY_AND_PRIVACY.md) | What data is stored and where |
+| [Platform Porting](docs/guides/FORKING_AND_PLATFORM_GUIDE.md) | Forking guide for non-Windows platforms |
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [LICENSE](LICENSE).
