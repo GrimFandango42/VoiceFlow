@@ -234,6 +234,10 @@ class BottomScreenIndicator:
         self.wave_baseline = None
         self.wave_sparks = []
         self.wave_bars = []
+        self.ripple_rings = []
+        self.ripple_phases = [0.0, 0.25, 0.5, 0.75]
+        self.ripple_orb = None
+        self.ripple_orb_glow = None
         self.wave_scan = None
         self.wave_trail_line = None
         self.wave_trail_glow = None
@@ -328,7 +332,7 @@ class BottomScreenIndicator:
         req_w, req_h = self.config_manager.get_overlay_dimensions()
         # Compact overlay profile: small, centered, and visually lighter.
         self.width = int(min(500, max(332, req_w + 20)))
-        self.height = int(min(156, max(116, req_h - 24)))
+        self.height = int(min(144, max(108, req_h - 28)))
         self.wave_w = max(272, self.width - 20)
         colors = self.config_manager.get_color_scheme()
         theme_value = getattr(getattr(self.config_manager, "config", None), "theme", ColorTheme.DEFAULT)
@@ -610,7 +614,7 @@ class BottomScreenIndicator:
         if not self.window:
             return
         x, y = self.config_manager.get_position_coordinates(screen_width, screen_height)
-        reserved_bottom = 152 if self.dock_enabled else 110
+        reserved_bottom = 138 if self.dock_enabled else 98
 
         # Keep overlay strictly centered when dock is enabled.
         if self.dock_enabled and self.dock_window:
@@ -619,7 +623,7 @@ class BottomScreenIndicator:
                 geo = self.dock_window.geometry()  # e.g. 430x30+745+1008
                 dock_y = int(geo.rsplit("+", 1)[-1])
                 # Keep animation close to the dock for a tighter visual stack.
-                y = int(dock_y - self.height - 5)
+                y = int(dock_y - self.height - 2)
             except Exception:
                 y = min(y - 8, screen_height - self.height - reserved_bottom)
         else:
@@ -661,7 +665,7 @@ class BottomScreenIndicator:
 
         # Status badge row — shows current state (Listening / Processing / Transcribing / Done)
         status_row = tk.Frame(main_frame, bg=self.transparent_key, highlightthickness=0, bd=0)
-        status_row.pack(fill=tk.X, padx=6, pady=(0, 2))
+        status_row.pack(fill=tk.X, padx=6, pady=(0, 1))
 
         self.status_badge_frame = tk.Frame(
             status_row,
@@ -705,7 +709,7 @@ class BottomScreenIndicator:
             padx=7,
             pady=4,
         )
-        preview_card.pack(fill=tk.X, padx=6, pady=(0, 1))
+        preview_card.pack(fill=tk.X, padx=6, pady=(0, 0))
         self.preview_var = tk.StringVar(value="")
         self.preview_label = tk.Label(
             preview_card,
@@ -780,23 +784,12 @@ class BottomScreenIndicator:
             return
         self.wave_canvas.delete("all")
         self.wave_h = int(max(58, self.wave_canvas.winfo_reqheight()))
-        left = 8
-        right = self.wave_w - 8
-        self.wave_left = left
-        self.wave_right = right
-        base = self.wave_h // 2
         self.wave_energy_history = deque([0.0] * self.wave_energy_history.maxlen, maxlen=self.wave_energy_history.maxlen)
         self._speech_level = 0.0
         self._silence_floor_est = 0.0
-
-        # Clean minimal baseline
-        self.wave_baseline = self.wave_canvas.create_line(
-            left, base, right, base,
-            fill=self._ui("panel_border"),
-            width=1,
-        )
-
-        # Removed: trail lines, wave sine, orb, pulse rings, sparks — too visually busy.
+        # Clear old refs
+        self.wave_bars = []
+        self.wave_baseline = None
         self.wave_line = None
         self.wave_line_glow = None
         self.wave_fill = None
@@ -815,32 +808,43 @@ class BottomScreenIndicator:
         self.space_ring = None
         self.space_arcs = []
 
-        # 40 clean bars — wider spacing, modern recorder look.
-        self.wave_bars = []
-        bar_count = 40
-        gap = 3
-        bar_w = max(4, int((right - left - ((bar_count - 1) * gap)) / bar_count))
-        x = left
-        for _ in range(bar_count):
-            bar = self.wave_canvas.create_rectangle(
-                x, base - 2, x + bar_w, base + 2,
-                fill=self._ui("accent"),
-                outline="",
-            )
-            self.wave_bars.append(bar)
-            x += bar_w + gap
+        cx = self.wave_w // 2
+        cy = self.wave_h // 2
 
-        # Bars on top of baseline
-        for bar in self.wave_bars:
-            self.wave_canvas.tag_raise(bar)
-        if self.wave_baseline:
-            self.wave_canvas.tag_lower(self.wave_baseline)
+        # Soft background glow behind orb
+        self.ripple_orb_glow = self.wave_canvas.create_oval(
+            cx - 14, cy - 10, cx + 14, cy + 10,
+            fill=_mix_color(self._ui("accent"), self.transparent_key, 0.72),
+            outline="",
+        )
+        # Center orb — bright core
+        self.ripple_orb = self.wave_canvas.create_oval(
+            cx - 4, cy - 3, cx + 4, cy + 3,
+            fill=self._ui("accent"),
+            outline="",
+        )
+        # 4 ripple rings — staggered phases
+        self.ripple_rings = []
+        self.ripple_phases = [0.0, 0.25, 0.5, 0.75]
+        for _ in range(4):
+            ring = self.wave_canvas.create_oval(
+                cx - 2, cy - 2, cx + 2, cy + 2,
+                outline=self._ui("accent"),
+                fill="",
+                width=2,
+            )
+            self.ripple_rings.append(ring)
+        # Layer: glow behind orb, orb in front, rings in front
+        self.wave_canvas.tag_raise(self.ripple_orb_glow)
+        for ring in self.ripple_rings:
+            self.wave_canvas.tag_raise(ring)
+        self.wave_canvas.tag_raise(self.ripple_orb)
 
     def _animate_waveform(self, mode: str = "listening"):
-        if not self.wave_canvas or not self.wave_bars:
+        if not self.wave_canvas or not self.ripple_rings:
             return
 
-        # Envelope smoothing: quick attack, slower release for natural feel.
+        # --- Signal processing (unchanged) ---
         target = max(0.0, min(1.0, float(self.audio_level_target)))
         delta = target - self.audio_level_smoothed
         alpha = 0.82 if delta > 0 else 0.34
@@ -849,85 +853,100 @@ class BottomScreenIndicator:
             self.audio_level_smoothed *= 0.56
         lvl = self.audio_level_smoothed
 
-        # Smooth frequency-profile features.
         for key in ("low", "mid", "high", "centroid"):
             tv = max(0.0, min(1.0, float(self.audio_features_target.get(key, 0.0))))
             sv = float(self.audio_features_smoothed.get(key, tv))
             blend = 0.42 if tv > sv else 0.28
             self.audio_features_smoothed[key] = sv + (tv - sv) * blend
 
-        low = float(self.audio_features_smoothed["low"])
-        mid = float(self.audio_features_smoothed["mid"])
-        high = float(self.audio_features_smoothed["high"])
-        centroid = float(self.audio_features_smoothed["centroid"])
-
         if mode == "idle":
             lvl *= 0.08
 
-        # Recorder/radio style bars.
-        base = self.wave_h // 2
-        max_h = max(18, (self.wave_h // 2) - 10)
-
-        # AGC prevents "too zoomed in" or "too flat" look as mic level changes.
         target_agc = max(0.04, min(1.0, lvl))
         self._visual_agc = (self._visual_agc * 0.94) + (target_agc * 0.06)
         agc_scale = 0.85 + (0.95 / max(0.08, self._visual_agc))
         agc_scale = max(0.95, min(2.35, agc_scale))
         voiced_raw = min(1.0, lvl * agc_scale)
 
-        # Dynamic silence-floor estimation makes idle state visibly calmer.
         if voiced_raw < 0.18:
             self._silence_floor_est = (self._silence_floor_est * 0.97) + (voiced_raw * 0.03)
         floor = max(0.012, min(0.18, self._silence_floor_est))
         voiced = max(0.0, min(1.0, (voiced_raw - floor) / max(0.12, 1.0 - floor)))
 
-        # Additional smoothing to avoid jitter while preserving speech swings.
         self._speech_level = (self._speech_level * 0.78) + (voiced * 0.22)
         voiced = self._speech_level
         voiced_drive = max(0.0, min(1.0, voiced ** 0.86))
-        self.wave_phase += 0.07 + (2.35 * voiced_drive)
-        self._color_phase += 0.018 + (0.12 * voiced_drive)
+        self.wave_phase += 0.06 + (2.0 * voiced_drive)
+        self._color_phase += 0.015 + (0.10 * voiced_drive)
 
         speech_now = voiced > 0.12
         if speech_now and not self._speech_active:
             self._burst_energy = 1.0
         self._speech_active = speech_now
         self._burst_energy = max(0.0, (self._burst_energy * 0.91) - 0.010)
-
-        # Clean bars — frequency-reactive when speaking, gentle breathing when idle.
         self.wave_energy_history.append(voiced)
-        n = len(self.wave_bars)
-        center = (n - 1) / 2.0
-        for i, bar in enumerate(self.wave_bars):
-            p = i / max(1.0, n - 1.0)
 
-            if mode == "idle" or voiced_drive < 0.04:
-                # Smooth breathing: gentle sine wave across all bars.
-                breath = 0.18 + (0.12 * math.sin(self.wave_phase * 0.28 + p * math.pi * 2.2))
-                h = max(2.0, max_h * breath)
-                bar_color = _mix_color(self._ui("accent"), self._ui("panel_border"), 0.55)
-            else:
-                # Audio-reactive: frequency bands mapped to bar position.
-                w_low = max(0.0, 1.0 - abs(p - 0.15) / 0.28)
-                w_mid = max(0.0, 1.0 - abs(p - 0.50) / 0.30)
-                w_high = max(0.0, 1.0 - abs(p - 0.85) / 0.28)
-                w_sum = max(1e-6, w_low + w_mid + w_high)
-                band_energy = ((low * w_low) + (mid * w_mid) + (high * w_high)) / w_sum
+        # --- Ripple ring animation ---
+        cx = self.wave_w // 2
+        cy = self.wave_h // 2
+        max_rx = cx - 6
+        max_ry = cy - 3
 
-                falloff = 1.0 - min(1.0, abs(i - center) / (center + 0.001))
-                osc = 0.56 + (0.44 * math.sin((self.wave_phase * (0.9 + (band_energy * 0.6))) + (i * 0.20)))
-                amplitude = voiced_drive * (0.14 + (0.86 * band_energy))
-                h = 2.0 + (max_h * amplitude * (0.22 + (0.78 * falloff)) * osc)
-                brightness = max(0.0, min(1.0, (0.12 * band_energy) + (0.20 * voiced_drive) + (0.06 * falloff)))
-                bar_color = _mix_color(self._ui("accent"), "#FFFFFF", 0.08 + (brightness * 0.28))
+        # Phase advance: slow idle pulse, fast speech burst
+        phase_rate = 0.004 + 0.032 * voiced_drive + 0.015 * self._burst_energy
 
-            x0, _, x1, _ = self.wave_canvas.coords(bar)
-            self.wave_canvas.coords(bar, x0, base - h, x1, base + h)
-            self.wave_canvas.itemconfig(bar, fill=bar_color)
+        # Accent color: brighter when speaking
+        color_lift = min(1.0, 0.22 * voiced_drive + 0.15 * self._burst_energy)
+        accent_bright = _mix_color(self._ui("accent"), "#FFFFFF", color_lift)
 
-        if self.wave_baseline:
-            base_color = self._ui("panel_border") if voiced < 0.08 else self._ui("panel_border_soft")
-            self.wave_canvas.itemconfig(self.wave_baseline, fill=base_color, width=1)
+        for i, ring in enumerate(self.ripple_rings):
+            self.ripple_phases[i] = (self.ripple_phases[i] + phase_rate) % 1.0
+            phase = self.ripple_phases[i]
+
+            # Ease-out expansion: fast start, slows near edge
+            ease = phase ** 0.60
+
+            rx = max(2.0, max_rx * ease)
+            ry = max(1.5, max_ry * ease)
+
+            # Opacity fades as ring expands; bursts boost early opacity
+            opacity = max(0.0, 1.0 - phase)
+            opacity = min(1.0, opacity + 0.15 * self._burst_energy * (1.0 - phase))
+
+            if opacity < 0.05:
+                # Move off-canvas when invisible
+                self.wave_canvas.coords(ring, -20, -20, -18, -18)
+                continue
+
+            # Color: mix accent toward transparent key as opacity drops
+            ring_color = _mix_color(accent_bright, self.transparent_key, 1.0 - opacity)
+            ring_w = max(1, int((2.5 + voiced_drive * 1.5) * opacity))
+
+            self.wave_canvas.coords(ring, cx - rx, cy - ry, cx + rx, cy + ry)
+            self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
+
+        # --- Center orb ---
+        if self.ripple_orb and self.ripple_orb_glow:
+            orb_r_x = 3 + 8 * voiced_drive + 3 * self._burst_energy
+            orb_r_y = 2.5 + 6 * voiced_drive + 2 * self._burst_energy
+            orb_color = _mix_color(self._ui("accent"), "#FFFFFF", 0.1 + 0.55 * voiced_drive)
+            self.wave_canvas.coords(
+                self.ripple_orb,
+                cx - orb_r_x, cy - orb_r_y,
+                cx + orb_r_x, cy + orb_r_y,
+            )
+            self.wave_canvas.itemconfig(self.ripple_orb, fill=orb_color)
+
+            glow_r_x = orb_r_x + 5 + 8 * voiced_drive
+            glow_r_y = orb_r_y + 4 + 6 * voiced_drive
+            glow_opacity = 0.28 + 0.45 * voiced_drive
+            glow_color = _mix_color(self._ui("accent"), self.transparent_key, 1.0 - glow_opacity)
+            self.wave_canvas.coords(
+                self.ripple_orb_glow,
+                cx - glow_r_x, cy - glow_r_y,
+                cx + glow_r_x, cy + glow_r_y,
+            )
+            self.wave_canvas.itemconfig(self.ripple_orb_glow, fill=glow_color)
 
     def update_audio_level(self, level: float):
         """Thread-safe live amplitude input from recorder loop."""
