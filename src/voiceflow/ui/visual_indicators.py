@@ -234,6 +234,7 @@ class BottomScreenIndicator:
         self.wave_baseline = None
         self.wave_sparks = []
         self.wave_bars = []
+        self.wave_siri_rings = []
         self.wave_scan = None
         self.wave_trail_line = None
         self.wave_trail_glow = None
@@ -328,7 +329,7 @@ class BottomScreenIndicator:
         req_w, req_h = self.config_manager.get_overlay_dimensions()
         # Compact overlay profile: small, centered, and visually lighter.
         self.width = int(min(500, max(332, req_w + 20)))
-        self.height = int(min(182, max(142, req_h - 20)))
+        self.height = int(min(160, max(118, req_h - 30)))
         self.wave_w = max(272, self.width - 20)
         colors = self.config_manager.get_color_scheme()
         theme_value = getattr(getattr(self.config_manager, "config", None), "theme", ColorTheme.DEFAULT)
@@ -651,17 +652,17 @@ class BottomScreenIndicator:
         self.wave_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=68,
+            height=58,
             bg=self.transparent_key,
             highlightthickness=0,
             bd=0,
         )
-        self.wave_canvas.pack(pady=(1, 0))
+        self.wave_canvas.pack(pady=(0, 0))
         self._init_waveform_strip()
 
         # Status badge row — shows current state (Listening / Processing / Transcribing / Done)
         status_row = tk.Frame(main_frame, bg=self.transparent_key, highlightthickness=0, bd=0)
-        status_row.pack(fill=tk.X, padx=6, pady=(0, 1))
+        status_row.pack(fill=tk.X, padx=6, pady=(0, 0))
 
         self.status_badge_frame = tk.Frame(
             status_row,
@@ -788,6 +789,22 @@ class BottomScreenIndicator:
         self.wave_energy_history = deque([0.0] * self.wave_energy_history.maxlen, maxlen=self.wave_energy_history.maxlen)
         self._speech_level = 0.0
         self._silence_floor_est = 0.0
+
+        # Siri-style concentric breathing rings — created first so they sit below
+        # the waveform in the z-order. Three rings offset 120° apart for a
+        # fluid, multi-layer pulse that reads as "alive" even when quiet.
+        cx = (left + right) // 2
+        cy = base
+        self.wave_siri_rings = []
+        for i in range(3):
+            r0 = 9 + i * 14
+            ring = self.wave_canvas.create_oval(
+                cx - r0, cy - r0, cx + r0, cy + r0,
+                outline=_mix_color(self.visual_theme["accent"], self._ui("panel_bg"), 0.88),
+                width=1,
+                fill="",
+            )
+            self.wave_siri_rings.append(ring)
 
         self.wave_baseline = self.wave_canvas.create_line(
             left,
@@ -920,7 +937,7 @@ class BottomScreenIndicator:
             self.wave_canvas.tag_raise(self.wave_orb)
 
     def _animate_waveform(self, mode: str = "listening"):
-        if not self.wave_canvas or not self.wave_bars:
+        if not self.wave_canvas:
             return
 
         # Envelope smoothing: quick attack, slower release for natural feel.
@@ -1065,6 +1082,22 @@ class BottomScreenIndicator:
         if self.wave_baseline:
             base_color = self._ui("panel_border") if voiced < 0.08 else self._ui("panel_border_soft")
             self.wave_canvas.itemconfig(self.wave_baseline, fill=base_color, width=(1 if voiced < 0.2 else 2))
+
+        # Siri-like concentric breathing rings: three rings offset 120° apart,
+        # each expanding/contracting at a different phase for a living, fluid look.
+        if self.wave_siri_rings:
+            cx = (self.wave_left + self.wave_right) // 2
+            cy = base
+            for i, ring in enumerate(self.wave_siri_rings):
+                phase_off = i * (math.pi * 2.0 / 3.0)
+                pulse = 0.5 + 0.5 * math.sin(self.wave_phase * 0.30 + phase_off)
+                base_r = float(9 + i * 14)
+                r = base_r + pulse * (4.0 + voiced_drive * 20.0) + self._burst_energy * 8.0
+                opacity = max(0.04, min(0.50, 0.08 + voiced_drive * 0.34 - i * 0.04 + self._burst_energy * 0.16))
+                ring_color = _mix_color(self.visual_theme["accent"], self._ui("panel_bg"), 1.0 - opacity)
+                ring_w = max(1, int(1 + voiced_drive * 2.0))
+                self.wave_canvas.coords(ring, cx - r, cy - r, cx + r, cy + r)
+                self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
 
         if self.wave_orb and self.wave_orb_glow:
             span = max(1.0, float(self.wave_right - self.wave_left))
