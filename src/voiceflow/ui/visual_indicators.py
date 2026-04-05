@@ -328,7 +328,7 @@ class BottomScreenIndicator:
         req_w, req_h = self.config_manager.get_overlay_dimensions()
         # Compact overlay profile: small, centered, and visually lighter.
         self.width = int(min(500, max(332, req_w + 20)))
-        self.height = int(min(182, max(142, req_h - 20)))
+        self.height = int(min(168, max(130, req_h - 20)))
         self.wave_w = max(272, self.width - 20)
         colors = self.config_manager.get_color_scheme()
         theme_value = getattr(getattr(self.config_manager, "config", None), "theme", ColorTheme.DEFAULT)
@@ -651,17 +651,17 @@ class BottomScreenIndicator:
         self.wave_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=80,
+            height=68,
             bg=self.transparent_key,
             highlightthickness=0,
             bd=0,
         )
-        self.wave_canvas.pack(pady=(2, 1))
+        self.wave_canvas.pack(pady=(2, 0))
         self._init_waveform_strip()
 
         # Status badge row — shows current state (Listening / Processing / Transcribing / Done)
         status_row = tk.Frame(main_frame, bg=self.transparent_key, highlightthickness=0, bd=0)
-        status_row.pack(fill=tk.X, padx=6, pady=(0, 2))
+        status_row.pack(fill=tk.X, padx=6, pady=(0, 1))
 
         self.status_badge_frame = tk.Frame(
             status_row,
@@ -779,7 +779,7 @@ class BottomScreenIndicator:
         if not self.wave_canvas:
             return
         self.wave_canvas.delete("all")
-        self.wave_h = int(max(92, self.wave_canvas.winfo_reqheight()))
+        self.wave_h = int(max(68, self.wave_canvas.winfo_reqheight()))
         left = 8
         right = self.wave_w - 8
         self.wave_left = left
@@ -867,9 +867,9 @@ class BottomScreenIndicator:
         self.wave_spark_meta = []
         self.wave_bars = []
 
-        bar_count = 64
-        gap = 2
-        bar_w = max(3, int((right - left - ((bar_count - 1) * gap)) / bar_count))
+        bar_count = 28
+        gap = 3
+        bar_w = max(4, int((right - left - ((bar_count - 1) * gap)) / bar_count))
         x = left
         for _ in range(bar_count):
             bar = self.wave_canvas.create_rectangle(
@@ -1077,14 +1077,15 @@ class BottomScreenIndicator:
             front_dist = abs(p - wave_front)
             front_boost = max(0.0, 1.0 - (front_dist / 0.24))
             combined = (0.20 + (0.80 * falloff)) * (0.16 + (0.84 * band_energy)) * (0.72 + (0.38 * front_boost))
-            amplitude = voiced_drive * (0.12 + (0.88 * band_energy))
-            h = 1.8 + (max_h * amplitude * combined * osc)
+            amplitude = voiced_drive * (0.14 + (0.86 * band_energy))
+            h = 1.2 + (max_h * amplitude * combined * osc)
             x0, _, x1, _ = self.wave_canvas.coords(bar)
             top = base - h
             bottom = base + (h * (0.54 + (0.14 * front_boost)))
             self.wave_canvas.coords(bar, x0, top, x1, bottom)
-            bar_mix = max(0.0, min(1.0, (0.16 * band_energy) + (0.22 * voiced_drive) + (0.08 * falloff)))
-            color = _mix_color(self.visual_theme["accent"], "#FFFFFF", 0.10 + (bar_mix * 0.22))
+            # Brighter, more dramatic color shift during active speech.
+            bar_mix = max(0.0, min(1.0, (0.18 * band_energy) + (0.38 * voiced_drive) + (0.08 * falloff)))
+            color = _mix_color(self.visual_theme["accent"], "#FFFFFF", 0.08 + (bar_mix * 0.36))
             self.wave_canvas.itemconfig(bar, fill=color)
 
         if self.wave_baseline:
