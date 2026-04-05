@@ -332,7 +332,7 @@ class BottomScreenIndicator:
         req_w, req_h = self.config_manager.get_overlay_dimensions()
         # Compact overlay profile: small, centered, and visually lighter.
         self.width = int(min(500, max(332, req_w + 20)))
-        self.height = int(min(144, max(108, req_h - 28)))
+        self.height = int(min(162, max(124, req_h - 22)))
         self.wave_w = max(272, self.width - 20)
         colors = self.config_manager.get_color_scheme()
         theme_value = getattr(getattr(self.config_manager, "config", None), "theme", ColorTheme.DEFAULT)
@@ -623,7 +623,7 @@ class BottomScreenIndicator:
                 geo = self.dock_window.geometry()  # e.g. 430x30+745+1008
                 dock_y = int(geo.rsplit("+", 1)[-1])
                 # Keep animation close to the dock for a tighter visual stack.
-                y = int(dock_y - self.height - 2)
+                y = int(dock_y - self.height - 1)
             except Exception:
                 y = min(y - 8, screen_height - self.height - reserved_bottom)
         else:
@@ -655,7 +655,7 @@ class BottomScreenIndicator:
         self.wave_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=58,
+            height=74,
             bg=self.transparent_key,
             highlightthickness=0,
             bd=0,
@@ -719,7 +719,8 @@ class BottomScreenIndicator:
             font=("Segoe UI", max(10, int(self.live_caption_font_size) - 1), "bold"),
             wraplength=self.wave_w - 36,
             justify=tk.LEFT,
-            anchor="w",
+            anchor="nw",
+            height=3,
         )
         self.preview_label.pack(fill=tk.X)
         self.word_stream_canvas = None
@@ -783,7 +784,7 @@ class BottomScreenIndicator:
         if not self.wave_canvas:
             return
         self.wave_canvas.delete("all")
-        self.wave_h = int(max(58, self.wave_canvas.winfo_reqheight()))
+        self.wave_h = int(max(74, self.wave_canvas.winfo_reqheight()))
         self.wave_energy_history = deque([0.0] * self.wave_energy_history.maxlen, maxlen=self.wave_energy_history.maxlen)
         self._speech_level = 0.0
         self._silence_floor_est = 0.0
@@ -889,47 +890,47 @@ class BottomScreenIndicator:
         # --- Ripple ring animation ---
         cx = self.wave_w // 2
         cy = self.wave_h // 2
-        max_rx = cx - 6
-        max_ry = cy - 3
+        max_rx = cx - 5
+        max_ry = cy - 4
 
-        # Phase advance: slow idle pulse, fast speech burst
-        phase_rate = 0.004 + 0.032 * voiced_drive + 0.015 * self._burst_energy
+        # Phase advance: slow idle pulse, dramatically faster during speech/burst
+        phase_rate = 0.003 + 0.062 * voiced_drive + 0.028 * self._burst_energy
 
-        # Accent color: brighter when speaking
-        color_lift = min(1.0, 0.22 * voiced_drive + 0.15 * self._burst_energy)
-        accent_bright = _mix_color(self._ui("accent"), "#FFFFFF", color_lift)
+        # Color: shift from cool blue → warm amber as audio level rises
+        warm_color = "#E8A060"  # warm amber for peak speech
+        accent_warm = _mix_color(self._ui("accent"), warm_color, min(1.0, voiced_drive * 0.75))
+        color_lift = min(1.0, 0.18 * voiced_drive + 0.22 * self._burst_energy)
+        accent_bright = _mix_color(accent_warm, "#FFFFFF", color_lift)
 
         for i, ring in enumerate(self.ripple_rings):
             self.ripple_phases[i] = (self.ripple_phases[i] + phase_rate) % 1.0
             phase = self.ripple_phases[i]
 
             # Ease-out expansion: fast start, slows near edge
-            ease = phase ** 0.60
+            ease = phase ** 0.55
 
             rx = max(2.0, max_rx * ease)
             ry = max(1.5, max_ry * ease)
 
-            # Opacity fades as ring expands; bursts boost early opacity
+            # Opacity: fades as ring expands; burst dramatically boosts early opacity
             opacity = max(0.0, 1.0 - phase)
-            opacity = min(1.0, opacity + 0.15 * self._burst_energy * (1.0 - phase))
+            opacity = min(1.0, opacity + 0.30 * self._burst_energy * (1.0 - phase))
 
-            if opacity < 0.05:
-                # Move off-canvas when invisible
+            if opacity < 0.04:
                 self.wave_canvas.coords(ring, -20, -20, -18, -18)
                 continue
 
-            # Color: mix accent toward transparent key as opacity drops
             ring_color = _mix_color(accent_bright, self.transparent_key, 1.0 - opacity)
-            ring_w = max(1, int((2.5 + voiced_drive * 1.5) * opacity))
+            ring_w = max(1, int((2.0 + voiced_drive * 2.5 + self._burst_energy * 1.5) * opacity))
 
             self.wave_canvas.coords(ring, cx - rx, cy - ry, cx + rx, cy + ry)
             self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
 
         # --- Center orb ---
         if self.ripple_orb and self.ripple_orb_glow:
-            orb_r_x = 3 + 8 * voiced_drive + 3 * self._burst_energy
-            orb_r_y = 2.5 + 6 * voiced_drive + 2 * self._burst_energy
-            orb_color = _mix_color(self._ui("accent"), "#FFFFFF", 0.1 + 0.55 * voiced_drive)
+            orb_r_x = 3 + 10 * voiced_drive + 4 * self._burst_energy
+            orb_r_y = 2.5 + 7 * voiced_drive + 3 * self._burst_energy
+            orb_color = _mix_color(accent_warm, "#FFFFFF", 0.15 + 0.60 * voiced_drive)
             self.wave_canvas.coords(
                 self.ripple_orb,
                 cx - orb_r_x, cy - orb_r_y,
@@ -937,10 +938,10 @@ class BottomScreenIndicator:
             )
             self.wave_canvas.itemconfig(self.ripple_orb, fill=orb_color)
 
-            glow_r_x = orb_r_x + 5 + 8 * voiced_drive
-            glow_r_y = orb_r_y + 4 + 6 * voiced_drive
-            glow_opacity = 0.28 + 0.45 * voiced_drive
-            glow_color = _mix_color(self._ui("accent"), self.transparent_key, 1.0 - glow_opacity)
+            glow_r_x = orb_r_x + 7 + 16 * voiced_drive + 8 * self._burst_energy
+            glow_r_y = orb_r_y + 5 + 12 * voiced_drive + 6 * self._burst_energy
+            glow_opacity = 0.32 + 0.58 * voiced_drive + 0.20 * self._burst_energy
+            glow_color = _mix_color(accent_warm, self.transparent_key, 1.0 - min(1.0, glow_opacity))
             self.wave_canvas.coords(
                 self.ripple_orb_glow,
                 cx - glow_r_x, cy - glow_r_y,
