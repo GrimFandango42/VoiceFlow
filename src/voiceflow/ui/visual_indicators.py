@@ -332,7 +332,7 @@ class BottomScreenIndicator:
         req_w, req_h = self.config_manager.get_overlay_dimensions()
         # Compact overlay profile: small, centered, and visually lighter.
         self.width = int(min(500, max(332, req_w + 20)))
-        self.height = int(min(162, max(124, req_h - 22)))
+        self.height = int(min(220, max(168, req_h + 28)))
         self.wave_w = max(272, self.width - 20)
         colors = self.config_manager.get_color_scheme()
         theme_value = getattr(getattr(self.config_manager, "config", None), "theme", ColorTheme.DEFAULT)
@@ -720,7 +720,7 @@ class BottomScreenIndicator:
             wraplength=self.wave_w - 36,
             justify=tk.LEFT,
             anchor="nw",
-            height=3,
+            height=5,
         )
         self.preview_label.pack(fill=tk.X)
         self.word_stream_canvas = None
@@ -896,11 +896,16 @@ class BottomScreenIndicator:
         # Phase advance: slow idle pulse, dramatically faster during speech/burst
         phase_rate = 0.003 + 0.062 * voiced_drive + 0.028 * self._burst_energy
 
-        # Color: shift from cool blue → warm amber as audio level rises
-        warm_color = "#E8A060"  # warm amber for peak speech
-        accent_warm = _mix_color(self._ui("accent"), warm_color, min(1.0, voiced_drive * 0.75))
+        # Spectrum palette: each ring has its own hue, rotates slowly with _color_phase
+        # Hue offsets (in radians): blue, teal, violet, amber — visually distinct
+        _RING_HUE_BASES = [
+            ("#5B9EE8", "#60E8D8"),   # ring 0: blue → teal
+            ("#A060E8", "#E060B8"),   # ring 1: violet → pink
+            ("#E8A060", "#E8D460"),   # ring 2: amber → gold
+            ("#60E880", "#60C8E8"),   # ring 3: green → sky
+        ]
+        color_phase_offset = self._color_phase % (math.pi * 2.0)
         color_lift = min(1.0, 0.18 * voiced_drive + 0.22 * self._burst_energy)
-        accent_bright = _mix_color(accent_warm, "#FFFFFF", color_lift)
 
         for i, ring in enumerate(self.ripple_rings):
             self.ripple_phases[i] = (self.ripple_phases[i] + phase_rate) % 1.0
@@ -920,11 +925,20 @@ class BottomScreenIndicator:
                 self.wave_canvas.coords(ring, -20, -20, -18, -18)
                 continue
 
-            ring_color = _mix_color(accent_bright, self.transparent_key, 1.0 - opacity)
+            # Each ring cycles between its two hue endpoints, driven by color_phase
+            hue_a, hue_b = _RING_HUE_BASES[i]
+            hue_cycle = (math.sin(color_phase_offset + i * math.pi * 0.5) + 1.0) * 0.5
+            ring_base = _mix_color(hue_a, hue_b, hue_cycle)
+            # Brighten with voice level
+            ring_bright = _mix_color(ring_base, "#FFFFFF", color_lift)
+            ring_color = _mix_color(ring_bright, self.transparent_key, 1.0 - opacity)
             ring_w = max(1, int((2.0 + voiced_drive * 2.5 + self._burst_energy * 1.5) * opacity))
 
             self.wave_canvas.coords(ring, cx - rx, cy - ry, cx + rx, cy + ry)
             self.wave_canvas.itemconfig(ring, outline=ring_color, width=ring_w)
+
+        # Use ring 2 (amber/gold) as orb base, brightens with voice
+        accent_warm = _mix_color(self._ui("accent"), "#E8A060", min(1.0, voiced_drive * 0.75))
 
         # --- Center orb ---
         if self.ripple_orb and self.ripple_orb_glow:
