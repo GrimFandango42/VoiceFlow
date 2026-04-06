@@ -41,10 +41,10 @@ echo.
 echo ========================================
 echo.
 
-:: Change to src directory and run
-cd src
-"%PYTHON_EXE%" -m voiceflow.ui.cli_enhanced
-cd ..
+:: Launch via _app_entry.py to avoid false-positive duplicate-instance detection.
+:: Launching with -m voiceflow.ui.cli_enhanced puts that string in the process cmdline,
+:: which confuses the single-instance guard when py.exe spawns a real-python child.
+"%PYTHON_EXE%" _app_entry.py
 
 :: If launched by double-click, pause on exit
 if "%1"=="" pause
