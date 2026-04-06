@@ -728,6 +728,65 @@ class EnhancedApp:
             self._fast_preloader = None
             self._fast_model_ready = False
 
+    def swap_model_tier(self, new_tier: str, on_complete=None) -> None:
+        """Hot-swap the primary ASR engine to a different model tier.
+
+        Loads the new model in a background daemon thread so the tray remains
+        responsive. ``on_complete(success: bool, message: str)`` is called when
+        the swap finishes (or fails).  The swap is skipped when ``new_tier``
+        matches the current tier.
+        """
+        valid_tiers = {"tiny", "quick", "balanced", "quality"}
+        new_tier = str(new_tier).strip().lower()
+        if new_tier not in valid_tiers:
+            if on_complete:
+                on_complete(False, f"Unknown tier '{new_tier}'")
+            return
+
+        current_tier = str(getattr(self.cfg, "model_tier", "quick")).strip().lower()
+        if new_tier == current_tier:
+            if on_complete:
+                on_complete(True, f"Already using {new_tier} model")
+            return
+
+        def _do_swap():
+            try:
+                # Update config and persist immediately so the new tier survives restarts.
+                self.cfg.model_tier = new_tier
+                save_config(self.cfg)
+
+                new_asr = WhisperASR(self.cfg)
+                preloader = ModelPreloader(new_asr)
+                preloader.start_preload()
+                ready = preloader.wait_for_ready(timeout=120.0)
+
+                if ready:
+                    # Swap in the new engine; old engine will be GC'd.
+                    self.asr = new_asr
+                    self._preloader = preloader
+                    self._model_ready = True
+                    logger.info("swap_model_tier tier=%s status=success", new_tier)
+                    if on_complete:
+                        on_complete(True, f"Switched to {new_tier} model")
+                else:
+                    # Revert config so it stays consistent with the running engine.
+                    self.cfg.model_tier = current_tier
+                    save_config(self.cfg)
+                    logger.warning("swap_model_tier tier=%s status=timeout", new_tier)
+                    if on_complete:
+                        on_complete(False, f"Model load timed out — still using {current_tier}")
+            except Exception as exc:
+                self.cfg.model_tier = current_tier
+                try:
+                    save_config(self.cfg)
+                except Exception:
+                    pass
+                logger.warning("swap_model_tier tier=%s error=%s", new_tier, exc)
+                if on_complete:
+                    on_complete(False, f"Swap failed: {exc}")
+
+        threading.Thread(target=_do_swap, name=f"ModelSwap-{new_tier}", daemon=True).start()
+
     def _daily_learning_report_exists(self, target_date_text: str) -> bool:
         if not target_date_text:
             return False

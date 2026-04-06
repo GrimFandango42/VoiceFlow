@@ -164,6 +164,55 @@ class TrayController:
                     pass
                 print(f"[Tray] Correction Review open failed: {e}")
 
+        # Model tier switching
+        _MODEL_TIERS = [
+            ("Quick", "quick"),
+            ("Balanced", "balanced"),
+            ("Quality", "quality"),
+        ]
+
+        def _switch_model_tier(tier: str):
+            """Return a click handler that hot-swaps the ASR model tier."""
+            def _handler(icon, item):  # noqa: ARG001
+                swap_fn = getattr(self.app, "swap_model_tier", None)
+                if callable(swap_fn):
+                    tier_label = tier.capitalize()
+                    self._notify("VoiceFlow", f"Loading {tier_label} model…")
+
+                    def _on_done(success: bool, message: str):
+                        self._notify("VoiceFlow", message)
+
+                    swap_fn(tier, on_complete=_on_done)
+                else:
+                    # No hot-swap available: persist config and advise restart.
+                    try:
+                        self.app.cfg.model_tier = tier
+                        from voiceflow.utils.settings import save_config
+                        save_config(self.app.cfg)
+                    except Exception:
+                        pass
+                    tier_label = tier.capitalize()
+                    self._notify(
+                        "VoiceFlow",
+                        f"Switched to {tier_label} model. Hold Ctrl+Shift to trigger reload, "
+                        "or restart for immediate effect.",
+                    )
+            return _handler
+
+        def _is_current_tier(tier: str):
+            return lambda item: str(getattr(self.app.cfg, "model_tier", "quick")).strip().lower() == tier
+
+        model_menu = pystray.Menu(
+            *[
+                pystray.MenuItem(
+                    lambda item, label=label: label,
+                    _switch_model_tier(tier),
+                    checked=_is_current_tier(tier),
+                )
+                for label, tier in _MODEL_TIERS
+            ]
+        )
+
         def open_setup_defaults(icon, item):  # noqa: ARG001
             def _run():
                 try:
@@ -201,6 +250,7 @@ class TrayController:
                 checked=lambda item: self.app.cfg.press_enter_after_paste,
             ),
             pystray.MenuItem("PTT Hotkey", ptt_menu),
+            pystray.MenuItem("Switch Model", model_menu),
             pystray.MenuItem("Set Ctrl+Alt as default PTT", set_ctrl_alt_default),
             pystray.MenuItem("Setup & Defaults", open_setup_defaults),
             pystray.MenuItem("Recent History", show_recent_history, enabled=lambda item: VISUAL_INDICATORS_AVAILABLE),
