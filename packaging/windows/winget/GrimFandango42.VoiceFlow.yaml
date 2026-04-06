@@ -1,0 +1,55 @@
+# winget manifest — GrimFandango42.VoiceFlow
+#
+# This is the singleton manifest for submission to microsoft/winget-pkgs.
+# Before submitting:
+#   1. Build the installer: powershell -File scripts\setup\build_windows_installer.ps1
+#   2. Compute SHA256: scripts\setup\compute_installer_hash.ps1 -InstallerPath <path>
+#   3. Upload the installer to the GitHub release as VoiceFlow-win64-Setup.exe
+#   4. Fill in InstallerSha256 and InstallerUrl below
+#   5. Validate: winget validate --manifest packaging\windows\winget\
+#   6. Submit PR to https://github.com/microsoft/winget-pkgs
+
+PackageIdentifier: GrimFandango42.VoiceFlow
+PackageVersion: 3.2.1
+DefaultLocale: en-US
+ManifestType: singleton
+ManifestVersion: 1.6.0
+
+Publisher: GrimFandango42
+PublisherUrl: https://github.com/GrimFandango42
+PackageName: VoiceFlow
+PackageUrl: https://github.com/GrimFandango42/VoiceFlow
+
+License: MIT
+LicenseUrl: https://github.com/GrimFandango42/VoiceFlow/blob/main/LICENSE
+
+ShortDescription: Free local push-to-talk transcription for Windows
+Description: >-
+  VoiceFlow is a local-first push-to-talk transcription tool for Windows.
+  Hold Ctrl+Shift, speak, release — transcribed text is injected directly
+  into the active application. No cloud, no subscription, no audio leaving
+  your machine. Powered by faster-whisper with GPU acceleration support.
+
+Moniker: voiceflow
+Tags:
+  - speech-to-text
+  - voice
+  - transcription
+  - whisper
+  - push-to-talk
+  - ai
+  - local-ai
+  - productivity
+
+ReleaseNotes: https://github.com/GrimFandango42/VoiceFlow/releases/tag/v3.2.1
+ReleaseNotesUrl: https://github.com/GrimFandango42/VoiceFlow/releases/tag/v3.2.1
+
+Installers:
+  - Architecture: x64
+    InstallerType: inno
+    Scope: user
+    InstallerUrl: https://github.com/GrimFandango42/VoiceFlow/releases/download/v3.2.1/VoiceFlow-win64-Setup.exe
+    InstallerSha256: REPLACE_WITH_SHA256_OF_INSTALLER
+    InstallerSwitches:
+      Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+      SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART

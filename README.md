@@ -20,6 +20,8 @@
 | Customizable | Yes (source available) | No |
 | Platform | Windows | Mac & Windows |
 
+<!-- Demo GIF: record with VoiceFlow running — hold Ctrl+Shift, speak into VS Code or Notepad, release, show text appearing. Crop to 800x400 px, save as docs/demo.gif, then replace this comment with: ![VoiceFlow demo](docs/demo.gif) -->
+
 ---
 
 ## What is VoiceFlow?
