@@ -2,6 +2,7 @@
 
 **Free, local push-to-talk transcription for Windows — the open-source alternative to Wispr Flow.** Hold a hotkey, speak, release — transcribed text is injected directly into any active application. No cloud, no subscription, no audio ever leaving your machine.
 
+[![CI](https://img.shields.io/github/actions/workflow/status/GrimFandango42/VoiceFlow/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/GrimFandango42/VoiceFlow/actions/workflows/ci.yml)
 [![Latest Release](https://img.shields.io/github/v/release/GrimFandango42/VoiceFlow?display_name=tag&style=for-the-badge)](https://github.com/GrimFandango42/VoiceFlow/releases/latest)
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?style=for-the-badge&logo=windows)](https://github.com/GrimFandango42/VoiceFlow/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
