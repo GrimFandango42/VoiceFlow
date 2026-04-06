@@ -280,6 +280,8 @@ class BottomScreenIndicator:
         self._bar_damp: list[float] = []
         self._bar_noise_phase: list[float] = []
         self._bar_noise_speed: list[float] = []
+        self._bar_excite: list[float] = []
+        self._travel_phase: float = 0.0
         self._bar_slot = 0.0
         self._bar_margin = 6
         self._bar_width = 4
@@ -378,7 +380,7 @@ class BottomScreenIndicator:
         req_w, req_h = self.config_manager.get_overlay_dimensions()
         # Compact overlay profile: small, centered, and visually lighter.
         self.width = int(min(500, max(332, req_w + 20)))
-        self.height = int(min(215, max(175, req_h + 88)))
+        self.height = 130  # fixed tight height — prevents transparent dead space above animation
         self.wave_w = max(272, self.width - 20)
         colors = self.config_manager.get_color_scheme()
         theme_value = getattr(getattr(self.config_manager, "config", None), "theme", ColorTheme.DEFAULT)
@@ -727,17 +729,17 @@ class BottomScreenIndicator:
         self.wave_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=54,
+            height=44,
             bg=self.transparent_key,
             highlightthickness=0,
             bd=0,
         )
-        self.wave_canvas.pack(pady=(1, 0))
+        self.wave_canvas.pack(pady=(0, 0))
         self._init_waveform_strip()
 
         # Status badge row — shows current state (Listening / Processing / Transcribing / Done)
         status_row = tk.Frame(main_frame, bg=self.transparent_key, highlightthickness=0, bd=0)
-        status_row.pack(fill=tk.X, padx=6, pady=(0, 1))
+        status_row.pack(fill=tk.X, padx=6, pady=(0, 0))
 
         self.status_badge_frame = tk.Frame(
             status_row,
@@ -779,7 +781,7 @@ class BottomScreenIndicator:
             highlightthickness=1,
             bd=0,
             padx=7,
-            pady=4,
+            pady=2,
         )
         preview_card.pack(fill=tk.X, padx=6, pady=(0, 0))
         self.preview_var = tk.StringVar(value="")
@@ -792,7 +794,7 @@ class BottomScreenIndicator:
             wraplength=self.wave_w - 24,
             justify=tk.LEFT,
             anchor="nw",
-            height=4,
+            height=2,
         )
         self.preview_label.pack(fill=tk.BOTH, expand=True)
         self.word_stream_canvas = None
@@ -917,16 +919,24 @@ class BottomScreenIndicator:
         _srng = random.Random(17)
         self._bar_pos = [0.0] * NUM_BARS
         self._bar_vel = [0.0] * NUM_BARS
-        # Center bars slightly stiffer (snap to beat), edge bars looser (sway)
+        # Center bars snappier, edge bars looser — wider spread than before
         self._bar_k = [
-            0.09 + 0.18 * math.sin(math.pi * i / max(1, NUM_BARS - 1)) + _srng.uniform(-0.03, 0.03)
+            0.14 + 0.22 * math.sin(math.pi * i / max(1, NUM_BARS - 1)) + _srng.uniform(-0.04, 0.04)
             for i in range(NUM_BARS)
         ]
-        # Damping varies: lower = more overshoot/spring, higher = fast settle
-        self._bar_damp = [0.50 + _srng.uniform(-0.18, 0.18) for _ in range(NUM_BARS)]
-        # Micro-noise: each bar has a personal slow oscillation so idle state is never uniform
+        # Lower damping → more overshoot and ringing per bar
+        self._bar_damp = [0.36 + _srng.uniform(-0.14, 0.14) for _ in range(NUM_BARS)]
+        # Micro-noise: each bar has its own private slow oscillator (never in lockstep at idle)
         self._bar_noise_phase = [_srng.uniform(0.0, 2 * math.pi) for _ in range(NUM_BARS)]
-        self._bar_noise_speed = [_srng.uniform(0.013, 0.044) for _ in range(NUM_BARS)]
+        self._bar_noise_speed = [_srng.uniform(0.011, 0.040) for _ in range(NUM_BARS)]
+        # Excitability: bars range 0.4–2.2×. High-excite bars spike dramatically, low-excite sway gently.
+        # Mix sine wave (center hot) with pure random so distribution is organic, not symmetric.
+        self._bar_excite = [
+            max(0.35, 0.9 + 0.5 * math.sin(math.pi * i / max(1, NUM_BARS - 1) * 2.3 + 0.7)
+                + _srng.uniform(-0.6, 0.8))
+            for i in range(NUM_BARS)
+        ]
+        self._travel_phase = 0.0
         # Burst onset flag: set True on speech start, consumed once to inject velocity kick
         self._bar_burst_pending = False
 
@@ -1057,11 +1067,18 @@ class BottomScreenIndicator:
         # Slow global hue rotation — whole spectrum drifts over time
         hue_drift = (self.wave_phase * 0.003) % 1.0
 
-        # On speech onset inject a velocity kick so bars snap up dramatically then ring back
+        # Advance traveling wave — sweeps left-to-right faster during speech, creating a ripple
+        has_excite = len(self._bar_excite) == n
+        travel_speed = 0.04 + 0.28 * voiced_drive
+        self._travel_phase = (self._travel_phase + travel_speed) % (2 * math.pi)
+
+        # On speech onset inject a velocity kick proportional to bar excitability
         if has_spring and self._bar_burst_pending:
             self._bar_burst_pending = False
             for j in range(n):
-                self._bar_vel[j] += base_half * 0.32 * self._bar_k[j] * random.uniform(0.6, 1.4)
+                excite_j = self._bar_excite[j] if has_excite else 1.0
+                # High-excite bars get a bigger kick and will overshoot dramatically
+                self._bar_vel[j] += base_half * 0.55 * self._bar_k[j] * excite_j * random.uniform(0.7, 1.3)
 
         # --- Pass 1: compute raw target height for every bar ---
         targets: list[float] = []
@@ -1069,18 +1086,20 @@ class BottomScreenIndicator:
         for i in range(n):
             t = i / max(1, n - 1)
             phase = self._bar_phases[i]
+            excite = self._bar_excite[i] if has_excite else 1.0
 
             # Advance per-bar micro-noise — each bar oscillates at its own pace
             if has_spring:
                 self._bar_noise_phase[i] = (self._bar_noise_phase[i] + self._bar_noise_speed[i]) % (2 * math.pi)
-                noise = (0.03 * math.sin(self._bar_noise_phase[i])
-                         + 0.015 * math.sin(self._bar_noise_phase[i] * 2.3))
+                noise = (0.025 * math.sin(self._bar_noise_phase[i])
+                         + 0.012 * math.sin(self._bar_noise_phase[i] * 2.7))
             else:
                 noise = 0.0
 
+            # Idle: very low breathing so idle vs speaking contrast is dramatic
             idle_freq = 0.5 + t * 0.8
-            idle_amp = 0.10 + 0.06 * math.sin(self.wave_phase * idle_freq + phase) + noise
-            idle_h = float(max(2, base_half * max(0.02, idle_amp)))
+            idle_amp = 0.06 + 0.04 * math.sin(self.wave_phase * idle_freq + phase) + noise
+            idle_h = float(max(2, base_half * max(0.01, idle_amp)))
             idle_heights.append(idle_h)
 
             if voiced_drive < 0.02:
@@ -1100,15 +1119,20 @@ class BottomScreenIndicator:
 
                 nat_freq = 0.9 + t * 2.4
                 movement = 0.5 + 0.5 * abs(math.sin(self.wave_phase * nat_freq + phase * 1.4))
-                # Burst floor at 50%: every bar gets at least half the burst energy so onset is uniformly dramatic
-                burst = self._burst_energy * 0.72 * (0.5 + 0.5 * abs(math.sin(phase * 2.0 + self.wave_phase * 0.7)))
+                burst = self._burst_energy * 0.75 * (0.5 + 0.5 * abs(math.sin(phase * 2.0 + self.wave_phase * 0.7)))
 
-                speech_h = base_half * voiced_drive * (0.28 + 0.50 * band + 0.22 * burst) * movement
+                # Traveling wave: sweeps a ripple across the spectrum during speech
+                travel_wave = 0.18 * voiced_drive * math.sin(self._travel_phase + t * 4.0 * math.pi)
+
+                # Per-bar excitability multiplier — the core of dramatic variation
+                speech_h = (base_half * voiced_drive
+                            * (0.32 + 0.48 * band + 0.20 * burst + travel_wave)
+                            * movement * excite)
                 target_h = idle_h + speech_h
 
             # Mountain silhouette: center bars naturally taller
-            center_bias = 1.0 + 0.28 * math.sin(t * math.pi)
-            targets.append(min(target_h * center_bias, float(base_half)))
+            center_bias = 1.0 + 0.22 * math.sin(t * math.pi)
+            targets.append(min(target_h * center_bias, float(base_half) * 1.05))
 
         # --- Pass 2: sympathetic vibration — neighbors subtly pull each other ---
         for i in range(n):
