@@ -13,7 +13,7 @@ def test_async_logger_falls_back_when_primary_log_file_is_locked(monkeypatch, tm
     def _fake_rotating_handler(path, *args, **kwargs):
         candidate = Path(path)
         created_paths.append(candidate)
-        if candidate.name == "localflow.log":
+        if candidate.name == "voiceflow.log":
             raise PermissionError("locked")
         return real_handler(path, *args, **kwargs)
 
@@ -27,8 +27,8 @@ def test_async_logger_falls_back_when_primary_log_file_is_locked(monkeypatch, tm
         alog.stop()
 
     assert created_paths
-    assert created_paths[0].name == "localflow.log"
-    assert alog.active_log_path.name.startswith("localflow-")
+    assert created_paths[0].name == "voiceflow.log"
+    assert alog.active_log_path.name.startswith("voiceflow-")
     assert alog.active_log_path.parent == tmp_path
     assert alog.active_log_marker_path.read_text(encoding="utf-8") == str(alog.active_log_path)
     fallback_marker = alog.active_log_path.parent / "active_log_path.txt"

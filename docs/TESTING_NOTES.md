@@ -32,7 +32,7 @@ Check:
 
 ## Logs
 
-- `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+- `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log`
 
 Look for:
 

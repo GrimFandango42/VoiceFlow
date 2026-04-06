@@ -25,6 +25,14 @@ This is the maintained documentation set for the current runtime.
 - Security and privacy operations: [`guides/SECURITY_AND_PRIVACY.md`](guides/SECURITY_AND_PRIVACY.md)
 - Forking/platform notes: [`guides/FORKING_AND_PLATFORM_GUIDE.md`](guides/FORKING_AND_PLATFORM_GUIDE.md)
 
+## Testing
+
+- Runtime test notes: [`TESTING_NOTES.md`](TESTING_NOTES.md)
+
+## Archive
+
+Completed implementation plans and superseded docs are in [`archive/`](archive/). They are kept for historical reference only.
+
 ## Scope
 
 These documents focus on the current maintained runtime, its packaging flow, and the contributor paths that matter for active development.

@@ -6,19 +6,19 @@ This guide summarizes the practical security model for running VoiceFlow in day-
 
 - Local-first processing: transcription runs locally by default.
 - No mandatory cloud dependency for core ASR.
-- User-scoped runtime data under `%LOCALAPPDATA%\LocalFlow`.
+- User-scoped runtime data under `%LOCALAPPDATA%\VoiceFlow` (migrated automatically from `VoiceFlow` on first launch after v3.2.1).
 - Guardrails on input validation, buffer handling, and injection sanitization.
 
 ## Data Stored Locally
 
-- Runtime config: `%LOCALAPPDATA%\LocalFlow\config.json`
-- Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
-- Recent history: `%LOCALAPPDATA%\LocalFlow\recent_history_events.jsonl`
-- Correction review: `%LOCALAPPDATA%\LocalFlow\transcription_corrections.jsonl`
+- Runtime config: `%LOCALAPPDATA%\VoiceFlow\config.json`
+- Logs: `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log`
+- Recent history: `%LOCALAPPDATA%\VoiceFlow\recent_history_events.jsonl`
+- Correction review: `%LOCALAPPDATA%\VoiceFlow\transcription_corrections.jsonl`
 - Adaptive learning:
-  - `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json`
-  - `%LOCALAPPDATA%\LocalFlow\adaptive_audit.jsonl`
-- Daily learning reports: `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\`
+  - `%LOCALAPPDATA%\VoiceFlow\adaptive_patterns.json`
+  - `%LOCALAPPDATA%\VoiceFlow\adaptive_audit.jsonl`
+- Daily learning reports: `%LOCALAPPDATA%\VoiceFlow\daily_learning_reports\`
 
 ## Operational Recommendations
 

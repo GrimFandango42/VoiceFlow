@@ -12,7 +12,7 @@ from voiceflow.utils.logging_setup import default_log_dir
 
 
 def config_dir() -> Path:
-    # Place alongside logs under LocalFlow
+    # Place alongside logs under VoiceFlow
     base = default_log_dir().parent
     base.mkdir(parents=True, exist_ok=True)
     return base
@@ -65,8 +65,7 @@ def read_text_tail_lines(
     max_bytes: int,
     max_line_chars: int,
 ) -> list[str]:
-    """
-    Read only the tail of a text file and return bounded valid lines.
+    """Read only the tail of a text file and return bounded valid lines.
     Keeps large JSONL files from causing heavy reads.
     """
     try:
@@ -142,8 +141,7 @@ def _is_legacy_value(current: Any, legacy: Any) -> bool:
 
 
 def _apply_performance_migrations(cfg: Config) -> bool:
-    """
-    One-time migration for legacy settings that hurt medium/long dictation latency.
+    """One-time migration for legacy settings that hurt medium/long dictation latency.
     Preserves explicit non-legacy user values.
     """
     changed = False

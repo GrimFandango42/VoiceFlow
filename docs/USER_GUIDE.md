@@ -141,8 +141,8 @@ Fastest way to improve accent-specific output:
 1. Open `Correction Review` from tray.
 2. Correct recurring misses.
 3. Let daily learning process those corrections.
-4. Check the latest report in `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\` for the active rules/tokens VoiceFlow is promoting.
-5. If you have stable house-style vocabulary, add it to `%LOCALAPPDATA%\LocalFlow\engineering_terms.json` (example seed files live in `docs/examples/`).
+4. Check the latest report in `%LOCALAPPDATA%\VoiceFlow\daily_learning_reports\` for the active rules/tokens VoiceFlow is promoting.
+5. If you have stable house-style vocabulary, add it to `%LOCALAPPDATA%\VoiceFlow\engineering_terms.json` (example seed files live in `docs/examples/`).
 
 Learning trust model:
 
@@ -193,8 +193,8 @@ Optional tier overrides:
 
 ## Advanced Config and Logs
 
-- Config: `%LOCALAPPDATA%\LocalFlow\config.json`
-- Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+- Config: `%LOCALAPPDATA%\VoiceFlow\config.json`
+- Logs: `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log`
 
 Local runtime stores are bounded for long-session stability:
 

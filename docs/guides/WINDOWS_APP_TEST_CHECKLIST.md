@@ -5,14 +5,14 @@
 1. Launch the packaged executable:
    - local bundle: `dist\VoiceFlow\VoiceFlow.exe`
    - or release asset: `VoiceFlow-win64.exe`
-2. If testing onboarding, start with a clean `%LOCALAPPDATA%\LocalFlow\config.json` or reset setup markers first.
+2. If testing onboarding, start with a clean `%LOCALAPPDATA%\VoiceFlow\config.json` or reset setup markers first.
 3. Confirm setup wizard opens.
 4. Click `Step 1: Run Hardware Check (Required)`.
 5. Pick one profile and click `Save And Launch`.
 6. Confirm tray icon appears after runtime starts.
-7. Confirm `%LOCALAPPDATA%\LocalFlow\logs\localflow.log` is updating.
-8. If `localflow.log` is locked, confirm `%LOCALAPPDATA%\LocalFlow\logs\active_log_path.txt` points to the active fallback log.
-9. Confirm the fallback log is updating in `%TEMP%\LocalFlow\localflow-<pid>.log`.
+7. Confirm `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log` is updating.
+8. If `voiceflow.log` is locked, confirm `%LOCALAPPDATA%\VoiceFlow\logs\active_log_path.txt` points to the active fallback log.
+9. Confirm the fallback log is updating in `%TEMP%\VoiceFlow\voiceflow-<pid>.log`.
 
 ## 2) Relaunch and Runtime Health
 

@@ -169,7 +169,7 @@ class ClipboardInjector:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self._last_inject_ts = 0.0
-        self._log = logging.getLogger("localflow")
+        self._log = logging.getLogger("voiceflow")
         self._target_hwnd: Optional[int] = None
         self._target_context: Dict[str, Any] = {}
 

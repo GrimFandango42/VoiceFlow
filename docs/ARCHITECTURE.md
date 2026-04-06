@@ -86,7 +86,7 @@ These modules are the highest-value seams for macOS/Linux forks:
   - `src/voiceflow/ui/enhanced_tray.py`
   - Replace tray runtime integration for native menu-bar/tray behavior.
 - Launch/packaging seam:
-  - `scripts/setup/*`, `packaging/windows/*`, `.github/workflows/build-release.yml`
+  - `scripts/setup/*`, `packaging/windows/*`, `.github/workflows/ci.yml`
   - Keep core runtime unchanged; fork setup/packaging path per OS.
 
 ### Core Layer
@@ -172,11 +172,11 @@ State transitions are reflected in both tray and overlay to keep behavior transp
 
 Default runtime data paths:
 - Windows:
-  - config: `%LOCALAPPDATA%\LocalFlow\config.json`
-  - logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+  - config: `%LOCALAPPDATA%\VoiceFlow\config.json`
+  - logs: `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log`
 - Non-Windows fallback:
-  - config: `~/.localflow/config.json`
-  - logs: `~/.localflow/logs/localflow.log`
+  - config: `~/.voiceflow/config.json`
+  - logs: `~/.voiceflow/logs/voiceflow.log`
 
 `settings.py` includes migration logic for legacy performance values to reduce medium/long dictation latency regressions.
 

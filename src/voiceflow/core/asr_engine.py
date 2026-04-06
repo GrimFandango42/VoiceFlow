@@ -181,7 +181,7 @@ def _cuda_runtime_ready() -> bool:
 
     missing = _missing_cuda_dlls(required_dlls)
     if missing:
-        logging.getLogger("localflow").info(
+        logging.getLogger("voiceflow").info(
             "cuda_runtime_unavailable missing_dlls=%s",
             ",".join(missing),
         )
@@ -477,7 +477,7 @@ class FasterWhisperBackend(ASRBackend):
                 "CUDA model init failed (%s). Falling back to CPU int8.",
                 primary_exc,
             )
-            logging.getLogger("localflow").warning(
+            logging.getLogger("voiceflow").warning(
                 "asr_cuda_init_failed error=%s fallback=cpu_int8 model=%s",
                 primary_exc,
                 model_ref,
@@ -597,7 +597,7 @@ class FasterWhisperBackend(ASRBackend):
             self.config.device = "cpu"
             self.config.compute_type = "int8"
             self._retried_cpu_fallback = True
-            logging.getLogger("localflow").warning("asr_runtime_fallback device=cpu compute=int8")
+            logging.getLogger("voiceflow").warning("asr_runtime_fallback device=cpu compute=int8")
         self.load()
 
 
@@ -980,7 +980,7 @@ class ASREngine:
             f"ASR Engine initialized - model: {self.model_config.name}, "
             f"backend: {self.model_config.backend}, device: {device}"
         )
-        logging.getLogger("localflow").info(
+        logging.getLogger("voiceflow").info(
             "asr_engine_initialized model=%s model_id=%s backend=%s device=%s compute=%s",
             self.model_config.name,
             self.model_config.model_id,

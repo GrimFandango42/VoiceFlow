@@ -577,7 +577,7 @@ class EnhancedApp:
                 save_config(self.cfg)
             except Exception:
                 pass
-        self._log = logging.getLogger("localflow")
+        self._log = logging.getLogger("voiceflow")
 
         # Visual indicators integration
         self.tray_controller: Optional[Any] = None

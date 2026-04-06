@@ -21,7 +21,7 @@ A:
 
 1. Click back into the target app and press `Ctrl+V` once.
 2. Check if a popup/notification stole focus during key release.
-3. Review `%LOCALAPPDATA%\LocalFlow\logs\localflow.log` for `inject_focus_drift`.
+3. Review `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log` for `inject_focus_drift`.
 
 VoiceFlow keeps a clipboard fallback for focus-drift edge cases.
 
@@ -45,7 +45,7 @@ A:
 4. Check log lines for active device routing:
    - `asr_engine_initialized ... device=... compute=...`
 
-If this persists, capture the last 100 lines of `localflow.log` and include them in your issue report.
+If this persists, capture the last 100 lines of `voiceflow.log` and include them in your issue report.
 
 ## Q: Long dictation is slower than expected.
 
@@ -62,7 +62,7 @@ A:
 
 1. Confirm you are on a current stable build.
 2. Retry one natural sentence or paragraph to let the resume guardrails settle.
-3. If it repeats, review `%LOCALAPPDATA%\LocalFlow\logs\localflow.log` for `transcription_idle_resume_guard` around that attempt.
+3. If it repeats, review `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log` for `transcription_idle_resume_guard` around that attempt.
 
 Current builds favor transcript completeness over pause compaction on the first longer post-idle utterance, then fall back to raw-audio retry if the result still looks clipped.
 
@@ -102,7 +102,7 @@ A:
 .\VoiceFlow_DailyLearning.bat
 ```
 
-4. For repeated house-style terms, add local overrides in `%LOCALAPPDATA%\LocalFlow\engineering_terms.json`.
+4. For repeated house-style terms, add local overrides in `%LOCALAPPDATA%\VoiceFlow\engineering_terms.json`.
 
 Current builds already normalize a few recurring coding-tool phrases such as `Claude Code` and `Claude Desktop`; use the local terms file for anything more specific to your accent or workflow.
 
@@ -118,9 +118,9 @@ Use the setup wizard for first-run defaults and the tray menu for day-to-day con
 
 A:
 
-- Config: `%LOCALAPPDATA%\LocalFlow\config.json`
-- Logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
-- Fallback logs: `%LOCALAPPDATA%\LocalFlow\logs\localflow-<pid>.log`
-- Recent history: `%LOCALAPPDATA%\LocalFlow\recent_history_events.jsonl`
-- Corrections: `%LOCALAPPDATA%\LocalFlow\transcription_corrections.jsonl`
-- Adaptive patterns: `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json`
+- Config: `%LOCALAPPDATA%\VoiceFlow\config.json`
+- Logs: `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log`
+- Fallback logs: `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow-<pid>.log`
+- Recent history: `%LOCALAPPDATA%\VoiceFlow\recent_history_events.jsonl`
+- Corrections: `%LOCALAPPDATA%\VoiceFlow\transcription_corrections.jsonl`
+- Adaptive patterns: `%LOCALAPPDATA%\VoiceFlow\adaptive_patterns.json`

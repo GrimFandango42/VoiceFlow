@@ -24,11 +24,11 @@ This packaging path is Windows-focused and targets the current runtime entrypoin
 6. By default, VoiceFlow pastes on release without auto-sending Enter.
 
 Config and logs still live in:
-- `%LOCALAPPDATA%\LocalFlow\config.json`
-- `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+- `%LOCALAPPDATA%\VoiceFlow\config.json`
+- `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log`
 
 If the primary log file is locked, VoiceFlow can fall back to:
-- `%LOCALAPPDATA%\LocalFlow\logs\localflow-<pid>.log`
+- `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow-<pid>.log`
 
 ## Maintainer Build Flow
 

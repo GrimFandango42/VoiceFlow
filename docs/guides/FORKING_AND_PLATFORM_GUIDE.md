@@ -119,9 +119,9 @@ Keep these areas stable while porting:
 ## Config Notes For Forks
 
 - Windows config path:
-  - `%LOCALAPPDATA%\\LocalFlow\\config.json`
+  - `%LOCALAPPDATA%\\VoiceFlow\\config.json`
 - Non-Windows fallback config path:
-  - `~/.localflow/config.json`
+  - `~/.voiceflow/config.json`
 
 Performance-critical fields:
 

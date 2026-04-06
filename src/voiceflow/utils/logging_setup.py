@@ -4,8 +4,8 @@ import logging
 import logging.handlers
 import os
 import queue
+import shutil
 import tempfile
-import threading
 from pathlib import Path
 
 
@@ -13,12 +13,12 @@ class AsyncLogger:
     def __init__(self, log_dir: Path):
         self.log_dir = log_dir
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        self.log_path = self.log_dir / "localflow.log"
+        self.log_path = self.log_dir / "voiceflow.log"
         self.active_log_path = self.log_path
         self.active_log_marker_path = self.log_dir / "active_log_path.txt"
 
         self.queue: queue.Queue = queue.Queue(maxsize=1000)
-        self.logger = logging.getLogger("localflow")
+        self.logger = logging.getLogger("voiceflow")
         self.logger.setLevel(logging.INFO)
 
         file_handler, selected_path = self._build_file_handler()
@@ -64,11 +64,11 @@ class AsyncLogger:
 
     def _build_file_handler(self) -> tuple[logging.Handler, Path | None]:
         pid = os.getpid()
-        fallback_dir = Path(tempfile.gettempdir()) / "LocalFlow"
+        fallback_dir = Path(tempfile.gettempdir()) / "VoiceFlow"
         candidates = [
             self.log_path,
-            self.log_dir / f"localflow-{pid}.log",
-            fallback_dir / f"localflow-{pid}.log",
+            self.log_dir / f"voiceflow-{pid}.log",
+            fallback_dir / f"voiceflow-{pid}.log",
         ]
         for candidate in candidates:
             try:
@@ -97,14 +97,36 @@ class AsyncLogger:
         return self.logger
 
 
-def default_log_dir() -> Path:
-    # Windows: %LOCALAPPDATA%\LocalFlow\logs
-    base = Path.home()
-    # Try LOCALAPPDATA if available
-    import os
+def _migrate_localflow_data_dir() -> None:
+    """One-time migration: move %LOCALAPPDATA%\\LocalFlow → %LOCALAPPDATA%\\VoiceFlow.
 
+    Safe conditions for migration:
+      - Old directory exists
+      - New directory does not yet exist (or is empty)
+    If either condition fails, or if anything goes wrong, the function is silent.
+    """
+    lad = os.environ.get("LOCALAPPDATA")
+    if not lad:
+        return
+    old_root = Path(lad) / "LocalFlow"
+    new_root = Path(lad) / "VoiceFlow"
+    if not old_root.exists():
+        return
+    if new_root.exists() and any(new_root.iterdir()):
+        # New directory already has content — don't clobber it.
+        return
+    try:
+        if new_root.exists():
+            new_root.rmdir()  # Remove if empty so rename works
+        shutil.move(str(old_root), str(new_root))
+    except Exception:
+        pass  # Never crash on migration failure; fall through to normal startup
+
+
+def default_log_dir() -> Path:
+    # Windows: %LOCALAPPDATA%\VoiceFlow\logs
     lad = os.environ.get("LOCALAPPDATA")
     if lad:
-        return Path(lad) / "LocalFlow" / "logs"
-    return base / ".localflow" / "logs"
-
+        _migrate_localflow_data_dir()
+        return Path(lad) / "VoiceFlow" / "logs"
+    return Path.home() / ".voiceflow" / "logs"

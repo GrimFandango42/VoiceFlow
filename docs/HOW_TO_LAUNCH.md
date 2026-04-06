@@ -19,7 +19,7 @@ Batch launchers remain source/debug tools.
 ## Relaunch Into Setup
 
 - Right-click the tray icon and choose `Setup & Defaults`.
-- For first-run regression testing, start from a clean `%LOCALAPPDATA%\LocalFlow\config.json` or reset:
+- For first-run regression testing, start from a clean `%LOCALAPPDATA%\VoiceFlow\config.json` or reset:
   - `setup_completed=false`
   - `show_setup_on_startup=true`
 
@@ -32,7 +32,13 @@ and restarts automatically when you save a `.py` file — no packaging required.
 python dev.py
 ```
 
-See `DEVELOPMENT.md` for options, env vars, and model-loading trade-offs.
+For a regular source run without file-watching, use `_app_entry.py` directly:
+
+```bat
+python _app_entry.py
+```
+
+See `CONTRIBUTING.md` at the repo root for full dev setup and options.
 
 ## Local Source/Debug Launchers
 
@@ -60,6 +66,6 @@ python scripts\dev\quick_smoke_test.py
 
 Runtime log:
 
-- `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
-- fallback marker: `%LOCALAPPDATA%\LocalFlow\logs\active_log_path.txt`
-- fallback file: `%TEMP%\LocalFlow\localflow-<pid>.log`
+- `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log`
+- fallback marker: `%LOCALAPPDATA%\VoiceFlow\logs\active_log_path.txt`
+- fallback file: `%TEMP%\VoiceFlow\voiceflow-<pid>.log`
