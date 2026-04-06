@@ -4,6 +4,7 @@
 Bottom-screen transcription status overlay similar to Wispr Flow
 """
 
+import colorsys
 import json
 import logging
 import math
@@ -110,6 +111,35 @@ def _hex_to_rgb(color: str) -> tuple[int, int, int]:
 def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
     r, g, b = [max(0, min(255, int(channel))) for channel in rgb]
     return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _get_physical_screen_size() -> tuple[int, int]:
+    """Return physical screen dimensions, bypassing Tkinter's DPI-scaled values.
+
+    On Windows with DPI scaling, winfo_screenwidth/height returns the logical
+    (scaled) resolution, which can be larger than the physical pixel count.
+    Windows geometry coordinates are in physical pixels, so placing windows
+    using logical dimensions puts them off-screen.
+    """
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        # GetSystemMetrics with SM_CXSCREEN/SM_CYSCREEN is DPI-unaware by default.
+        # SetProcessDPIAware ensures we get physical pixel counts.
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)  # PROCESS_SYSTEM_DPI_AWARE
+        except Exception:
+            try:
+                user32.SetProcessDPIAware()
+            except Exception:
+                pass
+        w = user32.GetSystemMetrics(0)   # SM_CXSCREEN
+        h = user32.GetSystemMetrics(1)   # SM_CYSCREEN
+        if w > 0 and h > 0:
+            return w, h
+    except Exception:
+        pass
+    return 0, 0
 
 
 def _mix_color(color_a: str, color_b: str, ratio: float) -> str:
@@ -583,9 +613,12 @@ class BottomScreenIndicator:
             self.window = tk.Toplevel(self.root)
             self.window.title("VoiceFlow Status")
 
-            # Get screen dimensions
-            screen_width = self.window.winfo_screenwidth()
-            screen_height = self.window.winfo_screenheight()
+            # Get screen dimensions — use physical pixel size on Windows to
+            # avoid DPI-scaling issues where Tkinter reports logical (inflated)
+            # dimensions but geometry coordinates use physical pixels.
+            phys_w, phys_h = _get_physical_screen_size()
+            screen_width = phys_w if phys_w > 0 else self.window.winfo_screenwidth()
+            screen_height = phys_h if phys_h > 0 else self.window.winfo_screenheight()
 
             # Window properties for overlay behavior
             config = self.config_manager.config
@@ -1278,7 +1311,10 @@ class BottomScreenIndicator:
             if self.history_window:
                 self.history_window.withdraw()
         if self.window:
-            self._position_overlay(self.window.winfo_screenwidth(), self.window.winfo_screenheight())
+            phys_w, phys_h = _get_physical_screen_size()
+            sw = phys_w if phys_w > 0 else self.window.winfo_screenwidth()
+            sh = phys_h if phys_h > 0 else self.window.winfo_screenheight()
+            self._position_overlay(sw, sh)
         self._refresh_dock_text()
 
     def get_dock_enabled(self) -> bool:
@@ -1299,8 +1335,9 @@ class BottomScreenIndicator:
         if not self.root:
             return False
         try:
-            screen_width = int(self.root.winfo_screenwidth())
-            screen_height = int(self.root.winfo_screenheight())
+            phys_w, phys_h = _get_physical_screen_size()
+            screen_width = phys_w if phys_w > 0 else int(self.root.winfo_screenwidth())
+            screen_height = phys_h if phys_h > 0 else int(self.root.winfo_screenheight())
             if not self._window_exists(self.dock_window):
                 self._setup_dock_window(screen_width, screen_height)
             self._setup_history_panel(screen_width, screen_height)
