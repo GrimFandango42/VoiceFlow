@@ -1,6 +1,6 @@
 ' VoiceFlow 3.0 - Silent Tray Launcher
 ' Runs VoiceFlow minimized to system tray without console window
-' Debug logs: %LOCALAPPDATA%\LocalFlow\logs\voiceflow_silent.log
+' Debug logs: %LOCALAPPDATA%\VoiceFlow\logs\voiceflow_silent.log
 
 Set WshShell = CreateObject("WScript.Shell")
 Set FSO = CreateObject("Scripting.FileSystemObject")

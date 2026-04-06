@@ -12,13 +12,14 @@ It focuses on the Python runtime that ships from this repository today.
 
 ## System Overview
 
-VoiceFlow is a process-local pipeline with five major layers:
+VoiceFlow is a process-local pipeline with six layers:
 
 1. `ui`: setup wizard + tray + overlay + runtime orchestration
 2. `integrations`: global hotkeys and text injection
 3. `core`: audio capture, ASR, streaming preview, text processing
 4. `utils`: config persistence, logging, validation, monitoring
-5. `ai` (optional): course correction, command mode, adaptive learning
+5. `models`: lightweight data structures shared across layers (tray state, performance metrics)
+6. `ai` (optional): course correction, command mode, adaptive learning
 
 Primary runtime entrypoint:
 - `src/voiceflow/ui/cli_enhanced.py`

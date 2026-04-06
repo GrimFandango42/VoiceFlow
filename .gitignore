@@ -107,7 +107,11 @@ python/models/
 *.pt
 *.onnx
 whisper-writer/
+whisper_env/
 srcvoiceflowcorearchive/
+tools/
+examples/
+node_modules/
 
 # User data
 user_data/
