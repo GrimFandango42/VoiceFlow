@@ -1,10 +1,23 @@
 # VoiceFlow
 
-**Local push-to-talk transcription for Windows.** Hold a hotkey, speak, release — transcribed text is injected directly into any active application. No cloud, no subscription, no latency after the first load.
+**Free, local push-to-talk transcription for Windows — the open-source alternative to Wispr Flow.** Hold a hotkey, speak, release — transcribed text is injected directly into any active application. No cloud, no subscription, no audio ever leaving your machine.
 
 [![Latest Release](https://img.shields.io/github/v/release/GrimFandango42/VoiceFlow?display_name=tag&style=for-the-badge)](https://github.com/GrimFandango42/VoiceFlow/releases/latest)
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?style=for-the-badge&logo=windows)](https://github.com/GrimFandango42/VoiceFlow/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
+
+---
+
+## VoiceFlow vs. Wispr Flow
+
+| Feature | VoiceFlow | Wispr Flow |
+|---------|-----------|------------|
+| Price | Free / open-source | $13/month |
+| Processing | 100% local, no cloud | Cloud-based |
+| Privacy | Audio never leaves your machine | Sent to cloud for processing |
+| GPU acceleration | Yes (CUDA) | N/A |
+| Customizable | Yes (source available) | No |
+| Platform | Windows | Mac & Windows |
 
 ---
 
@@ -40,8 +53,8 @@ cd VoiceFlow
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[dev]"
-cd src
-python -m voiceflow.ui.cli_enhanced
+# Run from the repo root (not from src/)
+python _app_entry.py
 ```
 
 > **GPU users:** use `.venv-gpu` with `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118` before the editable install.
@@ -61,13 +74,15 @@ python -m voiceflow.ui.cli_enhanced
 - **Hold-to-record** with configurable hotkey (`Ctrl+Shift` default)
 - **Local inference** — faster-whisper, no internet required after model download
 - **GPU acceleration** — CUDA path for NVIDIA GPUs; automatic CPU fallback
-- **Streaming preview** — partial transcription visible while speaking
+- **Streaming preview** — partial transcription visible while speaking, with filler words (uh/um/er) stripped in real time and safe cleanup applied so the preview reads like final output; per-sentence continuity rather than a rolling word window
+- **Reactive waveform animation** — spring physics with per-bar stiffness and damping, burst energy injected on speech onset, and sympathetic vibration between neighboring bars
 - **Continual learning** — adapts to your accent and domain vocabulary over time
 - **Text injection** — pastes directly into the active application
 - **Tray-first UI** — stays out of the way; right-click tray for settings
 - **Three cleanup passes** — light typo fix (on), safe second pass (on), heavy rewrite (opt-in)
 - **History & correction** — review recent transcriptions, submit corrections from tray
 - **Cold-start elimination** — model pre-warmed before first keypress
+- **24/7 stability** — command queue cap, idle-aware monitoring, and overlay focus hardening prevent drift during long sessions
 
 ---
 

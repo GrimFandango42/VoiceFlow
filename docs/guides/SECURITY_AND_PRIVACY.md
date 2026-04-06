@@ -56,7 +56,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup\unregister_daily_learni
 ## Recent Hardening Changes
 
 - Launcher cleanup:
-  - Active launch paths are `python -m voiceflow.ui.cli_enhanced` and `python voiceflow.py`.
+  - Active launch paths are `python _app_entry.py` (dev) and `dist\VoiceFlow\VoiceFlow.exe` (packaged).
+  - Legacy `-m voiceflow.ui.cli_enhanced` launch style removed — triggered false-positive single-instance termination when py.exe spawned a CPython child with identical cmdline.
   - Legacy batch launchers were removed from active `main`.
 - Daily learning is explicit and auditable:
   - reports are written as local JSON artifacts for review.

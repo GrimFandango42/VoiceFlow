@@ -86,6 +86,14 @@ credentials.json
 *.temp
 build_output.txt
 
+# Debug/temp artifacts (not production code)
+_debug_entry.py
+_debug_launch.bat
+check_screen.py
+debug_launch.py
+launch_log.txt
+launch_stderr.txt
+
 # OS
 Thumbs.db
 desktop.ini

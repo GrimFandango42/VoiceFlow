@@ -17,9 +17,7 @@ echo   Runtime: %PYTHON_EXE%
 echo ========================================
 echo.
 
-:: Change to src directory and run — identical to VoiceFlow.bat
-cd src
-"%PYTHON_EXE%" -m voiceflow.ui.cli_enhanced
-cd ..
+:: Run from repo root — identical to VoiceFlow.bat
+"%PYTHON_EXE%" _app_entry.py
 
 if "%1"=="" pause

@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "voiceflow"
-version = "3.2.0"
-description = "Local-first push-to-talk transcription for Windows"
+version = "3.2.1"
+description = "Local-first push-to-talk transcription for Windows. Free, open-source alternative to Wispr Flow."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
@@ -13,7 +13,8 @@ authors = [
 ]
 keywords = [
     "voice", "transcription", "speech-to-text", "ai", "whisper",
-    "real-time", "audio", "productivity"
+    "real-time", "audio", "productivity", "push-to-talk", "local-ai",
+    "faster-whisper", "voice-typing", "wispr-flow-alternative"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

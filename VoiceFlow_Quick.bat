@@ -25,6 +25,5 @@ if /I not "%VOICEFLOW_USE_GPU_VENV%"=="0" (
     )
 )
 
-:: Change to src directory and run
-cd src
-"%PYTHON_EXE%" -m voiceflow.ui.cli_enhanced
+:: Run from repo root
+"%PYTHON_EXE%" _app_entry.py

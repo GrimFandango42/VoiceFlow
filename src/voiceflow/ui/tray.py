@@ -12,7 +12,10 @@ except Exception:
     ImageDraw = None  # type: ignore
 
 try:
-    from voiceflow.ui.visual_indicators import request_open_recent_history, request_open_correction_review
+    from voiceflow.ui.visual_indicators import (
+        request_open_correction_review,
+        request_open_recent_history,
+    )
     VISUAL_INDICATORS_AVAILABLE = True
 except Exception:
     VISUAL_INDICATORS_AVAILABLE = False
@@ -95,7 +98,7 @@ class TrayController:
                 save_config(self.app.cfg)
             except Exception:
                 pass
-            self._notify("LocalFlow", f"PTT set to: {'Ctrl+' if ctrl else ''}{'Shift+' if shift else ''}{'Alt+' if alt else ''}{key.upper() if key else ''}")
+            self._notify("VoiceFlow", f"PTT set to: {'Ctrl+' if ctrl else ''}{'Shift+' if shift else ''}{'Alt+' if alt else ''}{key.upper() if key else ''}")
 
         def is_ptt(ctrl: bool, shift: bool, alt: bool, key: str):
             return (
@@ -146,7 +149,7 @@ class TrayController:
                 request_open_recent_history()
             except Exception as e:
                 try:
-                    self._notify("LocalFlow", "Recent History failed to open.")
+                    self._notify("VoiceFlow", "Recent History failed to open.")
                 except Exception:
                     pass
                 print(f"[Tray] Recent History open failed: {e}")
@@ -156,7 +159,7 @@ class TrayController:
                 request_open_correction_review()
             except Exception as e:
                 try:
-                    self._notify("LocalFlow", "Correction Review failed to open.")
+                    self._notify("VoiceFlow", "Correction Review failed to open.")
                 except Exception:
                     pass
                 print(f"[Tray] Correction Review open failed: {e}")
@@ -169,13 +172,13 @@ class TrayController:
                     saved, restart_required = launch_setup_wizard(self.app.cfg, source="tray")
                     if saved:
                         if restart_required:
-                            self._notify("LocalFlow", "Settings saved. Restart VoiceFlow for model/device changes.")
+                            self._notify("VoiceFlow", "Settings saved. Restart VoiceFlow for model/device changes.")
                         else:
-                            self._notify("LocalFlow", "Settings saved.")
+                            self._notify("VoiceFlow", "Settings saved.")
                 except Exception as e:
                     print(f"[Tray] Setup wizard failed: {e}")
                     try:
-                        self._notify("LocalFlow", "Setup wizard failed to open.")
+                        self._notify("VoiceFlow", "Setup wizard failed to open.")
                     except Exception:
                         pass
 
@@ -221,7 +224,7 @@ class TrayController:
         if self._icon is not None:
             return
         image = _make_icon(16)
-        self._icon = pystray.Icon("LocalFlow", image, "LocalFlow", self._menu())
+        self._icon = pystray.Icon("VoiceFlow", image, "VoiceFlow", self._menu())
 
         def _run():
             assert self._icon is not None
@@ -233,7 +236,7 @@ class TrayController:
         def _post_start_notif():
             import time
             time.sleep(1.0)
-            self._notify("LocalFlow", "Running. PTT: see tray > PTT Hotkey.")
+            self._notify("VoiceFlow", "Running. PTT: see tray > PTT Hotkey.")
         threading.Thread(target=_post_start_notif, daemon=True).start()
 
     def stop(self):

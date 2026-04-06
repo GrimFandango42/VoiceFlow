@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [3.2.1] — 2026-04-06
+
+### Added
+- **Spring physics waveform** — each of 28 bars has individual stiffness/damping; burst energy injected on speech onset with random velocity kicks
+- **Sympathetic vibration** — neighboring bars mutually influence targets each frame, creating traveling ripple propagation
+- **Spark particle system** — pool of 28 sparks spawned on burst onset and dripped continuously during speech; outward arcs from edge bars with drag and hangtime
+- **Streaming preview quality** — filler words (uh/um/er) stripped in real-time; safe cleanup applied to live preview so it reads like final output
+- **Corrected text during COMPLETE** — final cleaned text visible in preview overlay during the 2-second completion window
+- **Focus hardening** — overlay re-lifts every 300 ms during active recording to survive UAC dialogs and notification banners
+
+### Fixed
+- **Launcher crash** — `_app_entry.py` bypasses false-positive single-instance detection caused by py.exe shim spawning real Python child with identical cmdline; `VoiceFlow.bat` updated to use it
+- **Hint label blur** — transparent background on "Ctrl+Shift" label caused Windows compositing anti-aliasing artifacts at small font sizes; fixed to opaque panel surface
+- **Memory growth on long sessions** — `queue.Queue(maxsize=500)` caps audio frame backlog during Whisper inference; high-frequency updates drop silently when full
+
+### Changed
+- Overlay max height reduced to 215 px (was 290 px)
+- Preview box shows 3 comfortable lines of text
+- Overlay positioned tighter to dock with reduced gap
+
+---
+
 ## [3.2.0] — 2026-04-04
 
 ### Added
