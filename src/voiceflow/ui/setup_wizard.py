@@ -4,8 +4,8 @@ import os
 import platform
 import re
 import threading
-from datetime import datetime
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 from voiceflow.core.config import Config
@@ -346,6 +346,20 @@ def maybe_run_startup_setup(cfg: Config) -> Tuple[bool, bool]:
     return launch_setup_wizard(cfg, source="startup")
 
 
+_HF_REPO_MAP: Dict[str, str] = {
+    "distil-large-v3.5": "Systran/faster-distil-whisper-large-v3.5",
+    "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
+    "distil-large-v2": "Systran/faster-distil-whisper-large-v2",
+    "small.en": "Systran/faster-whisper-small.en",
+    "tiny.en": "Systran/faster-whisper-tiny.en",
+    "small": "Systran/faster-whisper-small",
+    "base.en": "Systran/faster-whisper-base.en",
+    "medium.en": "Systran/faster-whisper-medium.en",
+    "large-v3": "Systran/faster-whisper-large-v3",
+    "large-v3-turbo": "Systran/faster-whisper-large-v3-turbo",
+}
+
+
 def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool]:
     if not _WIZARD_LOCK.acquire(blocking=False):
         return False, False
@@ -518,6 +532,8 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
         footer_actions.grid(row=1, column=0, sticky="ew")
         footer_actions.grid_columnconfigure(0, weight=1)
         footer_actions.grid_columnconfigure(1, weight=0)
+        download_progress_bar = ttk.Progressbar(footer, mode="determinate", maximum=100, length=400)
+        # Hidden by default; shown only during model download.
 
         title_text = "VoiceFlow First-Run Setup" if source == "startup" else "VoiceFlow Setup & Defaults"
         subtitle_text = (
@@ -611,6 +627,25 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
             anchor="w", pady=(2, 0)
         )
         ttk.Label(status_body, textvariable=check_status_var, foreground="#92400E").pack(anchor="w", pady=(2, 0))
+        cuda_warn_label = tk.Label(
+            status_body,
+            text=(
+                "\u26a0 NVIDIA GPU detected but CUDA runtime is unavailable. "
+                "Install CUDA Toolkit 11.8+ from nvidia.com/cuda-downloads and restart to enable GPU acceleration."
+            ),
+            bg="#FFF7ED",
+            fg="#92400E",
+            font=("Segoe UI", 9),
+            wraplength=800,
+            justify="left",
+            anchor="w",
+            padx=4,
+            pady=4,
+        )
+        try:
+            cuda_warn_label.configure(relief="flat")
+        except Exception:
+            pass
 
         initial_profile = ""
         if not is_startup_flow:
@@ -1101,6 +1136,10 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
                 use_case_var.set(f"{use_case}. Why: {', '.join(reason_bits)}.")
             else:
                 use_case_var.set(f"Why: {', '.join(reason_bits)}.")
+            if caps.gpu_name and not caps.cuda_available:
+                cuda_warn_label.pack(anchor="w", fill="x", pady=(4, 0))
+            else:
+                cuda_warn_label.pack_forget()
             _sync_profile_availability()
             _refresh_summary()
             _refresh_check_status()
@@ -1234,6 +1273,15 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
                 return False, "GPU Balanced requires CUDA. Run hardware check or choose a different profile."
             return True, ""
 
+        secondary_button_ref: Dict[str, Any] = {"widget": None}
+
+        def _close_wizard() -> None:
+            try:
+                root.unbind_all("<MouseWheel>")
+            except Exception:
+                pass
+            root.destroy()
+
         def _save_and_launch():
             selected_profile = str(profile_var.get() or "").strip().lower()
             is_valid_save, validation_message = _validate_setup_save_state(selected_profile)
@@ -1255,36 +1303,193 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
             save_config(cfg)
             result["saved"] = True
             result["restart_required"] = restart_required
+
+            # --- Model download check ---
+            model_name = str(updates.get("model_name", "")).strip()
+            repo_id = _HF_REPO_MAP.get(model_name, "")
+            _do_download = False
             try:
-                root.unbind_all("<MouseWheel>")
+                import huggingface_hub as _hf_hub  # noqa: PLC0415
+
+                if repo_id:
+                    cached = _hf_hub.try_to_load_from_cache(repo_id, "model.bin")
+                    _do_download = cached is None
+            except Exception:
+                _do_download = False
+                repo_id = ""
+
+            if not _do_download or not repo_id:
+                _close_wizard()
+                return
+
+            # Model not cached — show download progress UI.
+            try:
+                if save_button is not None:
+                    save_button.configure(state="disabled", style="SetupPrimaryDisabled.TButton")
+                sec = secondary_button_ref.get("widget")
+                if sec is not None:
+                    sec.configure(state="disabled")
             except Exception:
                 pass
-            root.destroy()
+
+            footer_hint_var.set(
+                f"Downloading {model_name} \u2014 this may take 1-5 minutes on first run..."
+            )
+            try:
+                footer_hint_label.configure(bg="#FFF7ED", fg="#92400E")
+            except Exception:
+                pass
+            try:
+                download_progress_bar.configure(value=0)
+                download_progress_bar.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+            except Exception:
+                pass
+
+            # tqdm-compatible class that pushes byte progress to the UI.
+            class _DownloadProgressTqdm:
+                _active_count: int = 0
+                _total_bytes: int = 0
+                _done_bytes: int = 0
+
+                def __init__(self, iterable=None, **kwargs):
+                    if _DownloadProgressTqdm._active_count == 0:
+                        _DownloadProgressTqdm._total_bytes = 0
+                        _DownloadProgressTqdm._done_bytes = 0
+                    _DownloadProgressTqdm._active_count += 1
+                    self._iterable = iterable
+                    total = int(kwargs.get("total", 0) or 0)
+                    if total > 0:
+                        _DownloadProgressTqdm._total_bytes += total
+
+                def __iter__(self):
+                    return iter(self._iterable) if self._iterable is not None else iter([])
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    _DownloadProgressTqdm._active_count = max(
+                        0, _DownloadProgressTqdm._active_count - 1
+                    )
+
+                def update(self, n: int = 1) -> None:
+                    _DownloadProgressTqdm._done_bytes += n
+                    total = _DownloadProgressTqdm._total_bytes
+                    done = _DownloadProgressTqdm._done_bytes
+                    if total > 0:
+                        pct = min(100, int(100 * done / total))
+                        done_mb = done / 1_048_576
+                        total_mb = total / 1_048_576
+                        hint = (
+                            f"Downloading {model_name}... {pct}%"
+                            f" ({done_mb:.0f} MB / {total_mb:.0f} MB)"
+                        )
+                        try:
+                            root.after(
+                                0,
+                                lambda p=pct, h=hint: (
+                                    download_progress_bar.configure(value=p),
+                                    footer_hint_var.set(h),
+                                ),
+                            )
+                        except Exception:
+                            pass
+
+                def set_postfix(self, *args, **kwargs) -> None:
+                    pass
+
+                def close(self) -> None:
+                    pass
+
+            def _download_worker() -> None:
+                try:
+                    import huggingface_hub as _hf  # noqa: PLC0415
+
+                    _hf.snapshot_download(
+                        repo_id,
+                        allow_patterns=[
+                            "config.json",
+                            "preprocessor_config.json",
+                            "model.bin",
+                            "tokenizer.json",
+                            "vocabulary.*",
+                        ],
+                        tqdm_class=_DownloadProgressTqdm,
+                    )
+
+                    def _on_success() -> None:
+                        try:
+                            download_progress_bar.configure(value=100)
+                        except Exception:
+                            pass
+                        _close_wizard()
+
+                    try:
+                        root.after(0, _on_success)
+                    except Exception:
+                        pass
+
+                except Exception:
+
+                    def _on_error() -> None:
+                        try:
+                            download_progress_bar.grid_forget()
+                        except Exception:
+                            pass
+                        footer_hint_var.set(
+                            "Download failed. Check your internet connection and try again."
+                            " VoiceFlow will attempt download on first use."
+                        )
+                        try:
+                            footer_hint_label.configure(bg="#FEE2E2", fg="#991B1B")
+                        except Exception:
+                            pass
+                        try:
+                            if save_button is not None:
+                                save_button.configure(
+                                    state="normal", style="SetupPrimaryReady.TButton"
+                                )
+                            sec = secondary_button_ref.get("widget")
+                            if sec is not None:
+                                sec.configure(state="normal")
+                        except Exception:
+                            pass
+                        # Close anyway after a brief delay so the user sees the message.
+                        try:
+                            root.after(4000, _close_wizard)
+                        except Exception:
+                            pass
+
+                    try:
+                        root.after(0, _on_error)
+                    except Exception:
+                        pass
+
+            threading.Thread(target=_download_worker, daemon=True).start()
 
         def _launch_without_changes():
             if is_startup_flow:
                 cfg.show_setup_on_startup = bool(show_startup_var.get())
                 save_config(cfg)
-            try:
-                root.unbind_all("<MouseWheel>")
-            except Exception:
-                pass
-            root.destroy()
+            _close_wizard()
 
         if is_startup_flow:
-            ttk.Button(
+            _sec_btn = ttk.Button(
                 footer_actions,
                 text="Exit VoiceFlow",
                 command=_launch_without_changes,
                 style="SetupSecondary.TButton",
-            ).grid(row=0, column=0, sticky="w")
+            )
+            _sec_btn.grid(row=0, column=0, sticky="w")
         else:
-            ttk.Button(
+            _sec_btn = ttk.Button(
                 footer_actions,
                 text="Launch Without Changes",
                 command=_launch_without_changes,
                 style="SetupSecondary.TButton",
-            ).grid(row=0, column=0, sticky="w")
+            )
+            _sec_btn.grid(row=0, column=0, sticky="w")
+        secondary_button_ref["widget"] = _sec_btn
         save_button = ttk.Button(
             footer_actions,
             text="Save and Launch VoiceFlow",
