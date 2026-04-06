@@ -93,19 +93,22 @@ python _app_entry.py
 voiceflow/
 ├── core/
 │   ├── asr_engine.py        # faster-whisper inference, model tier selection
-│   ├── audio.py             # sounddevice capture, VAD, chunking
+│   ├── audio_enhanced.py    # sounddevice capture, VAD, chunking
 │   ├── streaming.py         # streaming partial results
 │   ├── textproc.py          # cleanup passes, destination-aware formatting
+│   ├── preloader.py         # background model pre-warming
 │   └── config.py            # typed config dataclass
 ├── ui/
 │   ├── cli_enhanced.py      # main entry point, hotkey listener, orchestration
 │   ├── visual_indicators.py # overlay + dock UI (tkinter)
-│   ├── enhanced_tray.py     # system tray (pystray)
+│   ├── tray.py              # system tray (pystray)
 │   └── setup_wizard.py      # first-run wizard (tkinter)
 ├── ai/
 │   ├── adaptive_memory.py   # continual learning, pattern extraction
 │   ├── daily_learning.py    # nightly batch learning pass
 │   └── course_corrector.py  # real-time correction pipeline
+├── models/
+│   └── tray_state.py        # shared state types between tray and orchestrator
 └── platform/
     └── factory.py           # platform injection abstraction (Windows: pywin32)
 ```
@@ -126,14 +129,14 @@ The hotkey listener captures audio into a ring buffer, passes it through VAD, th
 
 ## Configuration
 
-Most settings are available through the setup wizard (right-click tray → **Setup & Defaults**). Config is stored at `%LOCALAPPDATA%\LocalFlow\config.json`.
+Most settings are available through the setup wizard (right-click tray → **Setup & Defaults**). Config is stored at `%LOCALAPPDATA%\VoiceFlow\config.json`.
 
 Key settings:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `device` | auto | `cuda` or `cpu` |
-| `model_tier` | `balanced` | `quick`, `balanced`, `quality` |
+| `model_tier` | `quick` | `tiny`, `quick`, `balanced`, `quality` |
 | `enable_light_typo_correction` | `true` | Light cleanup pass |
 | `enable_safe_second_pass_cleanup` | `true` | Second cleanup pass |
 | `enable_heavy_second_pass_cleanup` | `false` | Aggressive rewrite (opt-in) |
@@ -145,10 +148,10 @@ Key settings:
 
 VoiceFlow observes the delta between raw transcripts and final text. Recurring corrections are promoted into adaptive replacement rules.
 
-- Rules are stored locally in `%LOCALAPPDATA%\LocalFlow\adaptive_patterns.json`
-- Daily learning runs a nightly batch pass; reports land in `%LOCALAPPDATA%\LocalFlow\daily_learning_reports\`
+- Rules are stored locally in `%LOCALAPPDATA%\VoiceFlow\adaptive_patterns.json`
+- Daily learning runs a nightly batch pass; reports land in `%LOCALAPPDATA%\VoiceFlow\daily_learning_reports\`
 - Explicit corrections via the History panel rank higher than auto-inferred rules
-- Add personal terminology in `%LOCALAPPDATA%\LocalFlow\engineering_terms.json`
+- Add personal terminology in `%LOCALAPPDATA%\VoiceFlow\engineering_terms.json`
 
 ---
 
@@ -167,7 +170,7 @@ VoiceFlow observes the delta between raw transcripts and final text. Recurring c
 5. Test with the packaged bundle (`dist\VoiceFlow\VoiceFlow.exe`) for end-to-end validation.
 6. Open a pull request against `main` with a description of what changed and why.
 
-See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the full guide.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
 
 ---
 
