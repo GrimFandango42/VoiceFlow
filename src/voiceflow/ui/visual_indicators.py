@@ -378,7 +378,7 @@ class BottomScreenIndicator:
         req_w, req_h = self.config_manager.get_overlay_dimensions()
         # Compact overlay profile: small, centered, and visually lighter.
         self.width = int(min(500, max(332, req_w + 20)))
-        self.height = int(min(230, max(185, req_h + 100)))
+        self.height = int(min(215, max(175, req_h + 88)))
         self.wave_w = max(272, self.width - 20)
         colors = self.config_manager.get_color_scheme()
         theme_value = getattr(getattr(self.config_manager, "config", None), "theme", ColorTheme.DEFAULT)
@@ -610,7 +610,30 @@ class BottomScreenIndicator:
             pass
         finally:
             if self.gui_running and self.root:
+                self._assert_overlay_topmost()
                 self.root.after(300, self._poll_ui_action_requests)
+
+    def _assert_overlay_topmost(self):
+        """Re-lift overlay and dock every poll cycle while recording is active.
+
+        Windows can bury topmost windows behind other topmost windows (UAC dialogs,
+        full-screen apps, notification banners). Calling lift() on the poll cycle
+        keeps the overlay visible after a focus interruption without any perceivable
+        flicker during idle state.
+        """
+        try:
+            active = self.current_status in (
+                TranscriptionStatus.LISTENING,
+                TranscriptionStatus.PROCESSING,
+                TranscriptionStatus.TRANSCRIBING,
+            )
+            if active and self.window and self._window_exists(self.window):
+                self.window.lift()
+                self.window.wm_attributes("-topmost", True)
+            if self.dock_enabled and self.dock_window and self._window_exists(self.dock_window):
+                self.dock_window.lift()
+        except Exception:
+            pass
 
     def _setup_window(self):
         """Initialize the bottom overlay window"""
@@ -769,7 +792,7 @@ class BottomScreenIndicator:
             wraplength=self.wave_w - 24,
             justify=tk.LEFT,
             anchor="nw",
-            height=3,
+            height=4,
         )
         self.preview_label.pack(fill=tk.BOTH, expand=True)
         self.word_stream_canvas = None
@@ -938,18 +961,19 @@ class BottomScreenIndicator:
             )
             self.wave_sparks.append(dot)  # reuse wave_sparks list for peak dots
 
-        # Spark particle pool — flying bright dots ejected on speech burst
-        MAX_SPARKS = 14
+        # Spark particle pool — flying bright bubbles ejected on speech burst
+        MAX_SPARKS = 28
         self._spark_particles = []  # list of [canvas_id, x, y, vx, vy, life, max_life, hue]
         for _ in range(MAX_SPARKS):
             sid = self.wave_canvas.create_oval(
-                -4, -4, -2, -2,
+                -5, -5, -2, -2,
                 fill="#FFFFFF",
                 outline="",
                 state="hidden",
             )
             self._spark_particles.append([sid, 0.0, 0.0, 0.0, 0.0, 0, 1, 0.0])
         self._spark_last_burst = 0.0  # track burst energy at last spark spawn
+        self._spark_spawn_counter = 0  # throttle continuous-speech spawning
 
         # Start continuous idle animation loop
         self._start_idle_wave_loop()
@@ -1148,59 +1172,83 @@ class BottomScreenIndicator:
 
         # --- Spark particle system ---
         if hasattr(self, "_spark_particles") and self._spark_particles:
-            import random as _rnd
-
-            # Spawn new sparks on speech burst onset
             burst_now = self._burst_energy
             prev_burst = self._spark_last_burst
             self._spark_last_burst = burst_now
+            free_sparks = [s for s in self._spark_particles if s[5] == 0]
 
+            def _spawn_spark(bar_i: int, speed_scale: float = 1.0):
+                if not free_sparks:
+                    return
+                spark = free_sparks.pop()
+                t_i = bar_i / max(1, self._bar_count - 1)
+                sx = self._bar_margin + bar_i * self._bar_slot + self._bar_width / 2
+                sy = float(mid_y - max(self._bar_peaks[bar_i], 4.0))
+                hue_i = (t_i + hue_drift) % 1.0
+                life = random.randint(24, 38)
+                # Outward arc: edge bars fly sideways, center bars go straight up
+                lateral = (t_i - 0.5) * 2.0 * random.uniform(0.6, 2.2)
+                spark[1] = sx + random.uniform(-2, 2)
+                spark[2] = sy
+                spark[3] = lateral * speed_scale            # vx: outward spread
+                spark[4] = random.uniform(-4.2, -2.0) * speed_scale  # vy: upward burst
+                spark[5] = life
+                spark[6] = life
+                spark[7] = hue_i
+                self.wave_canvas.itemconfig(spark[0], state="normal")
+
+            # --- Burst onset: spray 7 sparks from tallest bars ---
             if burst_now > 0.25 and prev_burst < burst_now and len(self.wave_bars) > 0:
-                # Find the tallest bars to spawn from
                 tallest = sorted(
                     range(len(self._bar_peaks)), key=lambda k: self._bar_peaks[k], reverse=True
-                )[:4]
-                spawn_count = min(4, sum(1 for s in self._spark_particles if s[5] == 0))
-                spawned = 0
-                for bar_i in tallest:
-                    if spawned >= spawn_count:
-                        break
-                    for spark in self._spark_particles:
-                        if spark[5] == 0:  # dead/idle
-                            sx = self._bar_margin + bar_i * self._bar_slot + self._bar_width / 2
-                            sy = float(mid_y - self._bar_peaks[bar_i])
-                            hue_i = (bar_i / max(1, self._bar_count - 1) + hue_drift) % 1.0
-                            life = _rnd.randint(14, 22)
-                            spark[1] = sx + _rnd.uniform(-2, 2)
-                            spark[2] = sy
-                            spark[3] = _rnd.uniform(-0.8, 0.8)  # vx
-                            spark[4] = _rnd.uniform(-2.8, -1.4)  # vy (upward)
-                            spark[5] = life
-                            spark[6] = life
-                            spark[7] = hue_i
-                            self.wave_canvas.itemconfig(spark[0], state="normal")
-                            spawned += 1
-                            break
+                )[:7]
+                for bar_i in tallest[:min(7, len(free_sparks))]:
+                    _spawn_spark(bar_i, speed_scale=1.0 + burst_now * 0.5)
 
-            # Update all active sparks
+            # --- Continuous speech: drip 1-2 sparks every ~12 frames ---
+            if self._speech_active and voiced_drive > 0.28:
+                self._spark_spawn_counter = getattr(self, "_spark_spawn_counter", 0) + 1
+                if self._spark_spawn_counter >= 12 and free_sparks and len(self._bar_peaks) > 0:
+                    self._spark_spawn_counter = 0
+                    # Pick a random tall bar weighted by height
+                    weights = [max(0.1, self._bar_peaks[k]) for k in range(len(self._bar_peaks))]
+                    total_w = sum(weights)
+                    r = random.uniform(0, total_w)
+                    cum = 0.0
+                    chosen = 0
+                    for k, w in enumerate(weights):
+                        cum += w
+                        if r <= cum:
+                            chosen = k
+                            break
+                    _spawn_spark(chosen, speed_scale=0.7 + voiced_drive * 0.5)
+                    if free_sparks and voiced_drive > 0.55:
+                        _spawn_spark(random.randint(0, len(self._bar_peaks) - 1), speed_scale=0.6)
+            else:
+                self._spark_spawn_counter = 0
+
+            # Update all active sparks: physics + fade
             for spark in self._spark_particles:
                 if spark[5] <= 0:
                     continue
                 spark[1] += spark[3]
                 spark[2] += spark[4]
-                spark[4] *= 0.90  # drag
-                spark[3] *= 0.94
+                spark[4] *= 0.88   # vy drag — slower decay = more hangtime
+                spark[3] *= 0.91   # vx drag
                 spark[5] -= 1
                 life_frac = spark[5] / max(1, spark[6])
-                if spark[5] <= 0 or spark[2] < -4:
-                    self.wave_canvas.coords(spark[0], -4, -4, -2, -2)
+                if spark[5] <= 0 or spark[2] < -6:
+                    self.wave_canvas.coords(spark[0], -5, -5, -2, -2)
                     self.wave_canvas.itemconfig(spark[0], state="hidden")
                     spark[5] = 0
                 else:
-                    r_s, g_s, b_s = colorsys.hsv_to_rgb(spark[7], 0.5 + 0.5 * life_frac, life_frac)
+                    # Vivid color while alive, fade to dim near death; slight hue drift over life
+                    hue_shifted = (spark[7] + (1.0 - life_frac) * 0.08) % 1.0
+                    r_s, g_s, b_s = colorsys.hsv_to_rgb(hue_shifted, 0.6 + 0.4 * life_frac, min(1.0, life_frac * 1.4))
                     sc = f"#{int(r_s*255):02x}{int(g_s*255):02x}{int(b_s*255):02x}"
                     sx, sy = spark[1], spark[2]
-                    self.wave_canvas.coords(spark[0], sx - 1, sy - 1, sx + 1, sy + 1)
+                    r = max(1.0, 2.5 * life_frac)  # shrink as they fade
+                    self.wave_canvas.coords(spark[0], sx - r, sy - r, sx + r, sy + r)
                     self.wave_canvas.itemconfig(spark[0], fill=sc, state="normal")
 
     def update_audio_level(self, level: float):
@@ -2858,6 +2906,15 @@ class BottomScreenIndicator:
             pb = getattr(self, "progress_bar", None)
             if status == TranscriptionStatus.LISTENING:
                 self._fade_in()
+                # Re-assert position in case the screen layout changed (display reconnect,
+                # resolution change, or the overlay drifted behind a covering window)
+                try:
+                    phys_w, phys_h = _get_physical_screen_size()
+                    sw = phys_w if phys_w > 0 else self.window.winfo_screenwidth()
+                    sh = phys_h if phys_h > 0 else self.window.winfo_screenheight()
+                    self._position_overlay(sw, sh)
+                except Exception:
+                    pass
                 self._init_geometric_motif(seed=(time.time_ns() & 0xFFFF))
                 if pb:
                     pb.configure(mode='indeterminate')
