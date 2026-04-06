@@ -904,6 +904,8 @@ class BottomScreenIndicator:
         # Micro-noise: each bar has a personal slow oscillation so idle state is never uniform
         self._bar_noise_phase = [_srng.uniform(0.0, 2 * math.pi) for _ in range(NUM_BARS)]
         self._bar_noise_speed = [_srng.uniform(0.013, 0.044) for _ in range(NUM_BARS)]
+        # Burst onset flag: set True on speech start, consumed once to inject velocity kick
+        self._bar_burst_pending = False
 
         # Create canvas elements: glow (behind bar), bar, peak dot (in front)
         bottom = self.wave_h - 2
@@ -1006,8 +1008,9 @@ class BottomScreenIndicator:
         speech_now = voiced > 0.12
         if speech_now and not self._speech_active:
             self._burst_energy = 1.0
+            self._bar_burst_pending = True
         self._speech_active = speech_now
-        self._burst_energy = max(0.0, (self._burst_energy * 0.91) - 0.010)
+        self._burst_energy = max(0.0, self._burst_energy * 0.92 - 0.008)
         self.wave_energy_history.append(voiced)
 
         # --- Frequency waveform bar animation ---
@@ -1029,6 +1032,12 @@ class BottomScreenIndicator:
 
         # Slow global hue rotation — whole spectrum drifts over time
         hue_drift = (self.wave_phase * 0.003) % 1.0
+
+        # On speech onset inject a velocity kick so bars snap up dramatically then ring back
+        if has_spring and self._bar_burst_pending:
+            self._bar_burst_pending = False
+            for j in range(n):
+                self._bar_vel[j] += base_half * 0.32 * self._bar_k[j] * random.uniform(0.6, 1.4)
 
         # --- Pass 1: compute raw target height for every bar ---
         targets: list[float] = []
@@ -1067,8 +1076,8 @@ class BottomScreenIndicator:
 
                 nat_freq = 0.9 + t * 2.4
                 movement = 0.5 + 0.5 * abs(math.sin(self.wave_phase * nat_freq + phase * 1.4))
-                # More dramatic burst on onset
-                burst = self._burst_energy * 0.70 * abs(math.sin(phase * 2.0 + self.wave_phase * 0.7))
+                # Burst floor at 50%: every bar gets at least half the burst energy so onset is uniformly dramatic
+                burst = self._burst_energy * 0.72 * (0.5 + 0.5 * abs(math.sin(phase * 2.0 + self.wave_phase * 0.7)))
 
                 speech_h = base_half * voiced_drive * (0.28 + 0.50 * band + 0.22 * burst) * movement
                 target_h = idle_h + speech_h
