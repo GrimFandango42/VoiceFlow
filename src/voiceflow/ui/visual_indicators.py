@@ -765,11 +765,13 @@ class BottomScreenIndicator:
 
         hotkey_hint = tk.Label(
             status_row,
-            text="Ctrl+Shift to record",
-            bg=self.transparent_key,
+            text="Ctrl+Shift",
+            bg=self._ui("panel_surface"),
             fg=self._ui("text_muted"),
-            font=("Segoe UI", 7),
+            font=("Segoe UI", 8),
             anchor="e",
+            padx=5,
+            pady=1,
         )
         hotkey_hint.pack(side=tk.RIGHT, padx=4)
 
@@ -2951,16 +2953,15 @@ class BottomScreenIndicator:
                     pb.stop()
                 self._start_animation(status)
             elif status in (TranscriptionStatus.COMPLETE, TranscriptionStatus.ERROR):
-                # Show briefly to confirm outcome; auto-hide timer in show_status handles dismiss
+                # Show briefly to confirm outcome; auto-hide timer in show_status handles dismiss.
+                # Do NOT clear preview_var here — the final corrected text was just pushed by
+                # visual_show_preview() so the user can read it during the 2-second COMPLETE window.
+                # IDLE state (below) clears it when the overlay hides.
                 self._fade_in()
                 self._stop_animation()
                 if pb:
                     pb.stop()
                 self.progress_var.set(0)
-                if self.preview_var:
-                    self.preview_var.set("")
-                self._bubble_tokens.clear()
-                self._last_stream_word_count = 0
             else:
                 # IDLE — fade out and hide
                 self._fade_out()

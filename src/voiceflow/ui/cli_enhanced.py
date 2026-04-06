@@ -1632,18 +1632,24 @@ class EnhancedApp:
         """Handle streaming preview update"""
         if result.text and result.text != self._last_preview_text:
             self._last_preview_text = result.text
+            # Apply a cheap cleanup so live preview text reads as naturally as
+            # the final output — strip leading fillers, fix punctuation spacing.
+            preview_text = result.text.strip()
+            preview_text = re.sub(r"(?i)^(uh+[,.]?\s+|um+[,.]?\s+|er+[,.]?\s+)+", "", preview_text)
+            preview_text = apply_second_pass_cleanup(preview_text, heavy=False)
+
             # Caption-style preview: keep latest N words for readable live feedback.
-            words = re.findall(r"\S+", result.text.strip())
+            words = re.findall(r"\S+", preview_text)
             keep_words = max(1, int(getattr(self.cfg, "live_caption_words", 6)))
-            caption_text = " ".join(words[-keep_words:]) if words else result.text.strip()
+            caption_text = " ".join(words[-keep_words:]) if words else preview_text
             display_cap = max(40, int(getattr(self.cfg, "live_caption_max_chars", 110)))
             preview_display = caption_text[:display_cap] + "..." if len(caption_text) > display_cap else caption_text
             print(f"[PREVIEW] {preview_display}")
 
             # Update visual overlay preview
             if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
-                # Send full partial text to UI so it can render flowing word bubbles.
-                visual_show_preview(result.text)
+                # Send cleaned partial text to UI for flowing word bubbles.
+                visual_show_preview(preview_text)
 
     def _start_streaming_preview(self) -> None:
         """Start streaming preview for real-time transcription feedback"""
@@ -2726,6 +2732,9 @@ class EnhancedApp:
                     truncated_text = text[:50] + "..." if len(text) > 50 else text
                     update_tray_status(self.tray_controller, "complete", False, f"Transcribed: {truncated_text}")
                     if VISUAL_INDICATORS_AVAILABLE:
+                        # Show the final corrected text in preview during the COMPLETE window
+                        # so the user can see what was actually injected (post-cleanup version)
+                        visual_show_preview(text)
                         show_complete("Complete")
 
                     # CRITICAL: Schedule delayed reset to idle via tray auto-reset timer
