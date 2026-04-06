@@ -657,23 +657,23 @@ class BottomScreenIndicator:
         if not self.window:
             return
         x, y = self.config_manager.get_position_coordinates(screen_width, screen_height)
-        reserved_bottom = 138 if self.dock_enabled else 98
+        reserved_bottom = 98
 
-        # Keep overlay strictly centered when dock is enabled.
+        # Keep overlay strictly centered when dock is enabled, flush to dock top.
         if self.dock_enabled and self.dock_window:
             x = int((screen_width - self.width) / 2)
             try:
-                geo = self.dock_window.geometry()  # e.g. 430x30+745+1008
+                geo = self.dock_window.geometry()  # e.g. 372x26+994+1368
                 dock_y = int(geo.rsplit("+", 1)[-1])
-                # Keep animation close to the dock for a tighter visual stack.
-                y = int(dock_y - self.height - 1)
+                # Sit immediately above the dock — no extra gap.
+                y = dock_y - self.height
             except Exception:
-                y = min(y - 8, screen_height - self.height - reserved_bottom)
+                y = screen_height - self.height - 80
         else:
             y = min(y - 8, screen_height - self.height - reserved_bottom)
 
         x = max(8, min(screen_width - self.width - 8, x))
-        y = max(10, min(y, screen_height - self.height - reserved_bottom))
+        y = max(10, y)
         self.window.geometry(f"{self.width}x{self.height}+{x}+{y}")
 
     def _create_ui(self):
@@ -915,6 +915,19 @@ class BottomScreenIndicator:
             )
             self.wave_sparks.append(dot)  # reuse wave_sparks list for peak dots
 
+        # Spark particle pool — flying bright dots ejected on speech burst
+        MAX_SPARKS = 14
+        self._spark_particles = []  # list of [canvas_id, x, y, vx, vy, life, max_life, hue]
+        for _ in range(MAX_SPARKS):
+            sid = self.wave_canvas.create_oval(
+                -4, -4, -2, -2,
+                fill="#FFFFFF",
+                outline="",
+                state="hidden",
+            )
+            self._spark_particles.append([sid, 0.0, 0.0, 0.0, 0.0, 0, 1, 0.0])
+        self._spark_last_burst = 0.0  # track burst energy at last spark spawn
+
         # Start continuous idle animation loop
         self._start_idle_wave_loop()
 
@@ -1031,7 +1044,9 @@ class BottomScreenIndicator:
                 speech_h = base_half * voiced_drive * (0.30 + 0.52 * band + 0.18 * burst) * movement
                 bar_h = int(idle_h + speech_h)
 
-            bar_h = max(2, min(bar_h, base_half))
+            # Center-emphasis: bars near center get a subtle height boost for a mountain silhouette
+            center_bias = 1.0 + 0.28 * math.sin(t * math.pi)
+            bar_h = max(2, min(int(bar_h * center_bias), base_half))
 
             # Hue-shifted color per bar: drift slowly + boost saturation on speech
             bar_hue = ((t + hue_drift) % 1.0)
@@ -1075,6 +1090,63 @@ class BottomScreenIndicator:
                     # Peak dot at top and mirror at bottom
                     self.wave_canvas.coords(self.wave_sparks[i], x0, peak_y - 2, x1, peak_y)
                     self.wave_canvas.itemconfig(self.wave_sparks[i], fill="#FFFFFF")
+
+        # --- Spark particle system ---
+        if hasattr(self, "_spark_particles") and self._spark_particles:
+            import random as _rnd
+
+            # Spawn new sparks on speech burst onset
+            burst_now = self._burst_energy
+            prev_burst = self._spark_last_burst
+            self._spark_last_burst = burst_now
+
+            if burst_now > 0.25 and prev_burst < burst_now and len(self.wave_bars) > 0:
+                # Find the tallest bars to spawn from
+                tallest = sorted(
+                    range(len(self._bar_peaks)), key=lambda k: self._bar_peaks[k], reverse=True
+                )[:4]
+                spawn_count = min(4, sum(1 for s in self._spark_particles if s[5] == 0))
+                spawned = 0
+                for bar_i in tallest:
+                    if spawned >= spawn_count:
+                        break
+                    for spark in self._spark_particles:
+                        if spark[5] == 0:  # dead/idle
+                            sx = self._bar_margin + bar_i * self._bar_slot + self._bar_width / 2
+                            sy = float(mid_y - self._bar_peaks[bar_i])
+                            hue_i = (bar_i / max(1, self._bar_count - 1) + hue_drift) % 1.0
+                            life = _rnd.randint(14, 22)
+                            spark[1] = sx + _rnd.uniform(-2, 2)
+                            spark[2] = sy
+                            spark[3] = _rnd.uniform(-0.8, 0.8)  # vx
+                            spark[4] = _rnd.uniform(-2.8, -1.4)  # vy (upward)
+                            spark[5] = life
+                            spark[6] = life
+                            spark[7] = hue_i
+                            self.wave_canvas.itemconfig(spark[0], state="normal")
+                            spawned += 1
+                            break
+
+            # Update all active sparks
+            for spark in self._spark_particles:
+                if spark[5] <= 0:
+                    continue
+                spark[1] += spark[3]
+                spark[2] += spark[4]
+                spark[4] *= 0.90  # drag
+                spark[3] *= 0.94
+                spark[5] -= 1
+                life_frac = spark[5] / max(1, spark[6])
+                if spark[5] <= 0 or spark[2] < -4:
+                    self.wave_canvas.coords(spark[0], -4, -4, -2, -2)
+                    self.wave_canvas.itemconfig(spark[0], state="hidden")
+                    spark[5] = 0
+                else:
+                    r_s, g_s, b_s = colorsys.hsv_to_rgb(spark[7], 0.5 + 0.5 * life_frac, life_frac)
+                    sc = f"#{int(r_s*255):02x}{int(g_s*255):02x}{int(b_s*255):02x}"
+                    sx, sy = spark[1], spark[2]
+                    self.wave_canvas.coords(spark[0], sx - 1, sy - 1, sx + 1, sy + 1)
+                    self.wave_canvas.itemconfig(spark[0], fill=sc, state="normal")
 
     def update_audio_level(self, level: float):
         """Thread-safe live amplitude input from recorder loop."""
