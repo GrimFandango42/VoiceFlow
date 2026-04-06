@@ -487,7 +487,7 @@ class BottomScreenIndicator:
     def _start_gui_thread(self):
         """Start GUI thread for thread-safe visual indicators"""
         import queue
-        self.command_queue = queue.Queue()
+        self.command_queue = queue.Queue(maxsize=500)  # cap prevents unbounded growth during long sessions
         self.gui_thread = threading.Thread(target=self._gui_thread_worker, daemon=True)
         self.gui_thread.start()
 
@@ -1208,9 +1208,9 @@ class BottomScreenIndicator:
         if not self.gui_ready or not self.command_queue:
             return
         try:
-            self.command_queue.put((self._update_audio_level_ui, (level,), {}))
+            self.command_queue.put_nowait((self._update_audio_level_ui, (level,), {}))
         except Exception:
-            pass
+            pass  # drop stale amplitude frames rather than block or accumulate
 
     def _update_audio_level_ui(self, level: float):
         try:
@@ -1230,9 +1230,9 @@ class BottomScreenIndicator:
         if not self.gui_ready or not self.command_queue:
             return
         try:
-            self.command_queue.put((self._update_audio_features_ui, (features,), {}))
+            self.command_queue.put_nowait((self._update_audio_features_ui, (features,), {}))
         except Exception:
-            pass
+            pass  # drop stale feature frames rather than block or accumulate
 
     def _update_audio_features_ui(self, features: Dict[str, float]):
         try:
