@@ -274,6 +274,12 @@ class BottomScreenIndicator:
         self._bar_peaks: list[float] = []
         self._bar_peak_hold: list[float] = []
         self._bar_glow: list[int] = []
+        self._bar_pos: list[float] = []
+        self._bar_vel: list[float] = []
+        self._bar_k: list[float] = []
+        self._bar_damp: list[float] = []
+        self._bar_noise_phase: list[float] = []
+        self._bar_noise_speed: list[float] = []
         self._bar_slot = 0.0
         self._bar_margin = 6
         self._bar_width = 4
@@ -372,7 +378,7 @@ class BottomScreenIndicator:
         req_w, req_h = self.config_manager.get_overlay_dimensions()
         # Compact overlay profile: small, centered, and visually lighter.
         self.width = int(min(500, max(332, req_w + 20)))
-        self.height = int(min(360, max(280, req_h + 168)))
+        self.height = int(min(230, max(185, req_h + 100)))
         self.wave_w = max(272, self.width - 20)
         colors = self.config_manager.get_color_scheme()
         theme_value = getattr(getattr(self.config_manager, "config", None), "theme", ColorTheme.DEFAULT)
@@ -698,7 +704,7 @@ class BottomScreenIndicator:
         self.wave_canvas = tk.Canvas(
             main_frame,
             width=self.wave_w,
-            height=74,
+            height=54,
             bg=self.transparent_key,
             highlightthickness=0,
             bd=0,
@@ -763,7 +769,7 @@ class BottomScreenIndicator:
             wraplength=self.wave_w - 24,
             justify=tk.LEFT,
             anchor="nw",
-            height=6,
+            height=3,
         )
         self.preview_label.pack(fill=tk.BOTH, expand=True)
         self.word_stream_canvas = None
@@ -884,6 +890,21 @@ class BottomScreenIndicator:
         self._bar_peaks = [0.0] * NUM_BARS
         self._bar_peak_hold = [0.0] * NUM_BARS
 
+        # Per-bar spring physics: varied stiffness/damping so each bar has its own personality
+        _srng = random.Random(17)
+        self._bar_pos = [0.0] * NUM_BARS
+        self._bar_vel = [0.0] * NUM_BARS
+        # Center bars slightly stiffer (snap to beat), edge bars looser (sway)
+        self._bar_k = [
+            0.09 + 0.18 * math.sin(math.pi * i / max(1, NUM_BARS - 1)) + _srng.uniform(-0.03, 0.03)
+            for i in range(NUM_BARS)
+        ]
+        # Damping varies: lower = more overshoot/spring, higher = fast settle
+        self._bar_damp = [0.50 + _srng.uniform(-0.18, 0.18) for _ in range(NUM_BARS)]
+        # Micro-noise: each bar has a personal slow oscillation so idle state is never uniform
+        self._bar_noise_phase = [_srng.uniform(0.0, 2 * math.pi) for _ in range(NUM_BARS)]
+        self._bar_noise_speed = [_srng.uniform(0.013, 0.044) for _ in range(NUM_BARS)]
+
         # Create canvas elements: glow (behind bar), bar, peak dot (in front)
         bottom = self.wave_h - 2
         mid_y = self.wave_h // 2
@@ -994,34 +1015,44 @@ class BottomScreenIndicator:
         has_peaks = len(self._bar_peaks) == n
         has_glows = len(self._bar_glow) == n
         has_dots = len(self.wave_sparks) == n
+        has_spring = len(self._bar_pos) == n
         if n == 0:
             return
 
         # Mirrored mode: bars grow from center upward AND downward
         mid_y = self.wave_h // 2
         base_half = mid_y - 2  # max half-height
-        bottom = self.wave_h - 2
 
         low_v = self.audio_features_smoothed.get("low", 0.0)
         mid_v = self.audio_features_smoothed.get("mid", 0.0)
         high_v = self.audio_features_smoothed.get("high", 0.0)
 
-        # Slow global hue rotation — the whole spectrum drifts over time
+        # Slow global hue rotation — whole spectrum drifts over time
         hue_drift = (self.wave_phase * 0.003) % 1.0
 
-        for i, bar in enumerate(self.wave_bars):
+        # --- Pass 1: compute raw target height for every bar ---
+        targets: list[float] = []
+        idle_heights: list[float] = []
+        for i in range(n):
             t = i / max(1, n - 1)
             phase = self._bar_phases[i]
 
-            # Idle: gentle breathing wave rippling across bars
+            # Advance per-bar micro-noise — each bar oscillates at its own pace
+            if has_spring:
+                self._bar_noise_phase[i] = (self._bar_noise_phase[i] + self._bar_noise_speed[i]) % (2 * math.pi)
+                noise = (0.03 * math.sin(self._bar_noise_phase[i])
+                         + 0.015 * math.sin(self._bar_noise_phase[i] * 2.3))
+            else:
+                noise = 0.0
+
             idle_freq = 0.5 + t * 0.8
-            idle_amp = 0.10 + 0.06 * math.sin(self.wave_phase * idle_freq + phase)
-            idle_h = max(2, int(base_half * idle_amp))
+            idle_amp = 0.10 + 0.06 * math.sin(self.wave_phase * idle_freq + phase) + noise
+            idle_h = float(max(2, base_half * max(0.02, idle_amp)))
+            idle_heights.append(idle_h)
 
             if voiced_drive < 0.02:
-                bar_h = idle_h
+                target_h = idle_h
             else:
-                # Frequency band response per position
                 if t < 0.35:
                     w_low = 1.0 - t / 0.35
                     band = low_v * w_low + mid_v * (1.0 - w_low)
@@ -1034,21 +1065,42 @@ class BottomScreenIndicator:
                     w_high = (t - 0.65) / 0.35
                     band = mid_v * (1.0 - w_high) + high_v * w_high
 
-                # Vigorous per-bar modulation
                 nat_freq = 0.9 + t * 2.4
                 movement = 0.5 + 0.5 * abs(math.sin(self.wave_phase * nat_freq + phase * 1.4))
+                # More dramatic burst on onset
+                burst = self._burst_energy * 0.70 * abs(math.sin(phase * 2.0 + self.wave_phase * 0.7))
 
-                # Burst flash on onset
-                burst = self._burst_energy * 0.45 * abs(math.sin(phase * 2.0 + self.wave_phase * 0.7))
+                speech_h = base_half * voiced_drive * (0.28 + 0.50 * band + 0.22 * burst) * movement
+                target_h = idle_h + speech_h
 
-                speech_h = base_half * voiced_drive * (0.30 + 0.52 * band + 0.18 * burst) * movement
-                bar_h = int(idle_h + speech_h)
-
-            # Center-emphasis: bars near center get a subtle height boost for a mountain silhouette
+            # Mountain silhouette: center bars naturally taller
             center_bias = 1.0 + 0.28 * math.sin(t * math.pi)
-            bar_h = max(2, min(int(bar_h * center_bias), base_half))
+            targets.append(min(target_h * center_bias, float(base_half)))
 
-            # Hue-shifted color per bar: drift slowly + boost saturation on speech
+        # --- Pass 2: sympathetic vibration — neighbors subtly pull each other ---
+        for i in range(n):
+            left = targets[i - 1] if i > 0 else targets[i]
+            right = targets[i + 1] if i < n - 1 else targets[i]
+            targets[i] = 0.76 * targets[i] + 0.12 * left + 0.12 * right
+
+        # --- Pass 3: spring physics per bar + draw ---
+        for i, bar in enumerate(self.wave_bars):
+            t = i / max(1, n - 1)
+
+            if has_spring:
+                pos = self._bar_pos[i]
+                vel = self._bar_vel[i]
+                # Spring toward target, resisted by per-bar damping
+                acc = self._bar_k[i] * (targets[i] - pos) - self._bar_damp[i] * vel
+                vel += acc
+                pos = max(0.0, min(float(base_half), pos + vel))
+                self._bar_pos[i] = pos
+                self._bar_vel[i] = vel
+                bar_h = max(2, int(pos))
+            else:
+                bar_h = max(2, min(int(targets[i]), base_half))
+
+            # Hue-shifted color: drift + boost on speech
             bar_hue = ((t + hue_drift) % 1.0)
             sat = min(1.0, 0.85 + 0.15 * voiced_drive)
             val = min(1.0, 0.75 + 0.25 * voiced_drive + 0.15 * self._burst_energy)
@@ -1058,36 +1110,30 @@ class BottomScreenIndicator:
             x0 = self._bar_margin + i * self._bar_slot + 1
             x1 = x0 + self._bar_width
 
-            # Mirrored: bar grows up and down from center
             self.wave_canvas.coords(bar, x0, mid_y - bar_h, x1, mid_y + bar_h)
             self.wave_canvas.itemconfig(bar, fill=bar_color)
 
-            # Glow: slightly wider, stippled, same hue at lower value
             if has_glows:
-                glow_h = int(bar_h * 1.25)
-                glow_h = max(2, min(glow_h, base_half + 4))
+                glow_h = max(2, min(int(bar_h * 1.25), base_half + 4))
                 r_g, g_g, b_g = colorsys.hsv_to_rgb(bar_hue, sat * 0.7, val * 0.6)
                 glow_color = f"#{int(r_g*255):02x}{int(g_g*255):02x}{int(b_g*255):02x}"
                 self.wave_canvas.coords(self._bar_glow[i], x0 - 1, mid_y - glow_h, x1 + 1, mid_y + glow_h)
                 self.wave_canvas.itemconfig(self._bar_glow[i], fill=glow_color)
 
-            # Peak dots: hang at max height then slowly fall
             if has_peaks:
                 peak = self._bar_peaks[i]
                 hold = self._bar_peak_hold[i]
                 if bar_h >= peak:
                     self._bar_peaks[i] = float(bar_h)
-                    self._bar_peak_hold[i] = 18.0  # frames to hold
+                    self._bar_peak_hold[i] = 18.0
                 else:
                     if hold > 0:
                         self._bar_peak_hold[i] = hold - 1
                     else:
-                        # Gravity fall
-                        self._bar_peaks[i] = max(float(idle_h), peak * 0.88)
+                        self._bar_peaks[i] = max(2.0, peak * 0.88)
 
                 peak_y = mid_y - int(self._bar_peaks[i])
                 if has_dots:
-                    # Peak dot at top and mirror at bottom
                     self.wave_canvas.coords(self.wave_sparks[i], x0, peak_y - 2, x1, peak_y)
                     self.wave_canvas.itemconfig(self.wave_sparks[i], fill="#FFFFFF")
 
