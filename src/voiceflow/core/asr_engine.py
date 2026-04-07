@@ -440,11 +440,6 @@ class FasterWhisperBackend(ASRBackend):
             try:
                 from faster_whisper import WhisperModel
 
-                # Download model files with progress logging if not already cached.
-                # This runs before WhisperModel() so users see clear feedback instead
-                # of a silent 30-60 second wait on first use.
-                self._maybe_download_with_progress(model_ref)
-
                 self._model = self._create_model(WhisperModel, model_ref)
 
                 # Warmup with minimal audio
@@ -557,6 +552,9 @@ class FasterWhisperBackend(ASRBackend):
             # using class-level state so the percentage reflects the overall snapshot.
             class _LoggingTqdm:
                 """tqdm-compatible class that forwards progress to the logger."""
+
+                # Required by huggingface_hub for thread-safe tqdm management.
+                _lock = threading.RLock()
 
                 # Class-level totals shared across all concurrent file downloads.
                 _total_bytes: int = 0
