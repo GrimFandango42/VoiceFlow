@@ -4,7 +4,7 @@ A modern voice-to-text application with real-time processing,
 visual feedback, and system integration.
 """
 
-__version__ = "3.2.0"
+__version__ = "3.2.1"
 __author__ = "VoiceFlow Team"
 __email__ = "support@voiceflow.dev"
 

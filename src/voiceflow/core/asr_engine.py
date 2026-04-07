@@ -1,15 +1,12 @@
-"""Unified ASR Engine - VoiceFlow 3.0
+"""Unified ASR Engine - VoiceFlow 3.2
 
-A unified speech recognition engine supporting multiple backends and models:
-- faster-whisper (Distil-Whisper, Whisper)
-- WhisperX (advanced features: diarization, word timestamps)
-- Voxtral (Mistral AI's new open-source model)
+Speech recognition engine built on faster-whisper (CTranslate2 backend).
 
 Model Tiers:
 - Quick: adaptive low-latency tier (small.en on CPU, distil-large-v3 on CUDA)
 - Balanced: distil-large-v3.5 (best speed/quality ratio)
-- Quality: large-v3 or Voxtral-3B (highest accuracy)
-- Tiny: tiny.en (fastest, lower accuracy - good for testing)
+- Quality: large-v3 (highest accuracy)
+- Tiny: tiny.en (fastest, lower accuracy — good for testing)
 """
 
 import logging
@@ -505,122 +502,6 @@ class FasterWhisperBackend(ASRBackend):
             if local_prefetch.exists():
                 return str(local_prefetch)
         return resolved_id
-
-    @staticmethod
-    def _maybe_download_with_progress(model_ref: str) -> None:
-        """Download model files from HuggingFace Hub with progress logging if not cached.
-
-        faster-whisper suppresses all tqdm output, leaving users staring at a frozen
-        app for 30-60 seconds on first run.  This method runs *before* WhisperModel()
-        and logs periodic progress lines so the user knows something is happening.
-
-        If the model is already fully cached this is a fast no-op (a few ms to check).
-        If ``model_ref`` is an absolute local path the check is skipped entirely.
-        """
-        # Skip if model_ref is a local filesystem path (pre-fetched or absolute).
-        if Path(model_ref).exists():
-            return
-
-        try:
-            import re
-
-            import huggingface_hub
-
-            # Resolve short name (e.g. "distil-large-v3") to a HF repo ID.
-            from faster_whisper.utils import _MODELS as _FW_MODELS
-            if re.match(r".*/.*", model_ref):
-                repo_id = model_ref
-            else:
-                repo_id = _FW_MODELS.get(model_ref, model_ref)
-
-            # Check whether the main model binary is already in the snapshot cache.
-            # try_to_load_from_cache returns None when the file is absent.
-            cached = huggingface_hub.try_to_load_from_cache(repo_id, "model.bin")
-            if cached is not None:
-                logger.debug("Model already cached: %s", repo_id)
-                return
-
-            # Model files are not present — download now with progress logging.
-            logger.info(
-                "Downloading model '%s' from HuggingFace Hub — this may take 1-5 minutes "
-                "on first run depending on your connection speed.",
-                repo_id,
-            )
-
-            # Build a minimal tqdm subclass that converts file-level progress into
-            # periodic log lines.  We track bytes across all parallel file downloads
-            # using class-level state so the percentage reflects the overall snapshot.
-            class _LoggingTqdm:
-                """tqdm-compatible class that forwards progress to the logger."""
-
-                # Required by huggingface_hub for thread-safe tqdm management.
-                _lock = threading.RLock()
-
-                # Class-level totals shared across all concurrent file downloads.
-                _total_bytes: int = 0
-                _done_bytes: int = 0
-                _last_pct_logged: int = -1
-
-                def __init__(self, iterable=None, **kwargs):
-                    self._iterable = iterable
-                    desc = kwargs.get("desc", "")
-                    total = kwargs.get("total", 0) or 0
-                    if total > 0:
-                        _LoggingTqdm._total_bytes += total
-                        logger.debug("Downloading file: %s (%.1f MB)", desc, total / 1_048_576)
-
-                def __iter__(self):
-                    return iter(self._iterable) if self._iterable is not None else iter([])
-
-                def __enter__(self):
-                    return self
-
-                def __exit__(self, *args):
-                    pass
-
-                def update(self, n: int = 1) -> None:
-                    _LoggingTqdm._done_bytes += n
-                    if _LoggingTqdm._total_bytes > 0:
-                        pct = int(100 * _LoggingTqdm._done_bytes / _LoggingTqdm._total_bytes)
-                        # Log at every 10% milestone to avoid flooding the log.
-                        if pct >= _LoggingTqdm._last_pct_logged + 10:
-                            _LoggingTqdm._last_pct_logged = pct - (pct % 10)
-                            logger.info(
-                                "Downloading %s... %d%% (%.0f / %.0f MB)",
-                                repo_id,
-                                _LoggingTqdm._last_pct_logged,
-                                _LoggingTqdm._done_bytes / 1_048_576,
-                                _LoggingTqdm._total_bytes / 1_048_576,
-                            )
-
-                def set_postfix(self, *args, **kwargs) -> None:
-                    pass
-
-                def close(self) -> None:
-                    pass
-
-            allow_patterns = [
-                "config.json",
-                "preprocessor_config.json",
-                "model.bin",
-                "tokenizer.json",
-                "vocabulary.*",
-            ]
-
-            huggingface_hub.snapshot_download(
-                repo_id,
-                allow_patterns=allow_patterns,
-                tqdm_class=_LoggingTqdm,
-            )
-
-            logger.info("Download complete for model '%s'.", repo_id)
-
-        except Exception as exc:
-            # A download failure here is non-fatal: WhisperModel() will attempt its
-            # own download (or raise a clearer error if offline).
-            logger.warning(
-                "Pre-download check failed (%s). WhisperModel will attempt download.", exc
-            )
 
     def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None, vad_filter_override: Optional[bool] = None) -> TranscriptionResult:
         if not self.is_loaded():

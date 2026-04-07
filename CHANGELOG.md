@@ -48,7 +48,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - Duplicate-instance watchdog now correctly keeps oldest leaf process instead of newest
 - Bootstrap-parent watchdog no longer fires spuriously on fast startup paths
-- `transcription_corrections.jsonl` path now resolves correctly under `%LOCALAPPDATA%\LocalFlow\`
+- `transcription_corrections.jsonl` path now resolves correctly under `%LOCALAPPDATA%\VoiceFlow\` (migration from old `LocalFlow` directory name handled automatically)
 - Canvas items that fade to zero opacity are moved off-screen rather than drawn at size 0
 
 ### Removed

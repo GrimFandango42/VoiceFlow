@@ -2,7 +2,7 @@
 
 ## Overview
 
-VoiceFlow is a Windows-first local push-to-talk transcription app (v3.1.8). Hold `Ctrl+Shift`, speak, release — text is injected into the active application. Tray-first design, no cloud dependency.
+VoiceFlow is a Windows-first local push-to-talk transcription app (v3.2.1). Hold `Ctrl+Shift`, speak, release — text is injected into the active application. Tray-first design, no cloud dependency.
 
 **IMPORTANT: This is an active dev project. Do NOT auto-evaluate or run the application unless explicitly asked.**
 
