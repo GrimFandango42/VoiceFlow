@@ -18,7 +18,7 @@ A clear description of what's happening.
 What should happen instead.
 
 **Log excerpt**
-Paste relevant lines from `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`.
+Paste relevant lines from `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log`.
 Remove any personal content before pasting.
 
 ```

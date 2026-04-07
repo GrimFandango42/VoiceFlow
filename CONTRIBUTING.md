@@ -84,7 +84,7 @@ Tests are in `tests/runtime/`. Prefer unit tests for pure logic; integration tes
 Use the bug report issue template. Include:
 - Windows version and Python version
 - GPU/CPU mode (check tray tooltip)
-- Log file excerpt from `%LOCALAPPDATA%\LocalFlow\logs\localflow.log`
+- Log file excerpt from `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log`
 - Steps to reproduce
 
 ## Questions
