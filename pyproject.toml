@@ -44,6 +44,8 @@ dependencies = [
     "torch>=2.0.0",
     "pydub>=0.25.0",
     "typing-extensions>=4.0.0",
+    "psutil>=5.9.0",
+    "huggingface_hub>=0.20.0",
 ]
 
 [project.optional-dependencies]
@@ -82,9 +84,6 @@ voiceflow-daily-learning = "voiceflow.ai.daily_learning:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/voiceflow"]
-
-[tool.hatch.build]
-directory = "src"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -151,29 +150,6 @@ module = [
     "pyaudio.*",
 ]
 ignore_missing_imports = true
-
-# Pytest configuration
-[tool.pytest.ini_options]
-testpaths = ["tests/runtime"]
-python_files = ["test_*.py", "*_test.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = [
-    "--strict-markers",
-    "--strict-config",
-]
-markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "unit: marks tests as unit tests",
-    "integration: marks tests as integration tests",
-    "contract: marks tests as contract tests",
-    "stability: marks tests as stability tests",
-    "performance: marks tests as performance tests",
-    "e2e: marks tests as end-to-end tests",
-    "windows: marks tests as windows-specific",
-    "audio: marks tests requiring audio devices",
-    "gui: marks tests requiring GUI components",
-]
 
 # Coverage configuration
 [tool.coverage.run]
