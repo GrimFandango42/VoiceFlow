@@ -7,6 +7,44 @@
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?style=for-the-badge&logo=windows)](https://github.com/GrimFandango42/VoiceFlow/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 
+![VoiceFlow in action: live transcription overlay with reactive waveform animation](screenshot.png)
+
+---
+
+## Screenshots
+
+VoiceFlow runs quietly in the system tray and surfaces a minimal overlay only while you're recording.
+
+### Recording overlay
+
+While you hold `Ctrl+Shift`, the overlay appears at the bottom of your screen with a reactive waveform visualization and live streaming preview of the transcription:
+
+![Recording overlay with audio visualization and live transcription preview](docs/screenshots/overlay-closeup.png)
+
+### Full-screen context
+
+The overlay is non-intrusive — it floats above your active application so you can see what you're dictating into:
+
+![VoiceFlow overlay floating over active application](docs/screenshots/full-overlay.png)
+
+### Live transcription preview
+
+As you speak, partial transcription streams in real time so you can see what VoiceFlow is picking up:
+
+![Live streaming transcription preview](docs/screenshots/transcription-preview.png)
+
+### After release — text injection
+
+Once you release the hotkey, the finalized transcription is injected directly into whatever application has focus:
+
+![Transcription injected into active application](docs/screenshots/after-transcription.png)
+
+### Idle state
+
+When not recording, VoiceFlow sits quietly in the tray — no overlay, no distractions:
+
+![VoiceFlow idle state — overlay hidden](docs/screenshots/idle-state.png)
+
 ---
 
 ## VoiceFlow vs. Wispr Flow
