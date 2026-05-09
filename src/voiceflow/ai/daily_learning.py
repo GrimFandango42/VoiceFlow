@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from voiceflow.ai.adaptive_memory import AdaptiveLearningManager, extract_learning_pairs
-from voiceflow.ai.llm_client import get_llm_client
+from voiceflow.ai.learning_clients import select_client
+from voiceflow.ai.review import append_suggestions
 from voiceflow.core.config import Config
 from voiceflow.core.textproc import format_transcript_text, normalize_context_terms
 from voiceflow.utils.settings import config_dir, load_config
@@ -495,6 +496,8 @@ class DailyLearningJob:
             "protected_terms": [],
             "stopword_candidates": [],
             "learning_system_changes": [],
+            "queued_for_review": 0,
+            "backend": "",
             "input_counts": {
                 "corrections": min(len(corrections), max_items),
                 "history_items": min(len(history_rows), max_items),
@@ -529,13 +532,12 @@ class DailyLearningJob:
             "adaptive_snapshot": self.manager.snapshot(max_rules=8, max_tokens=16),
         }
 
-        try:
-            client = get_llm_client(model=str(getattr(self.cfg, "ai_model", "") or "").strip() or None)
-        except Exception as exc:
-            result["error"] = f"client_init_failed:{exc}"
+        client = select_client()
+        if client is None:
+            result["error"] = "no_llm_client_available"
             return result
 
-        result["model"] = str(getattr(client, "model", "") or "")
+        result["backend"] = str(getattr(client, "backend", "") or "")
         try:
             available = bool(client.is_available())
         except Exception as exc:
@@ -543,32 +545,29 @@ class DailyLearningJob:
             return result
         result["available"] = available
         if not available:
-            result["error"] = "ollama_unavailable"
+            result["error"] = f"{result['backend']}_unavailable"
             return result
 
         system_prompt = (
-            "You analyze local dictation-learning data for a privacy-first transcription app. "
-            "Return JSON only. Be conservative. Base suggestions only on the provided evidence. "
-            "Prefer phrase-level corrections, protected product names, filler-word stoplist candidates, "
-            "and concrete learning-system improvements. Do not suggest risky blanket rewrites."
+            "You analyze a single day of dictated transcripts to improve a local Whisper-based "
+            "transcription app's accuracy. Return one JSON object only — no prose, no markdown. "
+            "Be conservative. Base suggestions on the provided evidence. Prefer phrase-level "
+            "corrections, protected product names, filler-word stoplist candidates, and concrete "
+            "learning-system improvements. Do not propose risky blanket rewrites or generic "
+            "stylistic preferences. Confidence must be one of: low, medium, high."
         )
         user_prompt = (
             "Analyze this learning data and suggest what the learning system should improve.\n"
             "Return JSON with keys: summary, suggested_phrase_replacements, protected_terms, "
             "stopword_candidates, learning_system_changes.\n"
-            "Each suggested_phrase_replacements item must have from, to, confidence, reason.\n"
-            "Keep each list short.\n\n"
+            "Each suggested_phrase_replacements item must have keys: from, to, confidence, reason.\n"
+            "Keep each list short (max 8 items).\n\n"
             f"{json.dumps(prompt_payload, ensure_ascii=True, indent=2)}"
         )
 
-        response = client.generate(
-            prompt=user_prompt,
-            system=system_prompt,
-            temperature=0.1,
-            max_tokens=700,
-        )
+        response = client.generate(system=system_prompt, user=user_prompt)
         result["duration_ms"] = float(getattr(response, "duration_ms", 0.0) or 0.0)
-        result["model"] = str(getattr(response, "model", "") or result["model"])
+        result["model"] = str(getattr(response, "model", "") or "")
         if not bool(getattr(response, "success", False)):
             result["error"] = str(getattr(response, "error", "") or "generation_failed")
             return result
@@ -632,6 +631,35 @@ class DailyLearningJob:
             ("change", "recommendation", "text"),
         )
         result["success"] = True
+
+        # Suggest-only: never auto-apply. Stage everything in pending_review.jsonl
+        # so the user can approve via `python -m voiceflow.ai.review`.
+        try:
+            queue_payloads: List[Dict[str, Any]] = []
+            for entry in result["suggested_phrase_replacements"]:
+                queue_payloads.append({
+                    "type": "phrase_correction",
+                    "from": entry["from"],
+                    "to": entry["to"],
+                    "confidence": entry["confidence"],
+                    "reason": entry["reason"],
+                })
+            for term in result["protected_terms"]:
+                queue_payloads.append({
+                    "type": "vocab_addition",
+                    "term": term,
+                    "confidence": "medium",
+                    "reason": "AI suggested protected product/proper-noun term",
+                })
+            queued = append_suggestions(
+                queue_payloads,
+                source=f"daily_{result['backend']}_{target_date.isoformat()}",
+                base_dir=self.base_dir,
+            )
+            result["queued_for_review"] = int(queued)
+        except Exception as exc:
+            logger.warning("Failed to queue suggestions for review: %s", exc)
+
         return result
 
     def run(
