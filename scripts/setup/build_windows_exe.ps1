@@ -378,6 +378,11 @@ $args = @(
     "--exclude-module", "xformers",
     "--add-data", ((Join-Path $repoRoot "docs\examples\engineering_terms.json") + ";defaults"),
     "--add-data", ((Join-Path $repoRoot "docs\examples\technical_terms.json") + ";defaults"),
+    # Bundled vocabulary seed; copied to user's custom_vocabulary.txt on first launch.
+    # collect_data_files('voiceflow') doesn't recurse into subpackages reliably across
+    # PyInstaller versions, so we add it explicitly under the voiceflow/data layout
+    # the runtime expects from `Path(__file__).parent.parent / "data"`.
+    "--add-data", ((Join-Path $repoRoot "src\voiceflow\data\vocab_default.txt") + ";voiceflow\data"),
     "--distpath", $distPath,
     "--workpath", $workPath,
     "--specpath", $specPath
