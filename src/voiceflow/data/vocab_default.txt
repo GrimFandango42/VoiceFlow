@@ -1,0 +1,104 @@
+# VoiceFlow default vocabulary — curated from real transcripts.
+#
+# Format: wrong phrase -> correct phrase
+# Lines starting with # are comments. The post-processor matches the left-hand
+# side (case-insensitive, word-bounded) and rewrites it to the right-hand side.
+# The right-hand side is also fed to Whisper as `initial_prompt` to bias
+# recognition toward these terms in the first place.
+#
+# Edit freely — VoiceFlow re-reads on file change. To remove a rule, delete the
+# line. To add a personal correction, append a new line.
+
+# ====== Anthropic / Claude ecosystem ======
+cloud -> Claude
+cloud code -> Claude Code
+cloud desktop -> Claude Desktop
+cloud sonnet -> Claude Sonnet
+cloud opus -> Claude Opus
+cloud haiku -> Claude Haiku
+sonet -> Sonnet
+sub agent -> subagent
+sub agents -> subagents
+sub-agent -> subagent
+sub-agents -> subagents
+m c p -> MCP
+em see pee -> MCP
+prompt caching -> prompt caching
+system prompt -> system prompt
+tool use -> tool use
+agent sdk -> Agent SDK
+slash command -> slash command
+slash commands -> slash commands
+anthropic -> Anthropic
+clawd -> Claude
+
+# ====== OpenClaw (user's project — heavily mistranscribed) ======
+open claw -> OpenClaw
+open-claw -> OpenClaw
+open clog -> OpenClaw
+open club -> OpenClaw
+open claugh -> OpenClaw
+open-club -> OpenClaw
+co work -> Cowork
+co worker -> Cowork
+co-worker -> Cowork
+co-work -> Cowork
+
+# ====== OpenAI / ChatGPT ======
+open ei -> OpenAI
+open eiase -> OpenAI
+open ai -> OpenAI
+chat gpt -> ChatGPT
+chatgbt -> ChatGPT
+gpt 4 -> GPT-4
+gpt 5 -> GPT-5
+gpt four -> GPT-4
+gpt five -> GPT-5
+custom gpt -> custom GPT
+
+# ====== Google / Gemini ======
+gemini pro -> Gemini Pro
+gemini flash -> Gemini Flash
+gemini cli -> Gemini CLI
+
+# ====== Daily coding tools ======
+github -> GitHub
+git hub -> GitHub
+v s code -> VS Code
+vs code -> VS Code
+power shell -> PowerShell
+typescript -> TypeScript
+type script -> TypeScript
+javascript -> JavaScript
+java script -> JavaScript
+
+# ====== Personal projects ======
+voice flow -> VoiceFlow
+local events -> Local Events
+local events madison -> Local Events Madison
+home vision -> HomeVision
+trip planner -> trip planner
+
+# ====== Acronyms — keep canonical casing ======
+a p i -> API
+a s r -> ASR
+c l i -> CLI
+s d k -> SDK
+v p s -> VPS
+v p n -> VPN
+m c p -> MCP
+l l m -> LLM
+g p u -> GPU
+c p u -> CPU
+i d e -> IDE
+
+# ====== Cloud / infra ======
+hetzner -> Hetzner
+tailscale -> Tailscale
+cloud flare -> Cloudflare
+cloudflare -> Cloudflare
+
+# ====== Mistranscriptions of personal projects from real transcripts ======
+bird fi -> bird feeder
+out rod -> ouro
+ee three -> S3

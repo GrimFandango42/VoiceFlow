@@ -2977,6 +2977,18 @@ def main(argv=None):
     _start_single_instance_watchdog(interval_seconds=2.0)
 
     cfg = load_config(Config())
+
+    # Seed the user-editable vocabulary file from the bundled default on first
+    # launch. Subsequent launches preserve user edits — this only writes if the
+    # file is missing.
+    try:
+        from voiceflow.core.vocab import seed_default_vocabulary
+
+        seed_default_vocabulary()
+    except Exception:
+        # Vocab seeding is best-effort; never fail startup over it.
+        pass
+
     setup_saved, _setup_restart_required = maybe_run_startup_setup(cfg)
     if setup_saved:
         print("[SETUP] Saved startup defaults from setup wizard.")

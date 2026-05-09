@@ -1219,6 +1219,16 @@ class ModernWhisperASR(ASREngine):
     def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None, vad_filter_override: Optional[bool] = None) -> str:
         """Legacy interface returning just text"""
         self.session_transcription_count += 1
+        if initial_prompt is None and bool(getattr(self.cfg, "enable_smart_prompting", True)):
+            try:
+                from voiceflow.core.vocab import initial_prompt as _vocab_initial_prompt
+
+                vocab_prompt = _vocab_initial_prompt()
+                if vocab_prompt:
+                    initial_prompt = vocab_prompt
+            except Exception:
+                # Vocab is best-effort. If it fails, fall back to no prompt.
+                pass
         # Call parent's transcribe method and extract text
         result = ASREngine.transcribe(self, audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
         return result.text
