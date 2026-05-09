@@ -1324,6 +1324,64 @@ class BottomScreenIndicator:
         except Exception:
             pass
 
+    def _make_window_draggable(self, window, handles, on_release=None):
+        """Bind drag bindings on the given handle widgets so users can move ``window``.
+
+        Each handle widget gets press/motion/release bindings; clicking inside any of
+        them and dragging moves the toplevel. Buttons are intentionally excluded (they
+        are not in the handles tuple). On release, ``on_release`` is invoked with the
+        final (x, y) screen coordinates — used to persist position.
+        """
+        if not handles:
+            return
+
+        state = {"offset_x": 0, "offset_y": 0}
+
+        def _on_press(event):
+            try:
+                state["offset_x"] = event.x_root - window.winfo_x()
+                state["offset_y"] = event.y_root - window.winfo_y()
+            except Exception:
+                state["offset_x"] = 0
+                state["offset_y"] = 0
+
+        def _on_drag(event):
+            try:
+                new_x = event.x_root - state["offset_x"]
+                new_y = event.y_root - state["offset_y"]
+                window.geometry(f"+{int(new_x)}+{int(new_y)}")
+            except Exception:
+                pass
+
+        def _on_release(event):
+            if not on_release:
+                return
+            try:
+                on_release(int(window.winfo_x()), int(window.winfo_y()))
+            except Exception as exc:
+                logger.debug("Drag persist callback failed: %s", exc)
+
+        for handle in handles:
+            try:
+                handle.configure(cursor="fleur")
+            except Exception:
+                pass
+            handle.bind("<ButtonPress-1>", _on_press, add="+")
+            handle.bind("<B1-Motion>", _on_drag, add="+")
+            handle.bind("<ButtonRelease-1>", _on_release, add="+")
+
+    def _persist_history_position(self, x: int, y: int) -> None:
+        """Save dragged history-panel position and refresh geometry templates.
+
+        Both the compact and the expanded panel anchor to the user-chosen x. The
+        expanded mode's y is offset upward so the panel doesn't run off the bottom
+        of the screen — same logic as initial placement.
+        """
+        self.config_manager.set_history_position(x, y)
+        panel_w, panel_h = getattr(self, "history_size", (500, 208))
+        self.history_geometry_compact = f"{panel_w}x{panel_h}+{x}+{y}"
+        self.history_geometry_expanded = f"{panel_w}x392+{x}+{max(20, y - 184)}"
+
     def _setup_dock_window(self, screen_width: int, screen_height: int):
         """Always-on minimal dock for quick glance and history toggle."""
         if not self.root:
@@ -1335,8 +1393,13 @@ class BottomScreenIndicator:
         self.dock_window.configure(bg=self._ui("panel_bg"))
 
         dock_w, dock_h = 372, 26
-        x = (screen_width - dock_w) // 2
-        y = screen_height - dock_h - 46
+        self.dock_size = (dock_w, dock_h)
+        saved = self.config_manager.get_dock_position(screen_width, screen_height, dock_w, dock_h)
+        if saved is not None:
+            x, y = saved
+        else:
+            x = (screen_width - dock_w) // 2
+            y = screen_height - dock_h - 46
         self.dock_window.geometry(f"{dock_w}x{dock_h}+{x}+{y}")
 
         dock_frame = tk.Frame(
@@ -1358,6 +1421,14 @@ class BottomScreenIndicator:
             padx=8,
         )
         dock_label.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Drag handles: clicking the dock background or the status label moves the window.
+        # Buttons are excluded because they have their own click handlers.
+        self._make_window_draggable(
+            self.dock_window,
+            (dock_frame, dock_label),
+            on_release=lambda x, y: self.config_manager.set_dock_position(x, y),
+        )
 
         history_btn = tk.Button(
             dock_frame,
@@ -1408,8 +1479,13 @@ class BottomScreenIndicator:
         self.history_window.configure(bg=self._ui("panel_bg"))
 
         panel_w, panel_h = 500, 208
-        x = (screen_width - panel_w) // 2
-        y = screen_height - panel_h - 58
+        self.history_size = (panel_w, panel_h)
+        saved = self.config_manager.get_history_position(screen_width, screen_height, panel_w, panel_h)
+        if saved is not None:
+            x, y = saved
+        else:
+            x = (screen_width - panel_w) // 2
+            y = screen_height - panel_h - 58
         self.history_geometry_compact = f"{panel_w}x{panel_h}+{x}+{y}"
         self.history_geometry_expanded = f"{panel_w}x392+{x}+{max(20, y - 184)}"
         self.history_window.geometry(self.history_geometry_compact)
@@ -1433,6 +1509,15 @@ class BottomScreenIndicator:
             pady=4,
         )
         header.pack(fill=tk.X)
+
+        # Drag handle: clicking the title-bar label moves the panel. Width and height of
+        # the panel can change (compact vs expanded), so we recompute the saved-position
+        # geometry strings on release to keep both modes anchored to the new corner.
+        self._make_window_draggable(
+            self.history_window,
+            (header,),
+            on_release=self._persist_history_position,
+        )
 
         actions = tk.Frame(frame, bg=self._ui("panel_bg"))
         actions.pack(fill=tk.X, padx=8, pady=(0, 4))

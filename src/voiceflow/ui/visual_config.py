@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""
-VoiceFlow Visual Configuration System
+"""VoiceFlow Visual Configuration System
 ====================================
 Configurable visual overlay positioning and accessibility options
 """
 
 import json
 import os
-from pathlib import Path
-from typing import Dict, Any, Tuple, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
 
 class OverlayPosition(Enum):
     """Predefined overlay positions"""
@@ -77,6 +77,13 @@ class VisualConfig:
     preferred_monitor: int = 0  # Primary monitor = 0
     follow_cursor_monitor: bool = True
 
+    # User-dragged positions for the persistent dock and history panel.
+    # -1 means "not set" — fall back to the default placement near the bottom-center.
+    dock_custom_x: int = -1
+    dock_custom_y: int = -1
+    history_custom_x: int = -1
+    history_custom_y: int = -1
+
 class VisualConfigManager:
     """Manager for visual configuration settings"""
 
@@ -95,7 +102,7 @@ class VisualConfigManager:
         """Load configuration from file"""
         try:
             if os.path.exists(self.config_file):
-                with open(self.config_file, 'r') as f:
+                with open(self.config_file) as f:
                     data = json.load(f)
 
                 # Convert string enums back to enum values
@@ -277,6 +284,49 @@ class VisualConfigManager:
         else:
             raise ValueError(f"Unknown configuration key: {key}")
 
+    def set_dock_position(self, x: int, y: int) -> None:
+        """Persist the user-dragged dock window position."""
+        self.config.dock_custom_x = int(x)
+        self.config.dock_custom_y = int(y)
+        self.save_config()
+
+    def set_history_position(self, x: int, y: int) -> None:
+        """Persist the user-dragged history panel position (compact mode)."""
+        self.config.history_custom_x = int(x)
+        self.config.history_custom_y = int(y)
+        self.save_config()
+
+    def get_dock_position(self, screen_width: int, screen_height: int,
+                          dock_w: int, dock_h: int) -> Optional[Tuple[int, int]]:
+        """Return the saved dock position if valid for the current screen, else None.
+
+        If the saved coordinates would put the window mostly off-screen (e.g., a
+        previously-attached external monitor was disconnected), the saved value is
+        cleared and None is returned so the caller falls back to default placement.
+        """
+        x, y = self.config.dock_custom_x, self.config.dock_custom_y
+        if x < 0 or y < 0:
+            return None
+        if x > screen_width - 60 or y > screen_height - 20 or x + dock_w < 60 or y + dock_h < 20:
+            self.config.dock_custom_x = -1
+            self.config.dock_custom_y = -1
+            self.save_config()
+            return None
+        return x, y
+
+    def get_history_position(self, screen_width: int, screen_height: int,
+                             panel_w: int, panel_h: int) -> Optional[Tuple[int, int]]:
+        """Return the saved history-panel position if valid for the current screen, else None."""
+        x, y = self.config.history_custom_x, self.config.history_custom_y
+        if x < 0 or y < 0:
+            return None
+        if x > screen_width - 80 or y > screen_height - 40 or x + panel_w < 80 or y + panel_h < 40:
+            self.config.history_custom_x = -1
+            self.config.history_custom_y = -1
+            self.save_config()
+            return None
+        return x, y
+
     def reset_to_defaults(self):
         """Reset configuration to default values"""
         self.config = VisualConfig()
@@ -294,7 +344,7 @@ class VisualConfigManager:
 
     def import_config(self, file_path: str):
         """Import configuration from a specific file"""
-        with open(file_path, 'r') as f:
+        with open(file_path) as f:
             data = json.load(f)
 
         # Convert string enums back to enum values
