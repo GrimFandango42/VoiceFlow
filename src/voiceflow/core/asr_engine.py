@@ -512,15 +512,25 @@ class FasterWhisperBackend(ASRBackend):
 
         try:
             with self._lock:
-                beam_size = max(1, int(beam_size_override)) if beam_size_override else max(1, int(getattr(self.config, "beam_size", 1)))
+                cfg_beam = max(1, int(getattr(self.config, "beam_size", 1)))
+                beam_size = max(1, int(beam_size_override)) if beam_size_override else cfg_beam
+                # Long-form dictation benefits significantly from beam search and
+                # cross-segment context. On utterances >= 12 seconds, prefer
+                # beam=2 and condition on previous text — accuracy gain is worth
+                # the small latency cost on CUDA, where the user runs distil-large.
+                long_form = audio_duration >= 12.0
+                if long_form and beam_size_override is None:
+                    beam_size = max(beam_size, 2)
                 best_of = max(1, int(getattr(self.config, "best_of", 1)))
                 use_vad = vad_filter_override if vad_filter_override is not None else self.config.vad_filter
+                cfg_condition = bool(getattr(self.config, "condition_on_previous_text", False))
+                use_condition = cfg_condition or long_form
                 kwargs: Dict[str, Any] = {
                     "language": "en",
                     "beam_size": beam_size,
                     "best_of": max(best_of, beam_size),
                     "temperature": float(getattr(self.config, "temperature", 0.0)),
-                    "condition_on_previous_text": bool(getattr(self.config, "condition_on_previous_text", False)),
+                    "condition_on_previous_text": use_condition,
                     "without_timestamps": True,
                     "vad_filter": use_vad,
                 }
