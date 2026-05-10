@@ -514,12 +514,16 @@ class FasterWhisperBackend(ASRBackend):
             with self._lock:
                 cfg_beam = max(1, int(getattr(self.config, "beam_size", 1)))
                 beam_size = max(1, int(beam_size_override)) if beam_size_override else cfg_beam
-                # Long-form dictation benefits significantly from beam search and
-                # cross-segment context. On utterances >= 12 seconds, prefer
-                # beam=2 and condition on previous text — accuracy gain is worth
-                # the small latency cost on CUDA, where the user runs distil-large.
-                long_form = audio_duration >= 12.0
-                if long_form and beam_size_override is None:
+                # Final-pass long-form lift: callers that don't pass overrides
+                # are using config defaults (the legacy/main transcribe path).
+                # For ≥ 12s clips on that path, force beam=2 and cross-segment
+                # context — accuracy gain is worth the latency cost on CUDA.
+                # The streaming preview path passes overrides so it stays fast;
+                # otherwise growing previews past 12s would re-decode with
+                # conditioning every cycle and feel sluggish.
+                is_final_pass = beam_size_override is None and vad_filter_override is None
+                long_form = audio_duration >= 12.0 and is_final_pass
+                if long_form:
                     beam_size = max(beam_size, 2)
                 best_of = max(1, int(getattr(self.config, "best_of", 1)))
                 use_vad = vad_filter_override if vad_filter_override is not None else self.config.vad_filter

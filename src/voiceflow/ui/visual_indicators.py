@@ -684,21 +684,35 @@ class BottomScreenIndicator:
             self.window = None
 
     def _position_overlay(self, screen_width: int, screen_height: int):
-        """Position overlay safely above tray/dock region."""
+        """Position overlay safely above tray/dock region.
+
+        When the dock has been dragged to a custom location, the animation
+        overlay tracks it horizontally so the visualization sits directly above
+        the dock instead of staying glued to screen-center.
+        """
         if not self.window:
             return
         x, y = self.config_manager.get_position_coordinates(screen_width, screen_height)
         reserved_bottom = 98
 
-        # Keep overlay strictly centered when dock is enabled, flush to dock top.
         if self.dock_enabled and self.dock_window:
-            x = int((screen_width - self.width) / 2)
             try:
-                geo = self.dock_window.geometry()  # e.g. 372x26+994+1368
-                dock_y = int(geo.rsplit("+", 1)[-1])
+                # Geometry string format: "WxH+X+Y" — split off width/height.
+                geo = self.dock_window.geometry()
+                size_part, _, pos_part = geo.partition("+")
+                dock_w_str, _, _ = size_part.partition("x")
+                dock_w = int(dock_w_str) if dock_w_str else 372
+                dock_x_str, _, dock_y_str = pos_part.partition("+")
+                dock_x = int(dock_x_str)
+                dock_y = int(dock_y_str)
+                # Center overlay horizontally on the dock so the animation sits
+                # directly above whatever position the user dragged the dock to.
+                dock_center_x = dock_x + (dock_w // 2)
+                x = dock_center_x - (self.width // 2)
                 # Sit immediately above the dock — no extra gap.
                 y = dock_y - self.height
             except Exception:
+                x = int((screen_width - self.width) / 2)
                 y = screen_height - self.height - 80
         else:
             y = min(y - 8, screen_height - self.height - reserved_bottom)
@@ -1382,6 +1396,66 @@ class BottomScreenIndicator:
         self.history_geometry_compact = f"{panel_w}x{panel_h}+{x}+{y}"
         self.history_geometry_expanded = f"{panel_w}x392+{x}+{max(20, y - 184)}"
 
+    def _persist_dock_position(self, x: int, y: int) -> None:
+        """Save dragged dock position and re-anchor the animation overlay above it."""
+        self.config_manager.set_dock_position(x, y)
+        try:
+            sw, sh = _get_physical_screen_size()
+            if not (sw and sh) and self.root:
+                sw = int(self.root.winfo_screenwidth())
+                sh = int(self.root.winfo_screenheight())
+            if sw and sh:
+                self._position_overlay(sw, sh)
+        except Exception as exc:
+            logger.debug("Overlay re-anchor after dock drag failed: %s", exc)
+
+    def reset_dock_position(self) -> None:
+        """Clear user-dragged positions and re-snap dock + history + overlay to defaults.
+
+        Invoked from the tray's Reset Dock Position action when the user wants to
+        recover from an off-screen drag or just start fresh.
+        """
+        # Wipe persisted custom positions.
+        try:
+            self.config_manager.config.dock_custom_x = -1
+            self.config_manager.config.dock_custom_y = -1
+            self.config_manager.config.history_custom_x = -1
+            self.config_manager.config.history_custom_y = -1
+            self.config_manager.save_config()
+        except Exception as exc:
+            logger.debug("reset_dock_position: failed to clear saved coords: %s", exc)
+
+        # Re-place each window. We can't simply call _setup_*_window again because
+        # those create fresh Toplevels and would leak the old ones; instead recompute
+        # the same default coordinates and apply via .geometry().
+        try:
+            sw, sh = _get_physical_screen_size()
+            if not (sw and sh) and self.root:
+                sw = int(self.root.winfo_screenwidth())
+                sh = int(self.root.winfo_screenheight())
+            if not (sw and sh):
+                return
+
+            if self.dock_window is not None:
+                dock_w, dock_h = getattr(self, "dock_size", (372, 26))
+                dx = (sw - dock_w) // 2
+                dy = sh - dock_h - 46
+                self.dock_window.geometry(f"{dock_w}x{dock_h}+{dx}+{dy}")
+
+            if self.history_window is not None:
+                panel_w, panel_h = getattr(self, "history_size", (500, 208))
+                hx = (sw - panel_w) // 2
+                hy = sh - panel_h - 58
+                self.history_geometry_compact = f"{panel_w}x{panel_h}+{hx}+{hy}"
+                self.history_geometry_expanded = f"{panel_w}x392+{hx}+{max(20, hy - 184)}"
+                # Only force-move if currently visible; otherwise next show uses templates.
+                if self.history_visible:
+                    self.history_window.geometry(self.history_geometry_compact)
+
+            self._position_overlay(sw, sh)
+        except Exception as exc:
+            logger.debug("reset_dock_position: reposition failed: %s", exc)
+
     def _setup_dock_window(self, screen_width: int, screen_height: int):
         """Always-on minimal dock for quick glance and history toggle."""
         if not self.root:
@@ -1427,7 +1501,7 @@ class BottomScreenIndicator:
         self._make_window_draggable(
             self.dock_window,
             (dock_frame, dock_label),
-            on_release=lambda x, y: self.config_manager.set_dock_position(x, y),
+            on_release=self._persist_dock_position,
         )
 
         history_btn = tk.Button(
@@ -3409,6 +3483,17 @@ def set_dock_enabled(enabled: bool):
     indicator = get_indicator()
     if indicator:
         indicator.set_dock_enabled(enabled)
+
+
+def reset_dock_position():
+    """Clear any user-dragged dock and history positions and snap back to default.
+
+    Wipes the saved custom positions in visual_config, then reloads the dock,
+    history panel, and animation overlay back to the bottom-center default.
+    """
+    indicator = get_indicator()
+    if indicator:
+        indicator.reset_dock_position()
 
 def get_dock_enabled() -> bool:
     """Return current dock visibility state."""

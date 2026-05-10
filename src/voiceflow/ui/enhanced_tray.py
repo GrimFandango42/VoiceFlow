@@ -46,6 +46,7 @@ try:
         hide_status,
         request_open_correction_review,
         request_open_recent_history,
+        reset_dock_position,
         set_dock_enabled,
         show_complete,
         show_error,
@@ -62,6 +63,8 @@ except ImportError:
     def request_open_recent_history():
         return None
     def request_open_correction_review():
+        return None
+    def reset_dock_position():
         return None
 
 def _make_status_icon(size: int = 16, status: str = "idle", recording: bool = False):
@@ -280,6 +283,18 @@ class EnhancedTrayController(ITrayManager):
             except Exception:
                 pass
 
+        def reset_positions(icon, item):
+            """Reset dock + history + overlay positions back to bottom-center default."""
+            try:
+                reset_dock_position()
+                self._notify("VoiceFlow", "Dock + overlay positions reset to default.")
+            except Exception as e:
+                print(f"[Tray] Reset dock position failed: {e}")
+                try:
+                    self._notify("VoiceFlow", "Reset failed; check logs.")
+                except Exception:
+                    pass
+
         def open_setup_defaults(icon, item):
             """Open setup/defaults wizard."""
 
@@ -437,6 +452,7 @@ class EnhancedTrayController(ITrayManager):
                 toggle_dock,
                 checked=lambda item: getattr(self.app.cfg, 'visual_dock_enabled', True),
             ),
+            pystray.MenuItem("Reset Dock Position", reset_positions),
             pystray.MenuItem("Setup & Defaults", open_setup_defaults),
             pystray.MenuItem("Recent History", show_recent_history),
             pystray.MenuItem("Correction Review", show_correction_review),

@@ -10,7 +10,11 @@
 # line. To add a personal correction, append a new line.
 
 # ====== Anthropic / Claude ecosystem ======
-cloud -> Claude
+# The bare "cloud -> Claude" rule is intentionally NOT seeded — it would
+# rewrite "google cloud" → "google Claude". Instead we rely on Whisper's
+# initial_prompt (vocab.INITIAL_PROMPT_TERMS) to bias recognition toward
+# "Claude" at the source, plus the multi-word rules below which only fire
+# in unambiguous Anthropic contexts.
 cloud code -> Claude Code
 cloud desktop -> Claude Desktop
 cloud sonnet -> Claude Sonnet
