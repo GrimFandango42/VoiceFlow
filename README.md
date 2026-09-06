@@ -97,7 +97,7 @@ pip install -e ".[dev]"
 python _app_entry.py
 ```
 
-> **GPU users:** use `.venv-gpu` with `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118` before the editable install.
+> **GPU users:** Install CUDA-enabled PyTorch into the same virtual environment before the editable install: `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118`.
 
 ### First use
 
