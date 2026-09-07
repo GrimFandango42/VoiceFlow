@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-# Loops. Space-joined so they match what a decoder actually emits.
+# Phrase loops. Space-joined so they match what a decoder actually emits.
 #
 # Historical note worth keeping: these were previously written as `'okay' * 3`,
 # which Python evaluates to "okayokayokay" — no spaces. No decoder ever emits
@@ -36,6 +36,26 @@ REPEAT_HALLUCINATIONS: tuple[str, ...] = (
     " ".join(["bye"] * 3),
 )
 
+#: Short words Whisper loops or emits alone when it is handed silence. Observed
+#: in this user's own history at 0.9-2.6s of audio: "Okay.", "So.", "Thank you."
+FILLER_TOKENS: frozenset[str] = frozenset(
+    {
+        "okay", "ok", "kay", "mkay",
+        "you", "so", "oh", "ah", "um", "uh", "hmm", "mhm", "mm",
+        "yeah", "bye", "thanks", "thank",
+    }
+)
+
+#: A known filler repeated this many times in a row is a decoder loop --
+#: but only when the run is essentially the whole output. "No no no, use the
+#: other branch" is a person talking, not a loop.
+FILLER_REPEAT_RUN = 3
+#: Any token repeated this many times in a row is a loop, provided the run
+#: dominates the output.
+GENERIC_REPEAT_RUN = 4
+#: Fraction of the output a generic run must cover to count as a loop.
+GENERIC_REPEAT_DOMINANCE = 0.6
+
 # Single phrases Whisper produces from silence. Compared against the ENTIRE
 # output after normalization, never as a substring — "thank you for the report"
 # must survive.
@@ -47,11 +67,14 @@ SILENCE_ARTIFACTS: frozenset[str] = frozenset(
         "thank you for watching",
         "thank you very much",
         "you",
+        "okay",
+        "ok",
         "bye",
         "bye bye",
         "so",
         "oh",
         "hmm",
+        "yeah",
         "please subscribe",
         "subscribe",
     }
@@ -62,6 +85,7 @@ DEFAULT_NO_SPEECH_THRESHOLD = 0.60
 
 _PUNCT_EDGES = re.compile(r"^[\s\.\,\!\?\-—…\"'`]+|[\s\.\,\!\?\-—…\"'`]+$")
 _WHITESPACE = re.compile(r"\s+")
+_WORD = re.compile(r"[a-z0-9']+")
 
 
 def normalize(text: str) -> str:
@@ -72,15 +96,69 @@ def normalize(text: str) -> str:
     return _PUNCT_EDGES.sub("", lowered).strip()
 
 
+def tokenize(text: str) -> list[str]:
+    """Lowercased words with ALL punctuation dropped.
+
+    Interior punctuation is why a naive substring test misses the real thing:
+    Whisper writes its loops as "Okay. Okay. Okay." far more often than
+    "okay okay okay", and "okay okay okay" is not a substring of the former.
+    """
+    if not text:
+        return []
+    return _WORD.findall(str(text).lower())
+
+
+def longest_run(tokens: list[str]) -> tuple[str, int]:
+    """Return the most-repeated consecutive token and the length of its run."""
+    if not tokens:
+        return "", 0
+    best_tok, best = tokens[0], 1
+    cur_tok, cur = tokens[0], 1
+    for tok in tokens[1:]:
+        if tok == cur_tok:
+            cur += 1
+        else:
+            cur_tok, cur = tok, 1
+        if cur > best:
+            best_tok, best = cur_tok, cur
+    return best_tok, best
+
+
 def is_repeat_hallucination(
     text: str,
     patterns: Iterable[str] = REPEAT_HALLUCINATIONS,
 ) -> bool:
-    """True when the text contains a known decoder loop."""
+    """True when the text is a decoder loop rather than dictation."""
     haystack = normalize(text)
     if not haystack:
         return False
-    return any(p in haystack for p in patterns)
+
+    tokens = tokenize(text)
+    if not tokens:
+        return False
+
+    # Known phrase loops -- but they too must dominate. "Thank you thank you"
+    # alone is a loop; "thank you thank you so much for everything" is a person.
+    for phrase in patterns:
+        if phrase in haystack:
+            phrase_len = len(tokenize(phrase))
+            if phrase_len >= GENERIC_REPEAT_DOMINANCE * len(tokens):
+                return True
+
+    token, run = longest_run(tokens)
+    # A loop is repetition that DOMINATES the output. Repetition surrounded by
+    # real words is a person speaking emphatically.
+    if run >= GENERIC_REPEAT_RUN and run >= GENERIC_REPEAT_DOMINANCE * len(tokens):
+        return True
+    if token in FILLER_TOKENS and run >= FILLER_REPEAT_RUN and run >= len(tokens) - 1:
+        return True
+
+    # "Okay. Okay." -- the whole output is one filler word, said twice or more.
+    # Nobody dictates that on purpose.
+    if len(tokens) >= 2 and len(set(tokens)) == 1 and tokens[0] in FILLER_TOKENS:
+        return True
+
+    return False
 
 
 def is_silence_artifact(
@@ -88,7 +166,12 @@ def is_silence_artifact(
     artifacts: frozenset[str] = SILENCE_ARTIFACTS,
 ) -> bool:
     """True when the ENTIRE output is one known silence phrase."""
-    return normalize(text) in artifacts
+    if normalize(text) in artifacts:
+        return True
+    # Also catch all-filler output that is not one of the fixed phrases,
+    # e.g. "Okay, so." -- still needs silence evidence to be suppressed.
+    tokens = tokenize(text)
+    return bool(tokens) and len(tokens) <= 3 and all(t in FILLER_TOKENS for t in tokens)
 
 
 def classify(

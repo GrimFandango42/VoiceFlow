@@ -16,7 +16,9 @@ from voiceflow.core.silence_artifacts import (
     classify,
     is_repeat_hallucination,
     is_silence_artifact,
+    longest_run,
     normalize,
+    tokenize,
 )
 
 SILENT = 0.95   # decoder is sure there was no speech
@@ -158,3 +160,93 @@ class TestNoneAndGarbageInput:
     def test_none_no_speech_prob_defaults_safely(self):
         suppress, _ = classify("thank you", no_speech_prob=None)
         assert not suppress  # no evidence of silence -> keep the words
+
+
+class TestPunctuatedLoops:
+    """Whisper writes loops as "Okay. Okay. Okay." far more often than
+    "okay okay okay". A substring test misses every one of them."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Okay. Okay. Okay.",
+            "Okay, okay, okay.",
+            "okay. okay. okay. okay. okay.",
+            "Okay! Okay! Okay!",
+            "Okay okay okay okay okay.",
+            "okay okay",
+            "Okay. Okay.",
+        ],
+    )
+    def test_punctuation_separated_repeats_are_caught(self, text):
+        suppress, reason = classify(text, no_speech_prob=SPOKEN)
+        assert suppress, f"{text!r} not caught"
+        assert reason == "repeat_hallucination"
+
+    def test_the_substring_approach_would_have_missed_these(self):
+        # Documents exactly why tokenize() exists.
+        assert "okay okay okay" not in "okay. okay. okay."
+
+
+class TestRepetitionInRealSpeech:
+    """Emphatic repetition is not a decoder loop. Suppressing it would eat
+    words the user said, which is worse than the bug being fixed."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "No no no, use the other branch.",
+            "Okay, so the next step is the migration runner.",
+            "Yeah, that works.",
+            "So we should ship it.",
+            "Thank you for the report.",
+            "Wait wait wait, back up a second.",
+        ],
+    )
+    def test_repetition_surrounded_by_content_survives(self, text):
+        for prob in (SILENT, SPOKEN):
+            suppress, reason = classify(text, no_speech_prob=prob)
+            assert not suppress, f"{text!r} eaten at no_speech_prob={prob} ({reason})"
+
+    def test_dominance_is_what_separates_them(self):
+        # Same word, same run length. Only the surrounding content differs.
+        assert is_repeat_hallucination("okay okay okay")
+        assert not is_repeat_hallucination("okay okay okay, let me think about it")
+
+    def test_non_filler_repetition_needs_a_longer_run(self):
+        # "no" was deliberately dropped from FILLER_TOKENS: people say it
+        # three times in a row and mean it. It only trips the generic rule.
+        assert not is_repeat_hallucination("no no no")
+        assert is_repeat_hallucination("no no no no")
+
+
+class TestObservedInProduction:
+    """Exact strings from this user's own transcription history, all on
+    0.9-2.6s of audio where nothing was actually said."""
+
+    @pytest.mark.parametrize("text", ["Okay.", "So.", "Thank you."])
+    def test_real_silence_artifacts_suppressed(self, text):
+        suppress, _ = classify(text, no_speech_prob=SILENT)
+        assert suppress
+
+
+class TestTokenizeAndRun:
+    def test_tokenize_drops_all_punctuation(self):
+        assert tokenize("Okay. Okay, okay!") == ["okay", "okay", "okay"]
+
+    def test_tokenize_empty(self):
+        assert tokenize("") == []
+        assert tokenize("...") == []
+
+    @pytest.mark.parametrize(
+        "tokens,expected",
+        [
+            (["a", "a", "a", "b"], ("a", 3)),
+            (["a", "b", "b"], ("b", 2)),
+            ([], ("", 0)),
+            (["solo"], ("solo", 1)),
+            (["a", "b", "a", "b"], ("a", 1)),
+        ],
+    )
+    def test_longest_run(self, tokens, expected):
+        assert longest_run(tokens) == expected
