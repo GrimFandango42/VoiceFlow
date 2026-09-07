@@ -373,9 +373,15 @@ $args = @(
     "--exclude-module", "torch",
     "--exclude-module", "torchvision",
     "--exclude-module", "torchaudio",
-    "--exclude-module", "onnxruntime",
     "--exclude-module", "triton",
     "--exclude-module", "xformers",
+    # onnxruntime is REQUIRED, not optional: faster-whisper runs Silero VAD
+    # through it. Excluding it made every streaming preview pass raise
+    # "Applying the VAD filter requires the onnxruntime package" about once a
+    # second, so the live caption stayed blank for the whole hold and the tray
+    # line under the waveform never populated. ~15 MB is worth a working preview.
+    "--hidden-import", "onnxruntime",
+    "--collect-all", "onnxruntime",
     "--add-data", ((Join-Path $repoRoot "docs\examples\engineering_terms.json") + ";defaults"),
     "--add-data", ((Join-Path $repoRoot "docs\examples\technical_terms.json") + ";defaults"),
     # Bundled vocabulary seed; copied to user's custom_vocabulary.txt on first launch.
