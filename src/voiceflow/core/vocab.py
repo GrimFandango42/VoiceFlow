@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 # Canonical terms that bias Whisper but don't have known mistranscriptions in
 # the user's history. Order matters — earlier entries are more likely to fit
 # inside the prompt-character budget.
+#: Whisper accepts about 224 prompt tokens; this stays comfortably inside that
+#: while leaving room for a real vocabulary rather than a token sample of one.
+INITIAL_PROMPT_MAX_CHARS = 700
+
 INITIAL_PROMPT_TERMS: Tuple[str, ...] = (
     "Claude",
     "Claude Code",
@@ -127,12 +131,26 @@ def _read_corrections(path: Path) -> List[str]:
     return canonicals
 
 
-def initial_prompt(max_chars: int = 200) -> str:
+def initial_prompt(max_chars: int = INITIAL_PROMPT_MAX_CHARS) -> str:
     """Build a Whisper ``initial_prompt`` string from canonical seed + user vocab.
 
     Caches by (path, mtime) for cheap repeated calls during a transcription
     burst. The prompt is comma-joined, deduplicated (case-insensitive),
     and truncated at the character budget on a term boundary.
+
+    **Budget.** Whisper accepts roughly 224 prompt tokens. The old 200-character
+    cap spent that allowance on about sixteen terms, so an installation with a
+    hundred curated rules had all but the first sixteen silently discarded, and
+    which sixteen depended on nothing but their line order in the file. The cap
+    is now ``INITIAL_PROMPT_MAX_CHARS``, which stays inside Whisper's limit.
+
+    **User terms come first.** The 200-character budget is small -- roughly 25
+    terms -- and INITIAL_PROMPT_TERMS alone fills it. With the built-ins ordered
+    first, every term a user added to custom_vocabulary.txt fell outside the
+    budget and reached Whisper never, silently, however many they curated. The
+    file's own header promises the opposite. A term someone bothered to write
+    down beats a generic built-in like "API", so theirs are seeded first and the
+    built-ins fill whatever budget is left.
     """
     global _PROMPT_CACHE_KEY, _PROMPT_CACHE_VALUE
 
@@ -147,9 +165,12 @@ def initial_prompt(max_chars: int = 200) -> str:
         return _PROMPT_CACHE_VALUE
 
     user_terms = _read_corrections(path)
+    # Priority is the user's, but spelling is canonical: someone writing
+    # "claude" in their vocab file should not downgrade the built-in "Claude".
+    canonical = {t.strip().lower(): t.strip() for t in INITIAL_PROMPT_TERMS}
     seen: set[str] = set()
     ordered: List[str] = []
-    for term in (*INITIAL_PROMPT_TERMS, *user_terms):
+    for term in (*user_terms, *INITIAL_PROMPT_TERMS):
         normalized = term.strip()
         if not normalized:
             continue
@@ -157,13 +178,15 @@ def initial_prompt(max_chars: int = 200) -> str:
         if key in seen:
             continue
         seen.add(key)
-        ordered.append(normalized)
+        ordered.append(canonical.get(key, normalized))
 
     prompt = ""
     for term in ordered:
         candidate = f"{prompt}, {term}" if prompt else term
         if len(candidate) > max_chars:
-            break
+            # Skip, don't stop: one long term should not discard every shorter
+            # term behind it.
+            continue
         prompt = candidate
 
     _PROMPT_CACHE_KEY = cache_key
