@@ -376,6 +376,7 @@ class TranscriptionSegment:
     speaker: Optional[str] = None
     confidence: float = 1.0
     words: Optional[List[Dict[str, Any]]] = None
+    no_speech_prob: float = 0.0
 
 
 @dataclass
@@ -389,6 +390,9 @@ class TranscriptionResult:
     confidence: float = 1.0
     words: Optional[List[Dict[str, Any]]] = None
     speaker_count: int = 0
+    #: Highest per-segment no-speech probability the decoder reported. Used to
+    #: tell a dictated "Thank you." from silence that decoded as one.
+    max_no_speech_prob: float = 0.0
 
 
 class ASRBackend(ABC):
@@ -557,7 +561,10 @@ class FasterWhisperBackend(ASRBackend):
         segments = []
         text_parts = []
 
+        max_no_speech_prob = 0.0
+
         for seg in segments_iter:
+            seg_no_speech = float(getattr(seg, 'no_speech_prob', 0.0) or 0.0)
             if seg.text and seg.text.strip():
                 text_parts.append(seg.text.strip())
                 segments.append(TranscriptionSegment(
@@ -565,7 +572,12 @@ class FasterWhisperBackend(ASRBackend):
                     start=seg.start,
                     end=seg.end,
                     confidence=getattr(seg, 'avg_logprob', 1.0),
+                    no_speech_prob=seg_no_speech,
                 ))
+            # Track silence evidence from every segment, including ones whose
+            # text was empty -- those are the strongest signal of all.
+            if seg_no_speech > max_no_speech_prob:
+                max_no_speech_prob = seg_no_speech
 
         processing_time = time.time() - start_time
 
@@ -575,6 +587,7 @@ class FasterWhisperBackend(ASRBackend):
             language=info.language,
             duration=audio_duration,
             processing_time=processing_time,
+            max_no_speech_prob=max_no_speech_prob,
         )
 
     def is_loaded(self) -> bool:
@@ -1040,22 +1053,30 @@ class ASREngine:
             TranscriptionResult with text and metadata
         """
         if audio is None or audio.size == 0:
+            self.last_no_speech_prob = 1.0
             return TranscriptionResult(text="", duration=0.0, processing_time=0.0)
 
         # Basic validation
         audio_duration = len(audio) / self.sample_rate
         if audio_duration < 0.1:
             logger.debug("Audio too short (<0.1s), skipping")
+            self.last_no_speech_prob = 1.0
             return TranscriptionResult(text="", duration=audio_duration, processing_time=0.0)
 
         # Check for silence
         energy = np.mean(audio ** 2)
         if energy < 1e-8:
             logger.debug("Audio too quiet, skipping")
+            self.last_no_speech_prob = 1.0
             return TranscriptionResult(text="", duration=audio_duration, processing_time=0.0)
 
         # Transcribe
         result = self._backend.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
+
+        # Expose the decoder's silence evidence to callers that only receive a
+        # string. Set on every path, including the early returns above, so a
+        # stale value can never leak into the next utterance's decision.
+        self.last_no_speech_prob = float(getattr(result, "max_no_speech_prob", 0.0) or 0.0)
 
         # Update statistics
         self.transcription_count += 1

@@ -53,6 +53,7 @@ else:
 import keyboard
 
 from voiceflow.core.preloader import ModelPreloader, PreloadState
+from voiceflow.core.silence_artifacts import classify as classify_silence_artifact
 
 # Streaming preview
 from voiceflow.core.streaming import StreamingResult, StreamingTranscriber
@@ -2530,23 +2531,27 @@ class EnhancedApp:
                             str(idle_resume_active),
                         )
 
-                # Simple hallucination detection - fast and reliable
+                transcription_no_speech_prob = float(
+                    getattr(active_asr, "last_no_speech_prob", 0.0) or 0.0
+                )
+
+                # Silence-hallucination detection. See
+                # voiceflow.core.silence_artifacts for why single phrases and
+                # repeat loops are judged by different rules.
                 if text and len(text.strip()) > 0:
-                    # Basic pattern detection for common hallucinations
-                    text_lower = text.lower().strip()
+                    suppress, suppress_reason = classify_silence_artifact(
+                        text,
+                        no_speech_prob=transcription_no_speech_prob,
+                        non_speech_suspected=non_speech_soft_trigger,
+                    )
 
-                    # Common Whisper hallucination patterns
-                    hallucinations = [
-                        'okay' * 3,  # "okay okay okay"
-                        'thank you' * 2,  # "thank you thank you"
-                        'you' * 4,  # "you you you you"
-                    ]
-
-                    is_hallucination = any(pattern in text_lower for pattern in hallucinations)
-
-                    if is_hallucination:
-                        print(f"[TRANSCRIPTION] Filtered hallucination pattern: {text[:50]}...")
-                        self._log.info("transcription_filtered reason=hallucination")
+                    if suppress:
+                        print(f"[TRANSCRIPTION] Filtered ({suppress_reason}): {text[:50]}...")
+                        self._log.info(
+                            "transcription_filtered reason=%s no_speech_prob=%.3f",
+                            suppress_reason,
+                            transcription_no_speech_prob,
+                        )
                         mark_idle()
                         update_tray_status(self.tray_controller, "idle", False)
                         self._last_transcription_completed_at = time.time()

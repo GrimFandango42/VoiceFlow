@@ -141,3 +141,9 @@ nul
 *.token
 *.key
 *_pat_*
+
+.venv-test/
+
+# Test scratch dirs created by pytest runs in-tree
+.pytest-tmp*/
+.venv-test/
