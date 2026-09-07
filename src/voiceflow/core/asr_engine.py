@@ -532,7 +532,21 @@ class FasterWhisperBackend(ASRBackend):
                 best_of = max(1, int(getattr(self.config, "best_of", 1)))
                 use_vad = vad_filter_override if vad_filter_override is not None else self.config.vad_filter
                 cfg_condition = bool(getattr(self.config, "condition_on_previous_text", False))
-                use_condition = cfg_condition or long_form
+                # The beam lift applies to every long clip. The conditioning
+                # lift does not: feeding Whisper its own previous output back
+                # in helps a 15s clip and degrades a 90s one, because an early
+                # error propagates forward and the decode drifts, repeats, or
+                # drops words. Reported as "the longer I talk the worse it
+                # gets". Bound it to a window instead of applying it forever.
+                condition_ceiling = float(
+                    getattr(self.config, "long_form_condition_max_seconds", 30.0)
+                )
+                long_form_condition = (
+                    long_form
+                    and condition_ceiling > 0
+                    and audio_duration <= condition_ceiling
+                )
+                use_condition = cfg_condition or long_form_condition
                 kwargs: Dict[str, Any] = {
                     "language": "en",
                     "beam_size": beam_size,

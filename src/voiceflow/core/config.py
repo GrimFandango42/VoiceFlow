@@ -108,7 +108,13 @@ class Config:
 
     # Whisper transcription settings
     word_timestamps: bool = False  # Disabled by default for speed
-    condition_on_previous_text: bool = False  # Prevent context pollution
+    condition_on_previous_text: bool = False
+    # Cross-segment conditioning helps a medium clip and hurts a long one:
+    # Whisper feeds its own previous output back in, so an early error
+    # propagates and the decode drifts, repeats, or drops words the further
+    # it runs. Condition inside this window only; above it, decode each
+    # segment clean. 0 disables the long-form conditioning lift entirely.
+    long_form_condition_max_seconds: float = 30.0  # Prevent context pollution
     compression_ratio_threshold: float = 2.4  # Quality threshold
     log_prob_threshold: float = -1.0  # Confidence threshold
     no_speech_threshold: float = 0.9  # Silence detection sensitivity
