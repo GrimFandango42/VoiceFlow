@@ -18,7 +18,9 @@ def _prompt_terms(text: str) -> list[str]:
 
 class TestUserTermsWin:
     def test_user_terms_appear_before_builtins(self, monkeypatch):
-        monkeypatch.setattr(vocab, "_read_corrections", lambda _p: ["Veeva LIMS", "Caddyfile"])
+        monkeypatch.setattr(
+            vocab, "_read_corrections", lambda _p: ["Veeva LIMS", "Caddyfile"]
+        )
         vocab.invalidate_cache()
 
         terms = _prompt_terms(vocab.initial_prompt())
@@ -57,7 +59,9 @@ class TestBudget:
         )
         vocab.invalidate_cache()
         prompt = vocab.initial_prompt()
-        assert "Caddyfile" in prompt, "a long term must be skipped, not terminate the loop"
+        assert "Caddyfile" in prompt, (
+            "a long term must be skipped, not terminate the loop"
+        )
         assert oversized not in prompt
 
     def test_deduplicates_case_insensitively(self, monkeypatch):
