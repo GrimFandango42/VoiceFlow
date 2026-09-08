@@ -110,6 +110,18 @@ def seed_default_vocabulary(force: bool = False) -> Optional[Path]:
         return None
 
 
+def _priority_vocab_path() -> Path:
+    """Terms that must reach Whisper even when the budget is tight.
+
+    Same `wrong -> correct` format as the main file. Seeded first, so a term
+    here is never crowded out by an older line further up custom_vocabulary.txt.
+    This is the "starred words" idea: the prompt budget is small enough that
+    *which* terms get in matters more than how many, and the user is a better
+    judge of that than file order is.
+    """
+    return _user_vocab_path().with_name("priority_vocabulary.txt")
+
+
 def _read_corrections(path: Path) -> List[str]:
     """Return the right-hand side (canonical) of each ``wrong -> correct`` line."""
     canonicals: List[str] = []
@@ -155,22 +167,27 @@ def initial_prompt(max_chars: int = INITIAL_PROMPT_MAX_CHARS) -> str:
     global _PROMPT_CACHE_KEY, _PROMPT_CACHE_VALUE
 
     path = _user_vocab_path()
-    try:
-        mtime = float(path.stat().st_mtime) if path.exists() else 0.0
-    except Exception:
-        mtime = 0.0
+    priority_path = _priority_vocab_path()
 
-    cache_key = (str(path), mtime)
+    def _mtime(target: Path) -> float:
+        try:
+            return float(target.stat().st_mtime) if target.exists() else 0.0
+        except Exception:
+            return 0.0
+
+    mtime = _mtime(path)
+    cache_key = (str(path), mtime, _mtime(priority_path))
     if _PROMPT_CACHE_KEY == cache_key and _PROMPT_CACHE_VALUE:
         return _PROMPT_CACHE_VALUE
 
+    priority_terms = _read_corrections(_priority_vocab_path())
     user_terms = _read_corrections(path)
     # Priority is the user's, but spelling is canonical: someone writing
     # "claude" in their vocab file should not downgrade the built-in "Claude".
     canonical = {t.strip().lower(): t.strip() for t in INITIAL_PROMPT_TERMS}
     seen: set[str] = set()
     ordered: List[str] = []
-    for term in (*user_terms, *INITIAL_PROMPT_TERMS):
+    for term in (*priority_terms, *user_terms, *INITIAL_PROMPT_TERMS):
         normalized = term.strip()
         if not normalized:
             continue
