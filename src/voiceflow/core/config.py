@@ -19,7 +19,14 @@ class Config:
     # Audio - Optimized for speed
     sample_rate: int = 16000
     channels: int = 1
-    blocksize: int = 512  # frames per callback, ~64 ms at 16k
+    blocksize: int = 512  # frames per callback, 32 ms at 16 kHz
+    # Keep capturing briefly after the hotkey is released. Audio already taken
+    # by the driver but not yet handed to our callback is otherwise discarded,
+    # which clips the last word off the end of an utterance. `start()` prepends
+    # 800 ms of pre-buffer to protect the beginning; this protects the end.
+    # The wait exits early once callbacks go quiet, so it usually costs far less
+    # than the cap.
+    stop_drain_seconds: float = 0.25
 
     # Performance optimizations
     enable_batching: bool = True  # Enable VAD-based batching for 12.5x speedup

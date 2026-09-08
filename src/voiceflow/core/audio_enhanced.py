@@ -540,6 +540,41 @@ class EnhancedAudioRecorder:
         self._recording = True
         print(f"[AudioRecorder] Recording started successfully with pre-buffer integration")
 
+    def _drain_pending_audio(self) -> None:
+        """Let in-flight audio reach the buffer before the stream is torn down.
+
+        Polls the callback counter rather than sleeping a fixed interval: once
+        callbacks stop arriving the audio is flushed and there is nothing left
+        to wait for, so a quiet stream costs one poll instead of the full cap.
+        """
+        try:
+            cap = float(getattr(self.cfg, "stop_drain_seconds", 0.25))
+        except (TypeError, ValueError):
+            cap = 0.25
+        if cap <= 0:
+            return
+
+        try:
+            block_seconds = float(self.cfg.blocksize) / float(self.cfg.sample_rate)
+        except (TypeError, ValueError, ZeroDivisionError, AttributeError):
+            block_seconds = 0.032
+        poll = max(0.005, min(block_seconds, cap / 4.0))
+
+        deadline = time.time() + cap
+        last_count = self._callback_count
+        quiet_polls = 0
+        while time.time() < deadline:
+            time.sleep(poll)
+            if self._callback_count != last_count:
+                last_count = self._callback_count
+                quiet_polls = 0
+                continue
+            quiet_polls += 1
+            # Two consecutive silent polls means the driver has handed over
+            # everything it had.
+            if quiet_polls >= 2:
+                return
+
     def is_recording(self) -> bool:
         """Check if currently recording"""
         return self._recording
@@ -550,6 +585,13 @@ class EnhancedAudioRecorder:
             return np.array([], dtype=np.float32)
 
         try:
+            # Drain BEFORE clearing the flag. The callback only appends while
+            # _recording is True, and stopping a PortAudio input stream discards
+            # whatever the driver still holds -- so flipping the flag first loses
+            # every frame captured between the last callback and the key release.
+            # That is the "last word gets cut off" report.
+            self._drain_pending_audio()
+
             self._recording = False
             if self._stream is not None:
                 self._stream.stop()
