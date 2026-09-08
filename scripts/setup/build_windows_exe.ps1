@@ -229,6 +229,14 @@ function Get-CudaRuntimeDlls {
     $candidates += (Join-Path $RepoRoot ".venv-gpu\Lib\site-packages\torch\lib")
     $candidates += (Join-Path $RepoRoot "venv\Lib\site-packages\torch\lib")
     $candidates += (Join-Path $RepoRoot ".venv\Lib\site-packages\torch\lib")
+    # Last resort: a previously built bundle. Building from a venv without torch
+    # installed silently produces a CPU-only package -- 0.26 GB instead of 2.59 GB,
+    # no warning -- and a user whose config says device=cuda gets quietly demoted
+    # to the int8 CPU fallback. Reusing the DLLs an earlier build already shipped
+    # keeps GPU working without forcing a multi-gigabyte torch install to package.
+    foreach ($bundle in @("VoiceFlow", "VoiceFlow.prev", "VoiceFlow.rollback-may2026")) {
+        $candidates += (Join-Path $RepoRoot ("dist\" + $bundle + "\_internal\torch\lib"))
+    }
 
     $patterns = @(
         "cudnn*.dll",
