@@ -20,6 +20,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from ..utils.build_info import short_label as build_short_label
 from ..utils.guardrails import (
     safe_visual_update,
     with_error_recovery,
@@ -1539,6 +1540,23 @@ class BottomScreenIndicator:
             bd=0,
         )
         minimize_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=2)
+
+        # Which build is this? A packaged app and a source checkout look
+        # identical from the outside, so "am I testing the fix or the old
+        # binary?" is unanswerable exactly when it matters -- mid-test, looking
+        # at this window. Sits between the status text and Hide.
+        version_label = tk.Label(
+            dock_frame,
+            text=build_short_label(),
+            bg=self._ui("panel_bg"),
+            fg=self._ui("text_secondary"),
+            font=("Segoe UI", 7),
+            anchor="e",
+            padx=6,
+        )
+        version_label.pack(side=tk.RIGHT, padx=(0, 2), pady=2)
+        self.dock_version_label = version_label
+
         if not self.dock_enabled:
             self.dock_window.withdraw()
 
