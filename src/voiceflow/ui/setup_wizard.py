@@ -41,6 +41,17 @@ PROFILE_SUBTITLE = {
     "gpu-balanced": "Performance first.",
 }
 
+# Wording for the one setting that changes what leaves the machine. Keep the
+# destination named; tests pin these strings.
+CLOUD_LEARNING_TOGGLE_LABEL = (
+    "Send a daily sample of transcripts to Claude to improve accuracy (off by default)"
+)
+CLOUD_LEARNING_TOGGLE_HELP = (
+    "When on, the nightly learning pass sends up to 8 of the day's transcripts, "
+    "verbatim, to Anthropic through the Claude CLI (or Google Gemini if the CLI is "
+    "missing). Audio is always processed locally. When off, nothing leaves this computer."
+)
+
 _WIZARD_LOCK = threading.Lock()
 
 
@@ -717,6 +728,10 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
         visual_var = tk.BooleanVar(value=visual_default)
         tray_var = tk.BooleanVar(value=tray_default)
         show_startup_var = tk.BooleanVar(value=bool(getattr(cfg, "show_setup_on_startup", True)))
+        # Cloud learning is opt-in. Never default this on, even in the startup flow.
+        cloud_learning_var = tk.BooleanVar(
+            value=bool(getattr(cfg, "adaptive_ai_analysis_enabled", False))
+        )
 
         visual_check = ttk.Checkbutton(simple_frame, text="Enable visual indicators", variable=visual_var)
         visual_check.pack(anchor="w", padx=8, pady=4)
@@ -728,6 +743,19 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
             variable=show_startup_var,
         )
         startup_check.pack(anchor="w", padx=8, pady=4)
+        cloud_learning_check = ttk.Checkbutton(
+            simple_frame,
+            text=CLOUD_LEARNING_TOGGLE_LABEL,
+            variable=cloud_learning_var,
+        )
+        cloud_learning_check.pack(anchor="w", padx=8, pady=(4, 0))
+        ttk.Label(
+            simple_frame,
+            text=CLOUD_LEARNING_TOGGLE_HELP,
+            foreground="#6B7280",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", padx=28, pady=(0, 6))
 
         advanced_enabled = tk.BooleanVar(value=False)
         advanced_toggle = ttk.Checkbutton(main, text="Show advanced settings", variable=advanced_enabled)
@@ -1292,6 +1320,8 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
             updates["visual_indicators_enabled"] = bool(visual_var.get())
             updates["use_tray"] = bool(tray_var.get())
             updates["show_setup_on_startup"] = bool(show_startup_var.get())
+            updates["adaptive_ai_analysis_enabled"] = bool(cloud_learning_var.get())
+            updates["cloud_learning_consent_version"] = 1  # user saw and saved the toggle
             updates["setup_completed"] = True
             updates["setup_profile"] = selected_profile
             updates["setup_flow_version"] = int(getattr(cfg, "setup_flow_version", 3) or 3)
@@ -1470,6 +1500,8 @@ def launch_setup_wizard(cfg: Config, source: str = "manual") -> Tuple[bool, bool
         def _launch_without_changes():
             if is_startup_flow:
                 cfg.show_setup_on_startup = bool(show_startup_var.get())
+                cfg.adaptive_ai_analysis_enabled = bool(cloud_learning_var.get())
+                cfg.cloud_learning_consent_version = 1
                 save_config(cfg)
             _close_wizard()
 

@@ -45,12 +45,41 @@ class LearningClientResponse:
     error: Optional[str] = None
 
 
+#: Flags that keep the learning batch a text-only call. Without them a ``claude -p``
+#: subprocess inherits the user's full MCP configuration, hooks and shell tools —
+#: and the prompt it carries is transcript text. Same boundary Atlas uses
+#: (``Atlas/src/utils/claude_execution.py``); never remove these as a
+#: compatibility fallback. An older CLI that lacks ``--safe-mode`` fails
+#: closed rather than running with tools.
+CLAUDE_CLI_SAFE_FLAGS: tuple = (
+    "--safe-mode",
+    "--tools", "",
+    "--strict-mcp-config",
+    "--permission-mode", "dontAsk",
+    "--no-session-persistence",
+)
+
+
+def claude_cli_command(executable: str, max_turns: int = 1) -> list:
+    """Build the locked-down ``claude`` command. The prompt goes on stdin."""
+    return [
+        executable,
+        "--print",
+        *CLAUDE_CLI_SAFE_FLAGS,
+        "--output-format", "json",
+        "--max-turns", str(max(1, int(max_turns))),
+    ]
+
+
 class ClaudeCLIClient:
     """Invoke Claude Code's CLI in non-interactive mode under Claude Max.
 
-    Uses ``claude -p <prompt> --output-format json --max-turns 1``. The CLI
-    returns a JSON envelope with a ``result`` field that contains the model's
-    output. This client extracts that field and returns it as ``response.text``.
+    Uses ``claude --print`` with :data:`CLAUDE_CLI_SAFE_FLAGS` (no tools, no
+    MCP servers, no hooks, no session persistence) and ``--output-format json``.
+    The prompt is written to stdin rather than passed as an argument, so long
+    transcript batches cannot hit the Windows command-line length limit or
+    show up in process listings. The CLI returns a JSON envelope with a
+    ``result`` field; this client extracts that field as ``response.text``.
     """
 
     def __init__(self, executable: Optional[str] = None, timeout: float = 120.0,
@@ -81,16 +110,12 @@ class ClaudeCLIClient:
             if os.path.exists(candidate):
                 cmd_variant = candidate
 
-        cmd = [
-            cmd_variant,
-            "-p", prompt,
-            "--output-format", "json",
-            "--max-turns", str(self.max_turns),
-        ]
+        cmd = claude_cli_command(cmd_variant, self.max_turns)
         start = time.perf_counter()
         try:
             proc = subprocess.run(
                 cmd,
+                input=prompt,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -189,9 +214,11 @@ class GeminiRESTClient:
                 error="GEMINI_API_KEY not set",
             )
 
+        # The key travels in a header, never the query string — query strings
+        # land in proxy logs, crash reports and exception text.
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.model}:generateContent?key={self.api_key}"
+            f"{self.model}:generateContent"
         )
         payload = {
             "system_instruction": {"parts": [{"text": system.strip()}]},
@@ -203,7 +230,12 @@ class GeminiRESTClient:
         }
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            url, data=data, headers={"Content-Type": "application/json"},
+            url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.api_key,
+            },
         )
         start = time.perf_counter()
         try:

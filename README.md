@@ -180,6 +180,7 @@ Key settings:
 | `enable_safe_second_pass_cleanup` | `true` | Second cleanup pass |
 | `enable_heavy_second_pass_cleanup` | `false` | Aggressive rewrite (opt-in) |
 | `press_enter_after_paste` | `false` | Auto-submit after paste |
+| `adaptive_ai_analysis_enabled` | `false` | Nightly cloud analysis of transcript samples (opt-in; see Continual Learning) |
 
 ---
 
@@ -189,6 +190,7 @@ VoiceFlow observes the delta between raw transcripts and final text. Recurring c
 
 - Rules are stored locally in `%LOCALAPPDATA%\VoiceFlow\adaptive_patterns.json`
 - Daily learning runs a nightly batch pass; reports land in `%LOCALAPPDATA%\VoiceFlow\daily_learning_reports\`
+- **What leaves your machine:** by default, nothing. The nightly pass has an optional cloud step — **Setup & Defaults → "Send a daily sample of transcripts to Claude"**, off by default — that sends up to 8 of the day's transcripts, verbatim, to Anthropic via the Claude CLI (or Google Gemini if the CLI is missing) to suggest vocabulary and phrasing rules. Audio is never sent. Each nightly report records `ai_learning_analysis.enabled` so you can confirm what happened.
 - Explicit corrections via the History panel rank higher than auto-inferred rules
 - Add personal terminology in `%LOCALAPPDATA%\VoiceFlow\engineering_terms.json`
 

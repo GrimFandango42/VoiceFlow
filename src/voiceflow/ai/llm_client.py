@@ -74,7 +74,7 @@ class OllamaClient:
 
     def refresh_availability(self) -> bool:
         """Force a fresh availability probe."""
-        self._availability = None
+        self._available = None
         self._availability_checked_at = 0.0
         return self.is_available()
 

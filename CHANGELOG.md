@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **Cloud transcript analysis is now opt-in (VF-03)** — `adaptive_ai_analysis_enabled` defaults to `false`. The nightly learning pass no longer sends transcripts to Anthropic/Gemini unless you turn on **Setup & Defaults → "Send a daily sample of transcripts to Claude"**. Existing configs that carried the old `true` default are reset to off once (`cloud_learning_consent_version`); the wizard records your choice from then on.
+- **Claude CLI call is locked down** — the learning batch invokes `claude --print --safe-mode --tools "" --strict-mcp-config --permission-mode dontAsk --no-session-persistence` with the prompt on stdin, so transcript text never appears in argv and the subprocess cannot reach MCP servers, hooks, or shell tools.
+
+### Fixed
+- Gemini API key is sent in the `x-goog-api-key` header instead of the URL query string.
+- `OllamaClient.refresh_availability()` reset the wrong attribute (`_availability` → `_available`).
+
+### Documentation
+- README now states exactly what leaves the machine, when, and how to verify it from the nightly report.
+
+---
+
 ## [3.2.1] — 2026-04-06
 
 ### Added
