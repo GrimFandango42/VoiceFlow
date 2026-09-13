@@ -275,8 +275,18 @@ class Config:
     adaptive_max_rules: int = 200  # Cap learned replacements to bound memory
     adaptive_max_phrase_tokens: int = 4  # Allow short phrase learning, not just single-token swaps
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
-    adaptive_ai_analysis_enabled: bool = True  # Use local LLM during daily learning to suggest higher-level learning changes
-    adaptive_ai_analysis_max_items: int = 8  # Bound history/correction samples sent to the local LLM
+    # OFF by default: when on, the nightly learning batch sends up to
+    # adaptive_ai_analysis_max_items verbatim transcripts (plus correction pairs)
+    # to a CLOUD model — Anthropic via the Claude CLI, or Google Gemini as
+    # fallback. Nothing leaves the machine while this is False. Exposed in the
+    # setup wizard as "Send a daily sample of transcripts to Claude".
+    adaptive_ai_analysis_enabled: bool = False
+    # Consent record for the flag above. 0 = never shown the toggle (configs
+    # written before VF-03 may carry adaptive_ai_analysis_enabled=True from the
+    # old default); load_config resets the flag to False once and bumps this to
+    # 1. The wizard writes 1 when the user saves the setting themselves.
+    cloud_learning_consent_version: int = 0
+    adaptive_ai_analysis_max_items: int = 8  # Max samples sent to the cloud model when enabled
     adaptive_ai_analysis_max_suggestions: int = 8  # Bound AI-proposed phrase/protected-term suggestions
     longrun_housekeeping_enabled: bool = True  # periodic long-run health telemetry and cleanup hooks
     longrun_health_log_interval_seconds: float = 900.0  # periodic memory/queue health snapshot cadence

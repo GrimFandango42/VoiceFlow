@@ -481,7 +481,8 @@ class DailyLearningJob:
         top_pairs: List[Dict[str, Any]],
         top_instruction_themes: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        enabled = bool(getattr(self.cfg, "adaptive_ai_analysis_enabled", True))
+        # Opt-in: transcripts only leave the machine when the user turned this on.
+        enabled = bool(getattr(self.cfg, "adaptive_ai_analysis_enabled", False))
         max_items = max(1, int(getattr(self.cfg, "adaptive_ai_analysis_max_items", 8)))
         max_suggestions = max(1, int(getattr(self.cfg, "adaptive_ai_analysis_max_suggestions", 8)))
         result: Dict[str, Any] = {

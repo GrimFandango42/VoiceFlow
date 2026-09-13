@@ -212,6 +212,28 @@ def _apply_performance_migrations(cfg: Config) -> bool:
     return changed
 
 
+CLOUD_LEARNING_CONSENT_VERSION = 1
+
+
+def _apply_cloud_learning_consent_migration(cfg: Config) -> bool:
+    """One-time reset of the cloud transcript analysis flag (VF-03).
+
+    Configs saved before the setup wizard exposed the toggle carry
+    ``adaptive_ai_analysis_enabled=True`` from the old default, which nobody
+    consented to. Turn it off once and record that the consent flow has run;
+    from then on only the wizard changes it.
+    """
+    try:
+        seen = int(getattr(cfg, "cloud_learning_consent_version", 0) or 0)
+    except Exception:
+        seen = 0
+    if seen >= CLOUD_LEARNING_CONSENT_VERSION:
+        return False
+    cfg.adaptive_ai_analysis_enabled = False
+    cfg.cloud_learning_consent_version = CLOUD_LEARNING_CONSENT_VERSION
+    return True
+
+
 def load_config(defaults: Config) -> Config:
     path = config_path()
     if not path.exists():
@@ -258,6 +280,7 @@ def load_config(defaults: Config) -> Config:
         pass
 
     changed = _apply_performance_migrations(defaults)
+    changed = _apply_cloud_learning_consent_migration(defaults) or changed
     try:
         validation_changed = pre_validation_state is not None and asdict(defaults) != pre_validation_state
     except Exception:
