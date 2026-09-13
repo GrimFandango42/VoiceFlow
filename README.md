@@ -190,7 +190,7 @@ VoiceFlow observes the delta between raw transcripts and final text. Recurring c
 
 - Rules are stored locally in `%LOCALAPPDATA%\VoiceFlow\adaptive_patterns.json`
 - Daily learning runs a nightly batch pass; reports land in `%LOCALAPPDATA%\VoiceFlow\daily_learning_reports\`
-- **What leaves your machine:** by default, nothing. The nightly pass has an optional cloud step — **Setup & Defaults → "Send a daily sample of transcripts to Claude"**, off by default — that sends up to 8 of the day's transcripts, verbatim, to Anthropic via the Claude CLI (or Google Gemini if the CLI is missing) to suggest vocabulary and phrasing rules. Audio is never sent. Each nightly report records `ai_learning_analysis.enabled` so you can confirm what happened.
+- **What leaves your machine:** by default, nothing. The nightly pass has an optional cloud step — **Setup & Defaults → "Send a daily sample of transcripts to Claude"**, off by default — that, for the target date, sends to Anthropic via the Claude CLI (or Google Gemini if the CLI is missing): your transcripts, verbatim — up to 8 by default (configurable); the same number of your original/corrected correction pairs; the top word replacement pairs; recurring instruction themes; and a snapshot of the learned adjustment rules. This is used to suggest vocabulary and phrasing rules. Audio is never sent. If a managed (enterprise) Claude Code policy that declares hooks is present, the Claude CLI step is skipped rather than run. Each nightly report records `ai_learning_analysis.enabled` so you can confirm what happened.
 - Explicit corrections via the History panel rank higher than auto-inferred rules
 - Add personal terminology in `%LOCALAPPDATA%\VoiceFlow\engineering_terms.json`
 

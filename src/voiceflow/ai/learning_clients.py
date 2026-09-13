@@ -60,6 +60,44 @@ CLAUDE_CLI_SAFE_FLAGS: tuple = (
 )
 
 
+#: Managed-policy settings files. ``--safe-mode`` disables the *user's* own hooks
+#: but NOT hooks installed by managed (enterprise) policy, per the official CLI
+#: reference. Transcript text must never pass through a process that a managed
+#: hook could observe, so if such a file exists and declares ``hooks`` we refuse
+#: to spawn the CLI at all rather than trust the flag. Never bypass managed policy.
+#: Paths are the canonical managed-settings locations per platform.
+MANAGED_SETTINGS_PATHS: tuple = (
+    r"C:\ProgramData\ClaudeCode\managed-settings.json",
+    "/Library/Application Support/ClaudeCode/managed-settings.json",
+    "/etc/claude-code/managed-settings.json",
+)
+
+
+def managed_hooks_present(paths: Optional[tuple] = None) -> bool:
+    """True if a managed-policy settings file exists and declares hooks.
+
+    Fails closed: a managed file that exists but cannot be read or parsed is
+    treated as if it declared hooks, because we cannot prove it does not. This
+    is a deliberate deviation from a literal "declares hooks" reading in favour
+    of the security intent — an unreadable managed policy must not be silently
+    ignored. Reads :data:`MANAGED_SETTINGS_PATHS` at call time so tests can
+    monkeypatch the candidate list.
+    """
+    candidates = MANAGED_SETTINGS_PATHS if paths is None else paths
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except Exception:
+            # Exists but unreadable/malformed: fail closed.
+            return True
+        if isinstance(data, dict) and data.get("hooks"):
+            return True
+    return False
+
+
 def claude_cli_command(executable: str, max_turns: int = 1) -> list:
     """Build the locked-down ``claude`` command. The prompt goes on stdin."""
     return [
@@ -97,6 +135,14 @@ class ClaudeCLIClient:
             return LearningClientResponse(
                 text="", success=False, backend=self.backend,
                 error="claude CLI not found on PATH",
+            )
+
+        # Refuse before spawning if a managed policy could inject hooks that
+        # --safe-mode does not suppress. Fail closed; do not run transcript text.
+        if managed_hooks_present():
+            return LearningClientResponse(
+                text="", success=False, backend=self.backend,
+                error="managed_hooks_present",
             )
 
         prompt = system.strip() + "\n\n" + user.strip()

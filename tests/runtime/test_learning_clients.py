@@ -11,6 +11,8 @@ import json
 import subprocess
 from types import SimpleNamespace
 
+import pytest
+
 from voiceflow.ai import learning_clients
 from voiceflow.ai.learning_clients import (
     CLAUDE_CLI_SAFE_FLAGS,
@@ -19,6 +21,21 @@ from voiceflow.ai.learning_clients import (
     claude_cli_command,
 )
 from voiceflow.core.config import Config
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_managed_settings(monkeypatch, tmp_path):
+    """Hermeticity: never probe the real machine's managed-settings file.
+
+    Without this, every test that reaches ``ClaudeCLIClient.generate`` would read
+    whatever ``C:\\ProgramData\\ClaudeCode\\managed-settings.json`` happens to be on
+    the runner (including the reviewer's), so a green run would prove nothing.
+    Point the candidate list at a path that does not exist; the managed-hooks
+    tests below re-point it to their own temp files.
+    """
+    absent = str(tmp_path / "no-managed-settings.json")
+    monkeypatch.setattr(learning_clients, "MANAGED_SETTINGS_PATHS", (absent,))
+
 
 # --- default ---------------------------------------------------------------
 
@@ -107,6 +124,70 @@ def test_claude_client_reports_timeout_not_exception(monkeypatch, tmp_path):
     )
     assert resp.success is False
     assert resp.error and resp.error.startswith("timeout")
+
+
+# --- managed-policy hook isolation (VF-03 P1) --------------------------------
+#
+# ``--safe-mode`` suppresses the user's own hooks but NOT hooks installed by a
+# managed (enterprise) policy. When such a policy declares hooks, generate() must
+# fail closed *before* spawning the process, so transcript text is never exposed
+# to a hook that could observe it.
+
+
+def _client_with_managed_file(monkeypatch, tmp_path, contents: str):
+    managed = tmp_path / "managed-settings.json"
+    managed.write_text(contents, encoding="utf-8")
+    monkeypatch.setattr(learning_clients, "MANAGED_SETTINGS_PATHS", (str(managed),))
+    fake_exe = tmp_path / "claude.cmd"
+    fake_exe.write_text("rem fake", encoding="utf-8")
+    return ClaudeCLIClient(executable=str(fake_exe), timeout=5.0)
+
+
+def test_generate_refuses_when_managed_hooks_present(monkeypatch, tmp_path):
+    client = _client_with_managed_file(
+        monkeypatch, tmp_path, json.dumps({"hooks": {"PreToolUse": [{"command": "x"}]}})
+    )
+
+    def never(cmd, **kwargs):
+        raise AssertionError("subprocess.run must not run with managed hooks present")
+
+    monkeypatch.setattr(learning_clients.subprocess, "run", never)
+    resp = client.generate(system="s", user="the user's private transcript")
+    assert resp.success is False
+    assert resp.error == "managed_hooks_present"
+
+
+def test_generate_spawns_safely_when_managed_file_has_no_hooks(monkeypatch, tmp_path):
+    client = _client_with_managed_file(
+        monkeypatch, tmp_path, json.dumps({"permissions": {"allow": []}})
+    )
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(
+            returncode=0, stdout=json.dumps({"result": "ok"}), stderr=""
+        )
+
+    monkeypatch.setattr(learning_clients.subprocess, "run", fake_run)
+    resp = client.generate(system="s", user="u")
+    assert resp.success is True
+    for flag in REQUIRED_FLAGS:
+        assert flag in captured["cmd"], flag
+
+
+def test_generate_fails_closed_when_managed_file_is_unreadable(monkeypatch, tmp_path):
+    # Deliberate deviation from the finding's literal "declares hooks": a managed
+    # file that exists but cannot be parsed is treated as if it declared hooks.
+    client = _client_with_managed_file(monkeypatch, tmp_path, "{ not valid json")
+
+    def never(cmd, **kwargs):
+        raise AssertionError("subprocess.run must not run on unreadable managed file")
+
+    monkeypatch.setattr(learning_clients.subprocess, "run", never)
+    resp = client.generate(system="s", user="u")
+    assert resp.success is False
+    assert resp.error == "managed_hooks_present"
 
 
 # --- Gemini key handling -----------------------------------------------------

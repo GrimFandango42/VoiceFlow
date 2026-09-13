@@ -126,6 +126,94 @@ def test_user_choice_survives_reload_after_consent_recorded(monkeypatch):
         shutil.rmtree(base_dir, ignore_errors=True)
 
 
+# --- disclosure vs payload drift guard (VF-03 P2) ---------------------------
+#
+# The cloud step sends more than transcripts: correction pairs, replacement
+# pairs, instruction themes, and a learned-rule snapshot. This test captures the
+# exact JSON payload the client would receive and asserts that every top-level
+# key maps to a category named in CLOUD_LEARNING_TOGGLE_HELP — and, via set
+# equality, that no *new* payload key can be added without updating the
+# disclosure. The two cannot silently drift apart.
+
+#: top-level payload key -> substring that MUST appear in the disclosure text.
+PAYLOAD_CATEGORY = {
+    "target_date": "target date",
+    "correction_samples": "correction pairs",
+    "history_samples": "transcripts",
+    "top_replacement_pairs": "replacement pairs",
+    "top_instruction_themes": "instruction themes",
+    "adaptive_snapshot": "rules",
+}
+
+
+class _CaptureClient:
+    backend = "fake_capture"
+
+    def __init__(self) -> None:
+        self.captured: dict = {}
+
+    def is_available(self) -> bool:
+        return True
+
+    def generate(self, *, system: str, user: str):
+        from voiceflow.ai.learning_clients import LearningClientResponse
+
+        self.captured["user"] = user
+        return LearningClientResponse(
+            text=json.dumps({"summary": "ok"}),
+            success=True,
+            backend=self.backend,
+            model="fake",
+        )
+
+
+def test_disclosure_names_every_payload_category(monkeypatch):
+    from voiceflow.ai import daily_learning
+    from voiceflow.ui.setup_wizard import CLOUD_LEARNING_TOGGLE_HELP
+
+    base_dir = Path("build") / "test-runtime" / f"disclosure-drift-{uuid4().hex}"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        yesterday_epoch = (datetime.now() - timedelta(days=1)).timestamp()
+        _write_jsonl(
+            base_dir / "recent_history_events.jsonl",
+            [
+                {
+                    "event_epoch": yesterday_epoch,
+                    "audio_duration": 4.0,
+                    "full_text": "hello world",
+                }
+            ],
+        )
+        capture = _CaptureClient()
+        monkeypatch.setattr(daily_learning, "select_client", lambda *a, **k: capture)
+
+        cfg = Config(
+            adaptive_ai_analysis_enabled=True,
+            adaptive_min_count=1,
+            adaptive_store_raw_text=False,
+        )
+        daily_learning.DailyLearningJob(cfg=cfg, base_dir=base_dir).run(
+            days_back=1, dry_run=False
+        )
+
+        user_prompt = capture.captured["user"]
+        payload = json.loads(user_prompt[user_prompt.index("{"):])
+
+        # No key may be added or removed without updating the mapping (and thus
+        # forcing the disclosure to be revisited).
+        assert set(payload.keys()) == set(PAYLOAD_CATEGORY), (
+            "payload keys drifted from the disclosure mapping; update both "
+            "PAYLOAD_CATEGORY and CLOUD_LEARNING_TOGGLE_HELP"
+        )
+        help_text = CLOUD_LEARNING_TOGGLE_HELP.lower()
+        for key, category in PAYLOAD_CATEGORY.items():
+            assert category.lower() in help_text, (key, category)
+        assert "up to 8 by default (configurable)" in CLOUD_LEARNING_TOGGLE_HELP
+    finally:
+        shutil.rmtree(base_dir, ignore_errors=True)
+
+
 def test_wizard_save_records_consent_and_choice():
     from voiceflow.ui.setup_wizard import (
         CLOUD_LEARNING_TOGGLE_LABEL,

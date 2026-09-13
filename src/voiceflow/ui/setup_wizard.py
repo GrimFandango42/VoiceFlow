@@ -47,9 +47,13 @@ CLOUD_LEARNING_TOGGLE_LABEL = (
     "Send a daily sample of transcripts to Claude to improve accuracy (off by default)"
 )
 CLOUD_LEARNING_TOGGLE_HELP = (
-    "When on, the nightly learning pass sends up to 8 of the day's transcripts, "
-    "verbatim, to Anthropic through the Claude CLI (or Google Gemini if the CLI is "
-    "missing). Audio is always processed locally. When off, nothing leaves this computer."
+    "When on, the nightly learning pass sends that day's learning data to Anthropic "
+    "through the Claude CLI (or Google Gemini if the CLI is missing). For the target "
+    "date it includes: your transcripts, verbatim — up to 8 by default (configurable); "
+    "the same number of your original/corrected correction pairs; the top word "
+    "replacement pairs; recurring instruction themes; and a snapshot of the learned "
+    "adjustment rules. Audio is always processed locally. When off, nothing leaves "
+    "this computer."
 )
 
 _WIZARD_LOCK = threading.Lock()
