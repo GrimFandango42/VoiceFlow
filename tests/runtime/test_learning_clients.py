@@ -8,6 +8,7 @@ about what *would* have been sent.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from types import SimpleNamespace
 
@@ -25,16 +26,21 @@ from voiceflow.core.config import Config
 
 @pytest.fixture(autouse=True)
 def _neutralize_managed_settings(monkeypatch, tmp_path):
-    """Hermeticity: never probe the real machine's managed-settings file.
+    """Hermeticity: never probe the real machine's managed policy.
 
     Without this, every test that reaches ``ClaudeCLIClient.generate`` would read
-    whatever ``C:\\ProgramData\\ClaudeCode\\managed-settings.json`` happens to be on
-    the runner (including the reviewer's), so a green run would prove nothing.
-    Point the candidate list at a path that does not exist; the managed-hooks
-    tests below re-point it to their own temp files.
+    whatever managed-settings file / registry policy happens to be on the runner
+    (including the reviewer's), so a green run would prove nothing. Redirect the
+    candidate list to a path that does not exist via the test-only env override
+    (the production tuple stays intact), and stub the Windows registry probe to
+    report no policy. The managed-policy tests below re-point these to their own
+    state.
     """
     absent = str(tmp_path / "no-managed-settings.json")
-    monkeypatch.setattr(learning_clients, "MANAGED_SETTINGS_PATHS", (absent,))
+    monkeypatch.setenv(learning_clients._MANAGED_SETTINGS_ENV, absent)
+    monkeypatch.setattr(
+        learning_clients, "_windows_managed_policy_present", lambda: False
+    )
 
 
 # --- default ---------------------------------------------------------------
@@ -137,7 +143,7 @@ def test_claude_client_reports_timeout_not_exception(monkeypatch, tmp_path):
 def _client_with_managed_file(monkeypatch, tmp_path, contents: str):
     managed = tmp_path / "managed-settings.json"
     managed.write_text(contents, encoding="utf-8")
-    monkeypatch.setattr(learning_clients, "MANAGED_SETTINGS_PATHS", (str(managed),))
+    monkeypatch.setenv(learning_clients._MANAGED_SETTINGS_ENV, str(managed))
     fake_exe = tmp_path / "claude.cmd"
     fake_exe.write_text("rem fake", encoding="utf-8")
     return ClaudeCLIClient(executable=str(fake_exe), timeout=5.0)
@@ -188,6 +194,66 @@ def test_generate_fails_closed_when_managed_file_is_unreadable(monkeypatch, tmp_
     resp = client.generate(system="s", user="u")
     assert resp.success is False
     assert resp.error == "managed_hooks_present"
+
+
+def test_generate_refuses_when_windows_managed_policy_registry_present(
+    monkeypatch, tmp_path
+):
+    # No managed-settings file, but the Windows managed-policy registry key exists:
+    # hook isolation cannot be established, so refuse without spawning. We never
+    # parse the registry — mere existence is disqualifying.
+    monkeypatch.setattr(
+        learning_clients, "_windows_managed_policy_present", lambda: True
+    )
+    fake_exe = tmp_path / "claude.cmd"
+    fake_exe.write_text("rem fake", encoding="utf-8")
+
+    def never(cmd, **kwargs):
+        raise AssertionError("subprocess.run must not run with managed policy present")
+
+    monkeypatch.setattr(learning_clients.subprocess, "run", never)
+    resp = ClaudeCLIClient(executable=str(fake_exe), timeout=5.0).generate(
+        system="s", user="the user's private transcript"
+    )
+    assert resp.success is False
+    assert resp.error == "managed_policy_present"
+
+
+def test_generate_refuses_when_dropin_fragment_declares_hooks(monkeypatch, tmp_path):
+    # The main managed file is clean; a *.json fragment in the sibling
+    # managed-settings.d directory declares hooks -> still refuse without spawning.
+    main = tmp_path / "managed-settings.json"
+    main.write_text(json.dumps({"permissions": {"allow": []}}), encoding="utf-8")
+    dropin_dir = tmp_path / "managed-settings.d"
+    dropin_dir.mkdir()
+    (dropin_dir / "10-hooks.json").write_text(
+        json.dumps({"hooks": {"PreToolUse": [{"command": "x"}]}}), encoding="utf-8"
+    )
+    monkeypatch.setenv(learning_clients._MANAGED_SETTINGS_ENV, str(main))
+    fake_exe = tmp_path / "claude.cmd"
+    fake_exe.write_text("rem fake", encoding="utf-8")
+
+    def never(cmd, **kwargs):
+        raise AssertionError("subprocess.run must not run when drop-in declares hooks")
+
+    monkeypatch.setattr(learning_clients.subprocess, "run", never)
+    resp = ClaudeCLIClient(executable=str(fake_exe), timeout=5.0).generate(
+        system="s", user="u"
+    )
+    assert resp.success is False
+    assert resp.error == "managed_hooks_present"
+
+
+def test_production_candidate_list_includes_windows_program_files_path():
+    # The production tuple must stay intact so detection works on a real install;
+    # tests redirect via the env override, never by reassigning it. The Program
+    # Files path is the one the installed CLI actually reads.
+    expected = os.path.join(
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+        "ClaudeCode",
+        "managed-settings.json",
+    )
+    assert expected in learning_clients.MANAGED_SETTINGS_PATHS
 
 
 # --- Gemini key handling -----------------------------------------------------

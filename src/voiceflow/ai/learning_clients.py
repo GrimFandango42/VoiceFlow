@@ -60,31 +60,121 @@ CLAUDE_CLI_SAFE_FLAGS: tuple = (
 )
 
 
-#: Managed-policy settings files. ``--safe-mode`` disables the *user's* own hooks
-#: but NOT hooks installed by managed (enterprise) policy, per the official CLI
-#: reference. Transcript text must never pass through a process that a managed
-#: hook could observe, so if such a file exists and declares ``hooks`` we refuse
-#: to spawn the CLI at all rather than trust the flag. Never bypass managed policy.
-#: Paths are the canonical managed-settings locations per platform.
-MANAGED_SETTINGS_PATHS: tuple = (
-    r"C:\ProgramData\ClaudeCode\managed-settings.json",
-    "/Library/Application Support/ClaudeCode/managed-settings.json",
-    "/etc/claude-code/managed-settings.json",
-)
+#: Test-only env override for the managed-settings candidate list. When set, its
+#: ``os.pathsep``-separated value replaces the production paths below, so a test
+#: run never depends on the host machine's real managed policy. Never set this in
+#: production; production code always reads :data:`MANAGED_SETTINGS_PATHS`.
+_MANAGED_SETTINGS_ENV = "VOICEFLOW_TEST_MANAGED_SETTINGS_PATHS"
+
+#: Windows registry key whose mere existence means a managed Claude Code policy is
+#: in force. We do not parse policy out of the registry; its presence alone means
+#: hook isolation cannot be established from a plain ``--safe-mode`` call, so we
+#: refuse rather than guess.
+_WINDOWS_POLICY_REGISTRY_KEY = r"SOFTWARE\Policies\ClaudeCode"
 
 
-def managed_hooks_present(paths: Optional[tuple] = None) -> bool:
-    """True if a managed-policy settings file exists and declares hooks.
+def _default_managed_settings_paths() -> tuple:
+    r"""Canonical managed-settings.json locations per platform.
 
-    Fails closed: a managed file that exists but cannot be read or parsed is
-    treated as if it declared hooks, because we cannot prove it does not. This
-    is a deliberate deviation from a literal "declares hooks" reading in favour
-    of the security intent — an unreadable managed policy must not be silently
-    ignored. Reads :data:`MANAGED_SETTINGS_PATHS` at call time so tests can
-    monkeypatch the candidate list.
+    Windows exposes two: the installer's ``%ProgramFiles%\ClaudeCode`` path (the
+    one the installed CLI actually reads) and the older ``%ProgramData%\ClaudeCode``
+    path (kept as a harmless extra candidate). macOS and Linux each have one.
     """
-    candidates = MANAGED_SETTINGS_PATHS if paths is None else paths
-    for path in candidates:
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    program_data = os.environ.get("ProgramData", r"C:\ProgramData")
+    return (
+        os.path.join(program_files, "ClaudeCode", "managed-settings.json"),
+        os.path.join(program_data, "ClaudeCode", "managed-settings.json"),
+        "/Library/Application Support/ClaudeCode/managed-settings.json",
+        "/etc/claude-code/managed-settings.json",
+    )
+
+
+#: Canonical managed-settings locations. ``--safe-mode`` disables the *user's* own
+#: hooks but NOT hooks installed by managed (enterprise) policy, per the official
+#: CLI reference. Transcript text must never pass through a process that a managed
+#: hook could observe. Kept intact so it can be asserted against directly; tests
+#: redirect via the env override above, never by reassigning this tuple.
+MANAGED_SETTINGS_PATHS: tuple = _default_managed_settings_paths()
+
+
+def _expand_with_dropins(paths: tuple) -> tuple:
+    """Return ``paths`` plus every drop-in ``*.json`` fragment beside them.
+
+    Each candidate's sibling ``managed-settings.d`` directory is scanned, because
+    managed policy can be split across drop-in fragments and each must be inspected
+    too. A missing drop-in directory is the normal case and is ignored.
+    """
+    expanded: list = []
+    for path in paths:
+        expanded.append(path)
+        dropin_dir = os.path.join(os.path.dirname(path), "managed-settings.d")
+        try:
+            names = sorted(os.listdir(dropin_dir))
+        except OSError:
+            names = []
+        for name in names:
+            if name.lower().endswith(".json"):
+                expanded.append(os.path.join(dropin_dir, name))
+    return tuple(expanded)
+
+
+def _managed_settings_candidates(paths: Optional[tuple] = None) -> tuple:
+    """Managed-settings files to inspect, drop-in fragments included.
+
+    Honors the test-only env override when ``paths`` is not passed explicitly.
+    """
+    if paths is None:
+        override = os.environ.get(_MANAGED_SETTINGS_ENV)
+        if override is not None:
+            base = tuple(p for p in override.split(os.pathsep) if p)
+        else:
+            base = MANAGED_SETTINGS_PATHS
+    else:
+        base = paths
+    return _expand_with_dropins(base)
+
+
+def _windows_managed_policy_present() -> bool:
+    """True if the Windows managed-policy registry key exists at all.
+
+    Existence alone is disqualifying: we do not parse policy out of the registry,
+    so we cannot prove it installs no hooks. ``FileNotFoundError`` means no policy
+    (safe); any other ``OSError`` is treated as present (fail closed), consistent
+    with how an unreadable managed-settings file is handled. Gated on Windows so
+    ``winreg`` is never imported on macOS/Linux.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        import winreg
+    except ImportError:
+        return False
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _WINDOWS_POLICY_REGISTRY_KEY):
+            return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
+def managed_policy_block(paths: Optional[tuple] = None) -> Optional[str]:
+    """Return an error code if a managed policy blocks a locked-down CLI call.
+
+    ``--safe-mode`` suppresses the *user's* own hooks but NOT hooks installed by a
+    managed (enterprise) policy, so transcript text must never pass through the CLI
+    while such a policy is in force. Returns ``None`` when it is safe to spawn, or
+    one of two refusal reasons:
+
+    * ``"managed_policy_present"`` — the Windows managed-policy registry key exists.
+    * ``"managed_hooks_present"`` — a managed-settings file (or drop-in fragment)
+      declares ``hooks``, or a managed candidate exists but is unreadable/malformed
+      (fail closed: we cannot prove it declares none).
+    """
+    if _windows_managed_policy_present():
+        return "managed_policy_present"
+    for path in _managed_settings_candidates(paths):
         if not os.path.exists(path):
             continue
         try:
@@ -92,10 +182,10 @@ def managed_hooks_present(paths: Optional[tuple] = None) -> bool:
                 data = json.load(handle)
         except Exception:
             # Exists but unreadable/malformed: fail closed.
-            return True
+            return "managed_hooks_present"
         if isinstance(data, dict) and data.get("hooks"):
-            return True
-    return False
+            return "managed_hooks_present"
+    return None
 
 
 def claude_cli_command(executable: str, max_turns: int = 1) -> list:
@@ -139,10 +229,11 @@ class ClaudeCLIClient:
 
         # Refuse before spawning if a managed policy could inject hooks that
         # --safe-mode does not suppress. Fail closed; do not run transcript text.
-        if managed_hooks_present():
+        policy_block = managed_policy_block()
+        if policy_block is not None:
             return LearningClientResponse(
                 text="", success=False, backend=self.backend,
-                error="managed_hooks_present",
+                error=policy_block,
             )
 
         prompt = system.strip() + "\n\n" + user.strip()
