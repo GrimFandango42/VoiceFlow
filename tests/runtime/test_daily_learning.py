@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from uuid import uuid4
 
 from voiceflow.ai.daily_learning import DailyLearningJob
 from voiceflow.core.config import Config
+
+
+def _yesterday_epoch() -> float:
+    """Epoch for yesterday at local noon.
+
+    Unambiguously on yesterday's local date regardless of the current time of
+    day, so it always matches the job's ``target_date`` (``today - days_back``).
+    A one-day-and-one-hour offset from ``now()`` lands two calendar days back
+    when run between 00:00 and 01:00 local, which made these tests time-fragile.
+    """
+    return datetime.combine(date.today() - timedelta(days=1), time(12, 0)).timestamp()
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -88,7 +99,7 @@ def test_daily_learning_dry_run_does_not_update_patterns():
 def test_daily_learning_auto_analysis_learns_from_history():
     base_dir = _test_dir("daily-learning-auto-analysis")
     try:
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
         _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
         _write_jsonl(
             base_dir / "recent_history_events.jsonl",
@@ -117,7 +128,7 @@ def test_daily_learning_auto_analysis_learns_from_history():
 def test_daily_learning_auto_analysis_learns_phrase_replacements_from_history():
     base_dir = _test_dir("daily-learning-auto-analysis-phrases")
     try:
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
         _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
         _write_jsonl(
             base_dir / "recent_history_events.jsonl",
@@ -143,7 +154,7 @@ def test_daily_learning_auto_analysis_learns_phrase_replacements_from_history():
 def test_daily_learning_instructional_pass_updates_insights():
     base_dir = _test_dir("daily-learning-instructional")
     try:
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
         _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
         _write_jsonl(
             base_dir / "recent_history_events.jsonl",
@@ -177,7 +188,7 @@ def test_daily_learning_instructional_pass_updates_insights():
 def test_daily_learning_instructional_pass_dry_run_does_not_persist_insights():
     base_dir = _test_dir("daily-learning-instructional-dry-run")
     try:
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
         _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
         _write_jsonl(
             base_dir / "recent_history_events.jsonl",
@@ -276,7 +287,7 @@ def test_manual_correction_pairs_outrank_auto_pairs():
     base_dir = _test_dir("daily-learning-weight-ranking")
     try:
         yesterday = datetime.now() - timedelta(days=1)
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
 
         # One manual correction: "jon" → "john"
         # One auto-analysis source: "terraforce" → "terraform" (via history normalization)
@@ -326,7 +337,7 @@ def test_manual_correction_pairs_outrank_auto_pairs():
 def test_daily_learning_ai_analysis_returns_structured_suggestions(monkeypatch):
     base_dir = _test_dir("daily-learning-ai-analysis")
     try:
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
         _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
         _write_jsonl(
             base_dir / "recent_history_events.jsonl",
