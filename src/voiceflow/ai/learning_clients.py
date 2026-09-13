@@ -66,10 +66,10 @@ CLAUDE_CLI_SAFE_FLAGS: tuple = (
 #: production; production code always reads :data:`MANAGED_SETTINGS_PATHS`.
 _MANAGED_SETTINGS_ENV = "VOICEFLOW_TEST_MANAGED_SETTINGS_PATHS"
 
-#: Windows registry key whose mere existence means a managed Claude Code policy is
-#: in force. We do not parse policy out of the registry; its presence alone means
-#: hook isolation cannot be established from a plain ``--safe-mode`` call, so we
-#: refuse rather than guess.
+#: Windows registry subkey (probed under both HKLM and HKCU) whose mere existence
+#: means a managed Claude Code policy is in force. We do not parse policy out of the
+#: registry; its presence alone means hook isolation cannot be established from a
+#: plain ``--safe-mode`` call, so we refuse rather than guess.
 _WINDOWS_POLICY_REGISTRY_KEY = r"SOFTWARE\Policies\ClaudeCode"
 
 
@@ -111,8 +111,12 @@ def _expand_with_dropins(paths: tuple) -> tuple:
         dropin_dir = os.path.join(os.path.dirname(path), "managed-settings.d")
         try:
             names = sorted(os.listdir(dropin_dir))
-        except OSError:
+        except (FileNotFoundError, NotADirectoryError):
+            # No drop-in directory beside this candidate: the normal case.
             names = []
+        # Any other OSError (e.g. PermissionError) propagates: we cannot enumerate
+        # the fragments, so we cannot prove none declare hooks. The caller turns
+        # this into a fail-closed refusal rather than silently skipping the dir.
         for name in names:
             if name.lower().endswith(".json"):
                 expanded.append(os.path.join(dropin_dir, name))
@@ -136,13 +140,14 @@ def _managed_settings_candidates(paths: Optional[tuple] = None) -> tuple:
 
 
 def _windows_managed_policy_present() -> bool:
-    """True if the Windows managed-policy registry key exists at all.
+    """True if the Windows managed-policy registry key exists in HKLM or HKCU.
 
-    Existence alone is disqualifying: we do not parse policy out of the registry,
-    so we cannot prove it installs no hooks. ``FileNotFoundError`` means no policy
-    (safe); any other ``OSError`` is treated as present (fail closed), consistent
-    with how an unreadable managed-settings file is handled. Gated on Windows so
-    ``winreg`` is never imported on macOS/Linux.
+    Anthropic documents managed policy delivered under both hives, so both are
+    probed. Existence alone is disqualifying: we do not parse policy out of the
+    registry, so we cannot prove it installs no hooks. ``FileNotFoundError`` on a
+    hive means no policy there (safe); any other ``OSError`` is treated as present
+    (fail closed), consistent with how an unreadable managed-settings file is
+    handled. Gated on Windows so ``winreg`` is never imported on macOS/Linux.
     """
     if os.name != "nt":
         return False
@@ -150,13 +155,15 @@ def _windows_managed_policy_present() -> bool:
         import winreg
     except ImportError:
         return False
-    try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _WINDOWS_POLICY_REGISTRY_KEY):
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, _WINDOWS_POLICY_REGISTRY_KEY):
+                return True
+        except FileNotFoundError:
+            continue
+        except OSError:
             return True
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return True
+    return False
 
 
 def managed_policy_block(paths: Optional[tuple] = None) -> Optional[str]:
@@ -165,23 +172,41 @@ def managed_policy_block(paths: Optional[tuple] = None) -> Optional[str]:
     ``--safe-mode`` suppresses the *user's* own hooks but NOT hooks installed by a
     managed (enterprise) policy, so transcript text must never pass through the CLI
     while such a policy is in force. Returns ``None`` when it is safe to spawn, or
-    one of two refusal reasons:
+    one of three refusal reasons:
 
-    * ``"managed_policy_present"`` — the Windows managed-policy registry key exists.
+    * ``"managed_policy_present"`` — the Windows managed-policy registry key exists
+      (HKLM or HKCU).
     * ``"managed_hooks_present"`` — a managed-settings file (or drop-in fragment)
-      declares ``hooks``, or a managed candidate exists but is unreadable/malformed
+      declares ``hooks``, or a managed candidate exists but holds malformed JSON
       (fail closed: we cannot prove it declares none).
+    * ``"managed_policy_unreadable"`` — a candidate file or a ``managed-settings.d``
+      directory exists but cannot be read/listed (e.g. ``PermissionError``). Only
+      ``FileNotFoundError``/``NotADirectoryError`` count as genuinely absent; every
+      other ``OSError`` fails closed, because an unreadable candidate could carry
+      hooks we can never inspect.
     """
     if _windows_managed_policy_present():
         return "managed_policy_present"
-    for path in _managed_settings_candidates(paths):
-        if not os.path.exists(path):
-            continue
+    try:
+        candidates = _managed_settings_candidates(paths)
+    except OSError:
+        # A managed-settings.d directory exists but could not be listed.
+        return "managed_policy_unreadable"
+    for path in candidates:
+        # No os.path.exists() gate: it swallows OSError and returns False, which
+        # would fail *open* on an unreadable-but-present file. Go straight to open()
+        # and classify by exception instead.
         try:
             with open(path, encoding="utf-8") as handle:
                 data = json.load(handle)
+        except (FileNotFoundError, NotADirectoryError):
+            # Genuinely absent: the only safe reason to skip a candidate.
+            continue
+        except OSError:
+            # Present but unreadable (e.g. PermissionError): fail closed.
+            return "managed_policy_unreadable"
         except Exception:
-            # Exists but unreadable/malformed: fail closed.
+            # Malformed JSON: fail closed.
             return "managed_hooks_present"
         if isinstance(data, dict) and data.get("hooks"):
             return "managed_hooks_present"

@@ -53,7 +53,9 @@ CLOUD_LEARNING_TOGGLE_HELP = (
     "the same number of your original/corrected correction pairs; the top word "
     "replacement pairs; recurring instruction themes; and a snapshot of the learned "
     "adjustment rules. Audio is always processed locally. When off, nothing leaves "
-    "this computer."
+    "this computer. On an organization-managed Claude account, server-delivered "
+    "policy hooks could observe this prompt; this feature is intended for personal "
+    "accounts."
 )
 
 _WIZARD_LOCK = threading.Lock()

@@ -21,6 +21,11 @@ from voiceflow.ai.learning_clients import (
     GeminiRESTClient,
     claude_cli_command,
 )
+from voiceflow.ai.learning_clients import (
+    # Bound at import time, so it survives the autouse fixture that patches the
+    # module attribute to ``lambda: False`` — these tests exercise the real probe.
+    _windows_managed_policy_present as _real_windows_probe,
+)
 from voiceflow.core.config import Config
 
 
@@ -242,6 +247,122 @@ def test_generate_refuses_when_dropin_fragment_declares_hooks(monkeypatch, tmp_p
     )
     assert resp.success is False
     assert resp.error == "managed_hooks_present"
+
+
+def test_generate_fails_closed_when_dropin_dir_cannot_be_listed(monkeypatch, tmp_path):
+    # A managed-settings.d directory exists but listing it raises PermissionError.
+    # We cannot enumerate its fragments, so we cannot prove none declare hooks:
+    # refuse without spawning. Only FileNotFoundError/NotADirectoryError = absent.
+    def deny_listdir(path):
+        raise PermissionError("listing denied")
+
+    monkeypatch.setattr(learning_clients.os, "listdir", deny_listdir)
+    fake_exe = tmp_path / "claude.cmd"
+    fake_exe.write_text("rem fake", encoding="utf-8")
+
+    def never(cmd, **kwargs):
+        raise AssertionError("subprocess.run must not run on an unlistable dir")
+
+    monkeypatch.setattr(learning_clients.subprocess, "run", never)
+    resp = ClaudeCLIClient(executable=str(fake_exe), timeout=5.0).generate(
+        system="s", user="the user's private transcript"
+    )
+    assert resp.success is False
+    assert resp.error == "managed_policy_unreadable"
+
+
+def test_fails_closed_when_dropin_fragment_read_denied(monkeypatch, tmp_path):
+    # Main managed file is clean and readable; a managed-settings.d fragment exists
+    # but reading it raises PermissionError -> fail closed without spawning.
+    main = tmp_path / "managed-settings.json"
+    main.write_text(json.dumps({"permissions": {"allow": []}}), encoding="utf-8")
+    dropin_dir = tmp_path / "managed-settings.d"
+    dropin_dir.mkdir()
+    fragment = dropin_dir / "10-locked.json"
+    fragment.write_text(json.dumps({"permissions": {}}), encoding="utf-8")
+    monkeypatch.setenv(learning_clients._MANAGED_SETTINGS_ENV, str(main))
+    fake_exe = tmp_path / "claude.cmd"
+    fake_exe.write_text("rem fake", encoding="utf-8")
+
+    # Deny only the fragment read; everything else (including the clean main file)
+    # goes through the real open. Setup writes above already happened.
+    import builtins
+
+    real_open = builtins.open
+
+    def guarded_open(file, *args, **kwargs):
+        if str(file) == str(fragment):
+            raise PermissionError("read denied")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
+
+    def never(cmd, **kwargs):
+        raise AssertionError("subprocess.run must not run on an unreadable fragment")
+
+    monkeypatch.setattr(learning_clients.subprocess, "run", never)
+    resp = ClaudeCLIClient(executable=str(fake_exe), timeout=5.0).generate(
+        system="s", user="u"
+    )
+    assert resp.success is False
+    assert resp.error == "managed_policy_unreadable"
+
+
+# --- registry probe covers both HKLM and HKCU (VF-03 round 3) ----------------
+#
+# Anthropic delivers managed policy under HKLM *and* HKCU. A fake winreg module is
+# injected via sys.modules and os.name forced to "nt", so the probe's real logic
+# runs identically on the Windows executor and on a Linux reviewer host.
+
+
+def _probe_with_fake_registry(monkeypatch, present_hives):
+    import sys
+    import types
+
+    hklm, hkcu = object(), object()
+    label = {id(hklm): "HKLM", id(hkcu): "HKCU"}
+    checked: list = []
+
+    class _Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def open_key(hive, sub):
+        assert sub == learning_clients._WINDOWS_POLICY_REGISTRY_KEY
+        checked.append(label[id(hive)])
+        if label[id(hive)] in present_hives:
+            return _Key()
+        raise FileNotFoundError
+
+    fake = types.SimpleNamespace(
+        HKEY_LOCAL_MACHINE=hklm, HKEY_CURRENT_USER=hkcu, OpenKey=open_key
+    )
+    monkeypatch.setitem(sys.modules, "winreg", fake)
+    monkeypatch.setattr(learning_clients.os, "name", "nt")
+    return _real_windows_probe(), checked
+
+
+def test_registry_probe_refuses_when_only_hkcu_present(monkeypatch):
+    # The discriminating case: HKLM is clean, HKCU carries the policy key. Old code
+    # (HKLM only) would have missed this and returned False.
+    result, checked = _probe_with_fake_registry(monkeypatch, {"HKCU"})
+    assert result is True
+    assert "HKLM" in checked and "HKCU" in checked
+
+
+def test_registry_probe_refuses_when_only_hklm_present(monkeypatch):
+    result, checked = _probe_with_fake_registry(monkeypatch, {"HKLM"})
+    assert result is True
+    assert "HKLM" in checked
+
+
+def test_registry_probe_allows_when_neither_hive_has_policy(monkeypatch):
+    result, checked = _probe_with_fake_registry(monkeypatch, set())
+    assert result is False
+    assert checked == ["HKLM", "HKCU"]
 
 
 def test_production_candidate_list_includes_windows_program_files_path():
