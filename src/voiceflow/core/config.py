@@ -35,6 +35,11 @@ class Config:
     # Ring-buffer capacity. Memory is fixed at this size; a longer hold keeps
     # the most recent audio and logs `recording_ring_wrapped`.
     max_recording_seconds: float = 300.0
+    # Audio callbacks hand blocks to a worker thread through a lock-free queue
+    # so a reader holding the ring-buffer lock can never stall PortAudio. This
+    # bounds that queue: past it a block is dropped and counted
+    # (`queue_dropped_*` in the health report) instead of growing memory.
+    audio_queue_max_seconds: float = 4.0
 
     # Performance optimizations
     enable_batching: bool = True  # Enable VAD-based batching for 12.5x speedup

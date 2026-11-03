@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from contextlib import contextmanager
 
 import numpy as np
 import pytest
@@ -42,6 +43,55 @@ class _OtherStatus:
 def _recorder(**overrides) -> EnhancedAudioRecorder:
     cfg = Config(stop_drain_seconds=0.0, **overrides)
     return EnhancedAudioRecorder(cfg)
+
+
+def _feed(rec: EnhancedAudioRecorder, blocks) -> None:
+    """Drive the recording callback faster than real time.
+
+    When the queue is half full, wait for the worker (back-pressure a real
+    32 ms device clock gives for free); the point of these tests is ordering
+    and memory, not saturation, which has its own test.
+    """
+    half = rec._capture.max_blocks // 2
+    for b in blocks:
+        rec._callback(b, len(b), None, None)
+        if rec._capture.depth() >= half:
+            assert rec._capture.flush(audio_mod.CHANNEL_RECORDING, 5.0)
+    assert rec._capture.dropped[audio_mod.CHANNEL_RECORDING] == 0
+
+
+@contextmanager
+def _stalled_reader(buf: BoundedRingBuffer, seconds: float):
+    """A reader thread that holds the ring lock for `seconds` (like a slow
+    streaming-preview read), yielded once it actually holds it."""
+    holding = threading.Event()
+
+    def _hold():
+        with buf.lock:
+            holding.set()
+            time.sleep(seconds)
+
+    t = threading.Thread(target=_hold, daemon=True)
+    t.start()
+    assert holding.wait(2.0)
+    try:
+        yield t
+    finally:
+        t.join(timeout=seconds + 2.0)
+
+
+class _FakeStream:
+    def __init__(self, *a, **k):
+        pass
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
 
 
 def _ramp_blocks(seconds: float):
@@ -103,8 +153,10 @@ class TestCallbackNeverBlocks:
         reader = threading.Thread(target=_reader, daemon=True)
         reader.start()
         t0 = time.perf_counter()
-        for b in blocks:
+        for i, b in enumerate(blocks):
             rec._callback(b, len(b), None, None)
+            if i % 8 == 7:
+                time.sleep(0.002)  # 8 blocks = 256 ms of audio per ~2 ms: >50x real time
         elapsed = time.perf_counter() - t0
         stop.set()
         reader.join(timeout=2.0)
@@ -114,9 +166,118 @@ class TestCallbackNeverBlocks:
         assert audio.shape == expected.shape
         np.testing.assert_array_equal(audio, expected)
         assert reads["n"] > 0
+        health = rec.get_audio_health()
+        assert health["queue_dropped_recording"] == 0
+        assert health["capture_worker_alive"] is True
         # 625 blocks = 20 s of audio; real time allows 20 s. Loose bound: the
         # point is per-block cost far below the 32 ms block period.
         assert elapsed < 5.0, f"callbacks too slow: {elapsed:.2f}s for 20s of audio"
+
+    def test_callback_returns_promptly_while_a_reader_holds_the_ring_lock(self):
+        """Review finding (fa5ff26): the callback took the ring lock, so a
+        reader holding it blocked the audio thread for >100 ms. Now the worker
+        waits on the lock, the callback does not."""
+        rec = _recorder()
+        rec._recording = True
+        blocks = list(_ramp_blocks(0.32))  # 10 blocks
+        durations = []
+        with _stalled_reader(rec._ring_buffer, 0.5) as holder:
+            for b in blocks:
+                t0 = time.perf_counter()
+                rec._callback(b, len(b), None, None)
+                durations.append(time.perf_counter() - t0)
+            # The lock really was held for the whole burst, and the worker is
+            # stuck behind it (it holds one block; the rest are queued).
+            assert holder.is_alive()
+            assert rec._capture.depth() >= len(blocks) - 1
+        assert max(durations) < 0.010, f"callback blocked {max(durations) * 1000:.1f} ms behind a reader"
+        audio = rec.stop()
+        np.testing.assert_array_equal(audio, np.concatenate([b[:, 0] for b in blocks]))
+
+    def test_queue_saturation_drops_and_counts_without_blocking(self, caplog):
+        rec = _recorder(audio_queue_max_seconds=0.5)  # 16 blocks
+        cap = rec._capture.max_blocks
+        assert cap == 16
+        rec._recording = True
+        blocks = list(_ramp_blocks(40 * BLOCK / SR))
+        durations = []
+        with _stalled_reader(rec._ring_buffer, 0.4):
+            for b in blocks:
+                t0 = time.perf_counter()
+                rec._callback(b, len(b), None, None)
+                durations.append(time.perf_counter() - t0)
+        assert max(durations) < 0.010
+        health = rec.get_audio_health()
+        dropped = health["queue_dropped_recording"]
+        # The worker holds at most one block while blocked on the lock.
+        assert len(blocks) - cap - 1 <= dropped <= len(blocks) - cap
+        assert health["queue_high_water"] == cap
+        assert rec._callback_count == len(blocks), "activity is counted even for dropped blocks"
+        with caplog.at_level(logging.WARNING):
+            audio = rec.stop()
+        assert audio.size == (len(blocks) - dropped) * BLOCK
+        assert any("audio_queue_saturated" in r.getMessage() for r in caplog.records)
+
+    def test_stop_drains_the_queue_before_returning(self):
+        """Blocks still queued at key release (worker stalled) are waited for,
+        so the tail of the utterance is not cut off."""
+        rec = _recorder()
+        rec._recording = True
+        blocks = list(_ramp_blocks(0.64))
+        with _stalled_reader(rec._ring_buffer, 0.2):
+            for b in blocks:
+                rec._callback(b, len(b), None, None)
+            # stop() runs while the reader still holds the lock; its bounded
+            # flush waits for the worker once the lock is released.
+            audio = rec.stop()
+        np.testing.assert_array_equal(audio, np.concatenate([b[:, 0] for b in blocks]))
+
+    def test_blocks_from_a_previous_recording_do_not_leak_into_the_next(self):
+        rec = _recorder()
+        rec._recording = True
+        stale = list(_ramp_blocks(0.32))
+        with _stalled_reader(rec._ring_buffer, 0.2):
+            for b in stale:
+                rec._callback(b, len(b), None, None)
+            # What start() does for the next recording. It waits for the lock,
+            # racing the worker (which already holds one stale block): either
+            # order must leave the new recording empty.
+            rec._begin_generation()
+        assert rec.flush_capture(2.0)
+        assert rec._ring_buffer.get_data().size == 0
+        # And blocks of the new generation are accepted.
+        fresh = np.full((BLOCK, 1), 0.5, dtype=np.float32)
+        rec._callback(fresh, BLOCK, None, None)
+        assert rec.flush_capture(2.0)
+        assert rec._ring_buffer.get_data().size == BLOCK
+
+    def test_dead_worker_falls_back_to_draining_on_stop(self):
+        rec = _recorder()
+        rec._capture.close()
+        assert not rec._capture.worker_alive()
+        rec._recording = True
+        blocks = list(_ramp_blocks(0.32))
+        for b in blocks:
+            rec._callback(b, len(b), None, None)
+        assert rec.get_audio_health()["capture_worker_alive"] is False
+        audio = rec.stop()
+        np.testing.assert_array_equal(audio, np.concatenate([b[:, 0] for b in blocks]))
+
+    def test_start_restarts_a_dead_worker_and_includes_pre_roll(self, monkeypatch):
+        monkeypatch.setattr(audio_mod.sd, "InputStream", _FakeStream)
+        rec = _recorder()
+        rec._capture.close()
+        rec._continuous_recording = True
+        pre = np.full((BLOCK, 1), 0.25, dtype=np.float32)
+        for _ in range(12):  # 384 ms of pre-roll, queued but not yet applied
+            rec._continuous_callback(pre, BLOCK, None, None)
+        rec.start()
+        try:
+            assert rec._capture.worker_alive()
+            assert rec._ring_buffer.get_data().size == 12 * BLOCK
+        finally:
+            rec._recording = False
+            rec.close()
 
     def test_non_finite_samples_are_zeroed_not_dropped(self):
         block = np.array([[0.1], [np.nan], [np.inf], [-np.inf]], dtype=np.float32)
@@ -166,8 +327,8 @@ class TestThreeMinuteRecording:
         cap_bytes = rec._ring_buffer.buffer.nbytes
         rec._recording = True
         blocks = list(_ramp_blocks(180.0))
-        for b in blocks:
-            rec._callback(b, len(b), None, None)
+        _feed(rec, blocks)
+        assert rec.flush_capture(5.0)
         assert rec._ring_buffer.buffer.nbytes == cap_bytes, "ring must not grow"
         assert rec.get_current_duration() == pytest.approx(180.0, abs=BLOCK / SR)
         audio = rec.stop()
@@ -179,8 +340,7 @@ class TestThreeMinuteRecording:
         rec = _recorder(max_recording_seconds=60.0)
         rec._recording = True
         blocks = list(_ramp_blocks(70.0))
-        for b in blocks:
-            rec._callback(b, len(b), None, None)
+        _feed(rec, blocks)
         with caplog.at_level(logging.WARNING):
             audio = rec.stop()
         expected = np.concatenate([b[:, 0] for b in blocks])[-60 * SR:]

@@ -164,26 +164,83 @@ SELF_CHECK_MODULES = (
 )
 
 
-def _run_self_check(out_path: str) -> int:
+# Loaded together with asr_engine.CUDA_REQUIRED_DLLS: they are what the required
+# pair links against. scripts/setup/verify_bundle.py reads this tuple too.
+CUDA_COMPANION_DLLS = ("cublasLt64_12.dll", "cudnn64_9.dll")
+
+
+def _bundle_root() -> Path | None:
+    """Where PyInstaller unpacked the bundle (one-dir: _internal; one-file: temp)."""
+    meipass = getattr(sys, "_MEIPASS", "")
+    return Path(str(meipass)) if meipass else None
+
+
+def _check_bundled_cuda(required: tuple[str, ...]) -> tuple[bool, str]:
+    """Load the CUDA DLLs from inside the bundle, ignoring PATH and venvs.
+
+    The runtime probe (`asr_engine._cuda_runtime_ready`) also searches PATH and
+    nearby venvs, so on a dev machine it can pass for a bundle that ships no
+    CUDA at all. This check only looks in the bundle.
+    """
+    import ctypes
+
+    root = _bundle_root()
+    if root is None:
+        return False, "not a frozen bundle"
+    lib = root / "torch" / "lib"
+    names = list(required) + list(CUDA_COMPANION_DLLS)
+    missing = [n for n in names if not (lib / n).is_file()]
+    if missing:
+        return False, f"missing in bundle {lib}: {', '.join(missing)}"
+    try:
+        os.add_dll_directory(str(lib))
+    except Exception:
+        pass
+    for name in names:
+        try:
+            ctypes.WinDLL(str(lib / name))
+        except OSError as exc:
+            return False, f"{name} present but does not load: {exc}"
+    return True, f"{len(names)} DLLs load from {lib}"
+
+
+def _self_check_flags(argv: list[str]) -> set[str]:
+    return {a for a in argv[1:] if a == "--self-check-allow-cpu-only"}
+
+
+def _run_self_check(out_path: str, *, allow_cpu_only: bool = False) -> int:
     """Verify the frozen bundle without starting the app (no tray, hotkeys, mic).
 
-    Imports the app's modules, loads the Silero VAD asset through onnxruntime and
-    probes the CUDA runtime, then writes a JSON report. The windowed EXE has no
-    console, so the report goes to a file:
-        VoiceFlow.exe --self-check=C:\\path\\report.json
+    Runs inside the frozen interpreter, so every import and the VAD load use the
+    bundle's own modules and native libraries. It imports the app's modules
+    (import only: nothing here creates a tray icon, registers a hotkey or opens
+    an audio stream), runs the Silero VAD through the bundled onnxruntime the
+    way streaming preview does, and loads the bundled CUDA DLLs. The windowed
+    EXE has no console, so the report goes to a file:
+        VoiceFlow.exe --self-check=C:\\path\\report.json [--self-check-allow-cpu-only]
     Exit code 0 = everything the daily-driver path needs is present.
+    `scripts/setup/verify_bundle.py` runs this from the build and fails the
+    build on a non-zero exit.
     """
     import importlib
     import json
     import traceback
 
-    report: dict = {"frozen": bool(getattr(sys, "frozen", False)), "checks": {}}
+    frozen = bool(getattr(sys, "frozen", False))
+    root = _bundle_root()
+    report: dict = {
+        "frozen": frozen,
+        "bundle_root": str(root) if root else None,
+        "allow_cpu_only": bool(allow_cpu_only),
+        "checks": {},
+    }
     ok = True
 
-    def _record(name: str, passed: bool, detail: str = "") -> None:
+    def _record(name: str, passed: bool, detail: str = "", *, warn_only: bool = False) -> None:
         nonlocal ok
-        report["checks"][name] = {"ok": bool(passed), "detail": detail}
-        ok = ok and bool(passed)
+        report["checks"][name] = {"ok": bool(passed), "detail": detail, "warn_only": warn_only}
+        if not passed and not warn_only:
+            ok = False
 
     for mod in SELF_CHECK_MODULES:
         try:
@@ -192,6 +249,18 @@ def _run_self_check(out_path: str) -> int:
         except Exception as exc:  # noqa: BLE001 - report every failure
             _record(f"import:{mod}", False, f"{type(exc).__name__}: {exc}")
 
+    if frozen and root is not None:
+        # Prove the natives came from the bundle, not from a Python install the
+        # build machine happens to have.
+        try:
+            import onnxruntime
+
+            ort_file = Path(onnxruntime.__file__).resolve()
+            inside = str(ort_file).lower().startswith(str(root.resolve()).lower())
+            _record("onnxruntime_from_bundle", inside, str(ort_file))
+        except Exception as exc:  # noqa: BLE001
+            _record("onnxruntime_from_bundle", False, f"{type(exc).__name__}: {exc}")
+
     try:
         from faster_whisper.utils import get_assets_path
 
@@ -199,24 +268,35 @@ def _run_self_check(out_path: str) -> int:
         if not vad_path.is_file():
             _record("vad_asset", False, f"missing: {vad_path}")
         else:
-            import onnxruntime
+            # The exact call that logged "Applying the VAD filter requires the
+            # onnxruntime package" / NO_SUCHFILE in the field.
+            from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-            onnxruntime.InferenceSession(str(vad_path), providers=["CPUExecutionProvider"])
-            _record("vad_asset", True, str(vad_path))
+            get_speech_timestamps(np.zeros(16000, dtype=np.float32), VadOptions())
+            _record("vad_asset", True, f"{vad_path} (VAD ran on 1 s of silence)")
     except Exception as exc:  # noqa: BLE001
         _record("vad_asset", False, f"{type(exc).__name__}: {exc}")
 
     try:
         from voiceflow.core import asr_engine
 
-        cuda_ready = bool(asr_engine._cuda_runtime_ready())
-        missing = asr_engine._missing_cuda_dlls(list(asr_engine.CUDA_REQUIRED_DLLS))
-        report["cuda_ready"] = cuda_ready
-        report["cuda_missing_dlls"] = missing
-        # Missing DLLs is a broken GPU bundle. "No GPU on this machine" is not.
-        _record("cuda_runtime_dlls", not missing, ",".join(missing) or "all present")
+        required = tuple(asr_engine.CUDA_REQUIRED_DLLS)
+        if frozen:
+            passed, detail = _check_bundled_cuda(required)
+        else:
+            asr_engine._cuda_runtime_ready()
+            missing = asr_engine._missing_cuda_dlls(list(required))
+            passed, detail = (not missing), (",".join(missing) or "all present")
+        # Missing DLLs is a broken GPU bundle. "No GPU on this machine" is not,
+        # so this loads the DLLs but never asks for a CUDA device.
+        _record(
+            "cuda_runtime_dlls",
+            passed,
+            detail + (" (accepted: CPU-only build)" if (not passed and allow_cpu_only) else ""),
+            warn_only=allow_cpu_only,
+        )
     except Exception as exc:  # noqa: BLE001
-        _record("cuda_runtime_dlls", False, f"{type(exc).__name__}: {exc}")
+        _record("cuda_runtime_dlls", False, f"{type(exc).__name__}: {exc}", warn_only=allow_cpu_only)
 
     report["ok"] = ok
     text = json.dumps(report, indent=2)
@@ -247,7 +327,11 @@ def main() -> int:
     _configure_frozen_tk_runtime()
     self_check_out = _self_check_target(sys.argv)
     if self_check_out:
-        return _run_self_check(self_check_out)
+        # Returns before anything below runs: no tray, hotkeys or microphone.
+        return _run_self_check(
+            self_check_out,
+            allow_cpu_only="--self-check-allow-cpu-only" in _self_check_flags(sys.argv),
+        )
     diag_wav = os.environ.get("VOICEFLOW_DIAG_BENCH_WAV", "").strip()
     if diag_wav:
         return _run_diagnostic_benchmark(Path(diag_wav).expanduser())

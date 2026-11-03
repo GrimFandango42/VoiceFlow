@@ -1071,7 +1071,8 @@ class EnhancedApp:
                 self._log.info(
                     "longrun_health rss_mb=%.1f ring_capacity_mb=%.2f live_audio_s=%.2f perf_window=%d checkpoint_parts=%d "
                     "audio_overflow_recording=%d audio_overflow_continuous=%d audio_status_other=%d "
-                    "audio_callback_errors=%d ring_wraps=%d",
+                    "audio_callback_errors=%d ring_wraps=%d audio_queue_dropped_recording=%d "
+                    "audio_queue_dropped_continuous=%d audio_queue_high_water=%d capture_worker_alive=%s",
                     rss_mb,
                     ring_capacity_mb,
                     live_audio_s,
@@ -1082,6 +1083,10 @@ class EnhancedApp:
                     int(audio_health.get("status_other", 0)),
                     int(audio_health.get("callback_errors", 0)),
                     int(audio_health.get("ring_wraps", 0)),
+                    int(audio_health.get("queue_dropped_recording", 0)),
+                    int(audio_health.get("queue_dropped_continuous", 0)),
+                    int(audio_health.get("queue_high_water", 0)),
+                    str(audio_health.get("capture_worker_alive", "unknown")),
                 )
 
                 if self.adaptive_learning and hasattr(self.adaptive_learning, "_purge_expired"):

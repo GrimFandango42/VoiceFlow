@@ -534,13 +534,37 @@ $bundleRoot = Join-Path $distPath $OutputName
 $oneFileExe = Join-Path $distPath "$OutputName.exe"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
+function Invoke-BundleVerification {
+    # Static checks (one-dir) plus the frozen self-check: verify_bundle.py runs
+    # '<exe> --self-check=<json>', waits for it, and exits non-zero on any
+    # failure. The EXE's self-check returns before tray/hotkey/microphone setup
+    # and runs with LOCALAPPDATA/TEMP redirected under the build folder.
+    # Every build mode goes through here; a failure throws, so the script
+    # exits non-zero and no zip is produced.
+    param([string]$Target)
+
+    $verifyScript = Join-Path $repoRoot "scripts\setup\verify_bundle.py"
+    $verifyReport = Join-Path $workPath "verify_bundle.json"
+    $verifyArgs = @($verifyScript, $Target, "--json-out", $verifyReport)
+    if ($AllowCpuOnly) {
+        $verifyArgs += "--allow-cpu-only"
+    }
+    Write-Host "[build_windows_exe] Verifying bundle (static + frozen self-check)..."
+    & $pythonExe @verifyArgs
+    $verifyExit = $LASTEXITCODE
+    if ($verifyExit -ne 0) {
+        throw "[build_windows_exe] Bundle self-check FAILED (exit $verifyExit). Report: $verifyReport"
+    }
+    Write-Host "[build_windows_exe] Bundle self-check passed. Report: $verifyReport"
+}
+
 if ($OneFile) {
     if (-not (Test-Path $oneFileExe)) {
         throw "Expected output not found: $oneFileExe"
     }
+    Invoke-BundleVerification -Target $oneFileExe
     $zipOut = Join-Path $packagePath "$OutputName-$timestamp-onefile.zip"
     Write-Host "[build_windows_exe] Built one-file executable: $oneFileExe"
-    Write-Warning "[build_windows_exe] verify_bundle.py checks the one-dir layout only; this one-file EXE is unverified. Run '$OutputName.exe --self-check=<report.json>' on the target machine."
     if (Compress-ArchiveWithRetry -Path @($oneFileExe) -DestinationPath $zipOut) {
         Write-Host "[build_windows_exe] Zip artifact: $zipOut"
     } else {
@@ -553,21 +577,7 @@ if ($OneFile) {
     Remove-ConflictingRuntimeDlls -BundleRoot $bundleRoot
     Remove-DuplicateCudaDlls -BundleRoot $bundleRoot
 
-    # Post-build self-check: VAD asset, onnxruntime/ctranslate2 natives, CUDA
-    # runtime (loads, not just present) and the app's modules in the PYZ.
-    # A failure here exits non-zero instead of leaving a quietly broken bundle.
-    $verifyScript = Join-Path $repoRoot "scripts\setup\verify_bundle.py"
-    $verifyReport = Join-Path $workPath "verify_bundle.json"
-    $verifyArgs = @($verifyScript, $bundleRoot, "--json-out", $verifyReport)
-    if ($AllowCpuOnly) {
-        $verifyArgs += "--allow-cpu-only"
-    }
-    Write-Host "[build_windows_exe] Verifying bundle..."
-    & $pythonExe @verifyArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "[build_windows_exe] Bundle self-check FAILED (exit $LASTEXITCODE). Report: $verifyReport"
-    }
-    Write-Host "[build_windows_exe] Bundle self-check passed. Report: $verifyReport"
+    Invoke-BundleVerification -Target $bundleRoot
 
     $zipOut = Join-Path $packagePath "$OutputName-$timestamp-portable.zip"
     Write-Host "[build_windows_exe] Built bundled executable: $(Join-Path $bundleRoot "$OutputName.exe")"

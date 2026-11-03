@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 """Post-build self-check for the packaged VoiceFlow bundle (VF-09 / VF-10).
 
-Run by build_windows_exe.ps1 after PyInstaller; a non-zero exit fails the build.
-It never launches VoiceFlow.exe (no tray, hotkeys or microphone). It checks:
+Run by build_windows_exe.ps1 after PyInstaller, for one-dir and one-file builds
+alike; a non-zero exit fails the build. Two layers:
 
-  * the Silero VAD asset is bundled where faster-whisper looks for it and is a
-    loadable ONNX model (streaming preview needs it; its absence produced the
-    `NO_SUCHFILE` / "requires the onnxruntime package" warnings in the field log)
-  * onnxruntime and ctranslate2 native libraries are present
-  * the CUDA runtime DLLs the app requires are bundled under _internal\\torch\\lib
-    and actually load (dependencies resolve), unless --allow-cpu-only
-  * the app's Python modules are inside the bundle's PYZ archive
+1. Frozen self-check (authoritative). Runs `VoiceFlow.exe --self-check=<json>`
+   and waits for it. That code path lives in voiceflow_exe_entry.main() and
+   returns before the tray, hotkeys or microphone are touched. Inside the frozen
+   interpreter it imports the app's modules from the bundle, runs the Silero VAD
+   through the *bundled* onnxruntime, and loads the *bundled* CUDA DLLs. The EXE
+   runs with LOCALAPPDATA/APPDATA/TEMP/USERPROFILE pointed into a scratch folder
+   next to the report and a minimal PATH, so it cannot touch live app data or
+   borrow DLLs from the build machine.
+
+2. Static pre-filter (one-dir only, quick, clearer messages). Checks the files
+   on disk: the VAD asset loads as ONNX, onnxruntime/ctranslate2 natives exist,
+   the CUDA DLLs exist and load in an isolated interpreter (unless
+   --allow-cpu-only), and the app's modules are in the PYZ.
 
 Usage:
-    python scripts/setup/verify_bundle.py dist/VoiceFlow [--allow-cpu-only] [--json-out report.json]
-
-For an in-process check from inside the frozen app (imports every module,
-probes CUDA the way the app does) run, when the app is not otherwise running:
-    dist\\VoiceFlow\\VoiceFlow.exe --self-check=C:\\path\\report.json
+    python scripts/setup/verify_bundle.py dist/VoiceFlow            # one-dir
+    python scripts/setup/verify_bundle.py dist/VoiceFlow.exe        # one-file
+        [--allow-cpu-only] [--json-out report.json] [--static-only]
 """
 
 from __future__ import annotations
@@ -25,6 +29,8 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -35,8 +41,7 @@ EXE_ENTRY = REPO_ROOT / "scripts" / "setup" / "voiceflow_exe_entry.py"
 
 VAD_RELATIVE = Path("faster_whisper") / "assets" / "silero_vad_v6.onnx"
 CUDA_RELATIVE = Path("torch") / "lib"
-# Loaded alongside the required pair: they are what the required pair links to.
-CUDA_COMPANION_DLLS = ("cublasLt64_12.dll", "cudnn64_9.dll")
+FROZEN_SELF_CHECK_TIMEOUT_S = 300.0
 
 
 def _literal_tuple(path: Path, name: str) -> tuple[str, ...]:
@@ -58,6 +63,7 @@ def _literal_tuple(path: Path, name: str) -> tuple[str, ...]:
 class Report:
     def __init__(self) -> None:
         self.checks: dict[str, dict] = {}
+        self.frozen_report: dict | None = None
 
     def add(self, name: str, ok: bool, detail: str = "", *, warn_only: bool = False) -> None:
         self.checks[name] = {"ok": bool(ok), "detail": detail, "warn_only": warn_only}
@@ -111,7 +117,7 @@ def _check_native(internal: Path, report: Report) -> None:
 
 def _check_cuda(internal: Path, required: tuple[str, ...], allow_cpu_only: bool, report: Report) -> None:
     lib = internal / CUDA_RELATIVE
-    wanted = list(required) + list(CUDA_COMPANION_DLLS)
+    wanted = list(required) + list(_literal_tuple(EXE_ENTRY, "CUDA_COMPANION_DLLS"))
     missing = [d for d in wanted if not (lib / d).is_file()]
     if missing:
         report.add(
@@ -172,10 +178,131 @@ def _check_modules(exe: Path, internal: Path, modules: tuple[str, ...], report: 
     )
 
 
-def verify(bundle: Path, allow_cpu_only: bool) -> Report:
+# Variables that could let the frozen EXE find DLLs or code outside the bundle.
+_STRIPPED_ENV = ("VOICEFLOW_TORCH_LIB_DIR", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "VOICEFLOW_DIAG_BENCH_WAV")
+_SANDBOXED_DIRS = ("LOCALAPPDATA", "APPDATA", "TEMP", "TMP", "USERPROFILE", "HOME")
+
+
+def _sandbox_env(sandbox: Path) -> dict[str, str]:
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k.upper() not in _STRIPPED_ENV and not k.upper().startswith("CUDA_PATH")
+    }
+    for name in _SANDBOXED_DIRS:
+        d = sandbox / name.lower()
+        d.mkdir(parents=True, exist_ok=True)
+        env[name] = str(d)
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    env["PATH"] = os.pathsep.join(
+        [os.path.join(system_root, "System32"), system_root, os.path.join(system_root, "System32", "Wbem")]
+    )
+    return env
+
+
+def _frozen_command(exe: Path) -> list[str]:
+    """Command that launches the frozen EXE. A seam so tests can substitute a stub."""
+    return [str(exe)]
+
+
+def run_frozen_self_check(
+    exe: Path,
+    work_dir: Path,
+    allow_cpu_only: bool,
+    report: Report,
+    timeout: float = FROZEN_SELF_CHECK_TIMEOUT_S,
+) -> dict | None:
+    """Run `<exe> --self-check=<json>` in a sandbox and wait for it.
+
+    subprocess.run waits for GUI-subsystem processes too (PowerShell's `&` does
+    not), so the exit code is the EXE's own. Passes only if the EXE exits 0 and
+    wrote a report that says it ran frozen and ok.
+    """
+    work_dir.mkdir(parents=True, exist_ok=True)
+    sandbox = work_dir / "self_check_sandbox"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    out = work_dir / "frozen_self_check.json"
+    if out.exists():
+        out.unlink()
+    cmd = _frozen_command(exe) + [f"--self-check={out}"]
+    if allow_cpu_only:
+        cmd.append("--self-check-allow-cpu-only")
+    env = _sandbox_env(sandbox)
+    try:
+        proc = subprocess.run(
+            cmd,
+            env=env,
+            cwd=str(sandbox),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        report.add("frozen_self_check", False, f"{exe.name} --self-check did not exit within {timeout:.0f}s")
+        return None
+    except OSError as exc:
+        report.add("frozen_self_check", False, f"could not run {exe}: {exc}")
+        return None
+
+    data: dict | None = None
+    try:
+        data = json.loads(out.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        report.add(
+            "frozen_self_check",
+            False,
+            f"exit {proc.returncode}; no readable report at {out} ({type(exc).__name__})",
+        )
+        return None
+
+    checks = data.get("checks") or {}
+    failing = [
+        f"{name}: {c.get('detail', '')}".strip()
+        for name, c in checks.items()
+        if not c.get("ok") and not c.get("warn_only")
+    ]
+    warned = [name for name, c in checks.items() if not c.get("ok") and c.get("warn_only")]
+    passed = proc.returncode == 0 and bool(data.get("ok")) and bool(data.get("frozen")) and not failing
+    if not passed:
+        why = []
+        if proc.returncode != 0:
+            why.append(f"exit {proc.returncode}")
+        if not data.get("frozen"):
+            why.append("report not produced by a frozen EXE")
+        why.extend(failing[:8])
+        report.add("frozen_self_check", False, "; ".join(why) or "report says not ok")
+        return data
+    detail = f"exit 0, {len(checks)} in-bundle checks passed ({out})"
+    if warned:
+        detail += f"; accepted warnings: {', '.join(warned)}"
+    report.add("frozen_self_check", True, detail)
+    return data
+
+
+def verify(
+    target: Path,
+    allow_cpu_only: bool,
+    *,
+    run_frozen: bool = True,
+    work_dir: Path | None = None,
+) -> Report:
+    """Verify a one-dir bundle directory or a one-file EXE."""
     report = Report()
-    exe = bundle / "VoiceFlow.exe"
-    internal = bundle / "_internal"
+    work_dir = work_dir or (REPO_ROOT / "build" / "verify_bundle")
+
+    if target.suffix.lower() == ".exe":
+        # One-file: nothing to inspect on disk; the frozen check is the gate.
+        report.add("executable", target.is_file(), str(target))
+        if not target.is_file():
+            return report
+        if not run_frozen:
+            report.add("frozen_self_check", False, "one-file builds can only be verified by the frozen self-check")
+            return report
+        report.frozen_report = run_frozen_self_check(target, work_dir, allow_cpu_only, report)
+        return report
+
+    exe = target / "VoiceFlow.exe"
+    internal = target / "_internal"
     report.add("executable", exe.is_file(), str(exe))
     report.add("internal_dir", internal.is_dir(), str(internal))
     if not (exe.is_file() and internal.is_dir()):
@@ -188,20 +315,36 @@ def verify(bundle: Path, allow_cpu_only: bool) -> Report:
     _check_native(internal, report)
     _check_cuda(internal, required, allow_cpu_only, report)
     _check_modules(exe, internal, modules, report)
+    if run_frozen:
+        report.frozen_report = run_frozen_self_check(exe, work_dir, allow_cpu_only, report)
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("bundle", type=Path, help="bundle directory, e.g. dist/VoiceFlow")
+    parser.add_argument("bundle", type=Path, help="one-dir bundle (dist/VoiceFlow) or one-file EXE (dist/VoiceFlow.exe)")
     parser.add_argument("--allow-cpu-only", action="store_true", help="accept a bundle without CUDA DLLs (loud warning)")
     parser.add_argument("--json-out", type=Path, default=None)
+    parser.add_argument(
+        "--static-only",
+        action="store_true",
+        help="skip running the EXE's --self-check (debugging only; the build never passes this)",
+    )
     args = parser.parse_args(argv)
 
-    report = verify(args.bundle.resolve(), args.allow_cpu_only)
+    work_dir = args.json_out.resolve().parent if args.json_out else None
+    report = verify(args.bundle.resolve(), args.allow_cpu_only, run_frozen=not args.static_only, work_dir=work_dir)
     if args.json_out:
         args.json_out.write_text(
-            json.dumps({"ok": report.ok, "bundle": str(args.bundle.resolve()), "checks": report.checks}, indent=2),
+            json.dumps(
+                {
+                    "ok": report.ok,
+                    "bundle": str(args.bundle.resolve()),
+                    "checks": report.checks,
+                    "frozen_report": report.frozen_report,
+                },
+                indent=2,
+            ),
             encoding="utf-8",
         )
     if report.ok:

@@ -39,18 +39,18 @@ powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -Ou
 
 The build script stops stale VoiceFlow processes before packaging and bundles the setup wizard runtime assets needed by the packaged app.
 
-The build **fails (non-zero exit)** unless the bundle is fit for daily use. After PyInstaller it runs `scripts\setup\verify_bundle.py`, which checks:
+The build **fails (non-zero exit)** unless the bundle is fit for daily use. After PyInstaller, in both one-dir and `-OneFile` mode, it runs `scripts\setup\verify_bundle.py`:
 
-- the Silero VAD model (`_internal\faster_whisper\assets\silero_vad_v6.onnx`) is present and loads in onnxruntime
-- onnxruntime and ctranslate2 native libraries are present
-- the CUDA runtime (`cudnn_ops64_9.dll`, `cublas64_12.dll`, `cublasLt64_12.dll`, `cudnn64_9.dll`) is under `_internal\torch\lib` and loads
-- the app's modules are inside the executable's PYZ archive
+1. **Frozen self-check (the gate).** It runs `VoiceFlow.exe --self-check=<json>` and waits for it. That path returns before the tray, hotkeys or microphone are initialized. Inside the frozen interpreter it imports the app's modules from the bundle, confirms onnxruntime was loaded from the bundle, runs Silero VAD on a second of silence through the bundled onnxruntime (the exact call that failed in the field), and loads the CUDA runtime DLLs from the bundle's own `torch\lib` (PATH and venvs are ignored). The EXE runs with `LOCALAPPDATA`, `APPDATA`, `TEMP` and `USERPROFILE` pointed at `build\pyinstaller\self_check_sandbox` and a minimal `PATH`, so it cannot touch live app data or borrow DLLs from the build machine. Its report is `build\pyinstaller\frozen_self_check.json`.
+2. **Static pre-filter (one-dir only).** Checks the files on disk: the VAD model (`_internal\faster_whisper\assets\silero_vad_v6.onnx`) loads as ONNX, onnxruntime and ctranslate2 natives exist, the CUDA runtime (`cudnn_ops64_9.dll`, `cublas64_12.dll`, `cublasLt64_12.dll`, `cudnn64_9.dll`) is under `_internal\torch\lib` and loads, and the app's modules are inside the PYZ.
 
-The report is written to `build\pyinstaller\verify_bundle.json`. CUDA DLLs come from torch in the build venv, or from `VOICEFLOW_TORCH_LIB_DIR` (any `torch\lib` folder that has them). A CPU-only bundle needs an explicit `-AllowCpuOnly` (with or without `-SkipCudaRuntime`); without it a missing CUDA runtime is an error, because a CPU-only bundle silently demotes a `device=cuda` config to int8.
+The combined report is written to `build\pyinstaller\verify_bundle.json`. CUDA DLLs come from torch in the build venv, or from `VOICEFLOW_TORCH_LIB_DIR` (any `torch\lib` folder that has them). A CPU-only bundle needs an explicit `-AllowCpuOnly` (with or without `-SkipCudaRuntime`); without it a missing CUDA runtime is an error, because a CPU-only bundle silently demotes a `device=cuda` config to int8. `-AllowCpuOnly` is passed through to the frozen check as `--self-check-allow-cpu-only`.
 
-To check a bundle from inside the frozen app (imports every module, probes CUDA the way the app does, never starts the tray, hotkeys or microphone), with VoiceFlow not otherwise running:
+To re-check a bundle by hand, with VoiceFlow not otherwise running:
 
 ```powershell
+python scripts\setup\verify_bundle.py dist\VoiceFlow --json-out build\pyinstaller\verify_bundle.json
+# or run the frozen check directly
 dist\VoiceFlow\VoiceFlow.exe --self-check=$env:TEMP\voiceflow_self_check.json
 ```
 
