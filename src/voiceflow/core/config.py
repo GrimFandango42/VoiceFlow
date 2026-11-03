@@ -145,6 +145,9 @@ class Config:
 
     # Quality improvements without speed impact
     enable_smart_prompting: bool = True  # Adaptive prompting for better accuracy
+    # Names Whisper should prefer, re-applied to every 30 s window (faster-whisper hotwords).
+    # Keep this SHORT: a long list biases ordinary speech toward the list. Empty disables.
+    asr_hotwords: str = "VoiceFlow, Wispr, Claude, Codex, Atlas, LIMS, Veeva"
     use_enhanced_post_processing: bool = True  # Smart text cleaning
     enable_light_typo_correction: bool = True  # Low-latency typo/spelling cleanup before injection
     enable_safe_second_pass_cleanup: bool = True  # Deterministic low-cost cleanup after main formatting
