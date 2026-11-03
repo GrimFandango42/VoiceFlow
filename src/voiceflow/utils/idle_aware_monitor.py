@@ -57,12 +57,25 @@ class IdleAwareMonitor:
                  operation_timeout: float = 120.0,      # Max time for active operations
                  memory_warning_mb: float = 1024.0,     # Warn at 1GB
                  memory_critical_mb: float = 2048.0,    # Critical at 2GB
-                 check_interval: float = 10.0):         # Check every 10 seconds
+                 check_interval: float = 10.0,          # Check every 10 seconds
+                 recording_timeout: float = 1800.0,     # Hard ceiling for one hold
+                 recording_stall_seconds: float = 15.0,  # No audio this long = stuck
+                 activity_probe: Optional[Callable[[], int]] = None):
 
         self.operation_timeout = operation_timeout
         self.memory_warning_mb = memory_warning_mb
         self.memory_critical_mb = memory_critical_mb
         self.check_interval = check_interval
+
+        # Holding the hotkey is not a hang. A long dictation is healthy for as
+        # long as the audio stream keeps delivering blocks; only a stalled
+        # stream (probe stops advancing) or an absurdly long hold (stuck key)
+        # is flagged. Without a probe, recording falls back to the ceiling.
+        self.recording_timeout = max(float(recording_timeout), float(operation_timeout))
+        self.recording_stall_seconds = max(1.0, float(recording_stall_seconds))
+        self.activity_probe = activity_probe
+        self._probe_last_value: Optional[int] = None
+        self._probe_last_change = time.time()
 
         # State tracking
         self.current_state = ProcessState.IDLE
@@ -134,6 +147,9 @@ class IdleAwareMonitor:
             self.current_state = new_state
             self.state_start_time = time.time()
             self.last_activity_time = time.time()
+            if new_state == ProcessState.RECORDING:
+                self._probe_last_value = None
+                self._probe_last_change = self.state_start_time
 
             # Reset error counter when returning to idle
             if new_state == ProcessState.IDLE:
@@ -205,8 +221,11 @@ class IdleAwareMonitor:
             return True
 
         elif state == ProcessState.RECORDING:
-            # Recording has a reasonable timeout (e.g., 2 minutes)
-            return duration < self.operation_timeout
+            if duration < self.operation_timeout:
+                return True
+            if duration >= self.recording_timeout:
+                return False
+            return self._recording_audio_flowing()
 
         elif state == ProcessState.PROCESSING:
             # Processing/transcription has a timeout
@@ -222,6 +241,22 @@ class IdleAwareMonitor:
 
         return True
 
+    def _recording_audio_flowing(self) -> bool:
+        """True while the activity probe keeps advancing (caller holds state_lock)."""
+        probe = self.activity_probe
+        if probe is None:
+            return True  # no evidence of a stall; the hard ceiling still applies
+        try:
+            value = int(probe())
+        except Exception:
+            return True
+        now = time.time()
+        if self._probe_last_value is None or value != self._probe_last_value:
+            self._probe_last_value = value
+            self._probe_last_change = now
+            return True
+        return (now - self._probe_last_change) < self.recording_stall_seconds
+
     def _monitor_loop(self):
         """Main monitoring loop"""
         last_report_time = time.time()
@@ -233,8 +268,15 @@ class IdleAwareMonitor:
 
                 # Check for hung operations (but don't re-detect hangs)
                 if not health.is_healthy and health.state not in [ProcessState.IDLE, ProcessState.HUNG]:
-                    hang_reason = f"Operation '{health.state.value}' exceeded timeout " \
-                                 f"({health.state_duration:.1f}s > {self.operation_timeout}s)"
+                    if health.state == ProcessState.RECORDING:
+                        hang_reason = (
+                            f"Operation 'recording' stalled: no audio for "
+                            f"{self.recording_stall_seconds:.0f}s or hold exceeded "
+                            f"{self.recording_timeout:.0f}s ({health.state_duration:.1f}s held)"
+                        )
+                    else:
+                        hang_reason = f"Operation '{health.state.value}' exceeded timeout " \
+                                     f"({health.state_duration:.1f}s > {self.operation_timeout}s)"
                     logger.warning(f"Hang detected: {hang_reason}")
 
                     if self.on_hang_detected:

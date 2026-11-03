@@ -6,11 +6,19 @@ param(
     [switch]$Console,
     [switch]$InstallPackagingDeps,
     [switch]$SkipCudaRuntime,
+    # A bundle without the CUDA runtime silently demotes a device=cuda config to
+    # CPU int8. That shipped twice by accident, so it now needs an explicit
+    # opt-in; without it a missing CUDA runtime fails the build.
+    [switch]$AllowCpuOnly,
     [switch]$SkipProcessCleanup
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($SkipCudaRuntime -and -not $AllowCpuOnly) {
+    throw "[build_windows_exe] -SkipCudaRuntime produces a CPU-only bundle. Pass -AllowCpuOnly as well if that is really what you want."
+}
 
 function Resolve-PythonExe {
     param([string]$RepoRoot, [string]$ExplicitPython)
@@ -413,6 +421,11 @@ $args = @(
     # line under the waveform never populated. ~15 MB is worth a working preview.
     "--hidden-import", "onnxruntime",
     "--collect-all", "onnxruntime",
+    # ...and the Silero model itself. faster-whisper loads
+    # faster_whisper/assets/silero_vad_v6.onnx from its package directory; without
+    # this the preview logs "[ONNXRuntimeError] NO_SUCHFILE" every session (VF-09).
+    "--hidden-import", "faster_whisper.vad",
+    "--collect-data", "faster_whisper",
     "--add-data", ((Join-Path $repoRoot "docs\examples\engineering_terms.json") + ";defaults"),
     "--add-data", ((Join-Path $repoRoot "docs\examples\technical_terms.json") + ";defaults"),
     # Bundled vocabulary seed; copied to user's custom_vocabulary.txt on first launch.
@@ -460,9 +473,15 @@ if (-not $SkipCudaRuntime) {
             $args += @("--add-binary", ($dll + ";torch/lib"))
         }
         Write-Host ("[build_windows_exe] Bundling CUDA runtime DLLs: {0}" -f $cudaDlls.Count)
+    } elseif ($AllowCpuOnly) {
+        Write-Warning "[build_windows_exe] No CUDA runtime DLLs found; -AllowCpuOnly given, so this bundle runs CPU int8 ONLY."
     } else {
-        Write-Host "[build_windows_exe] No CUDA runtime DLLs found; package will run CPU-only unless host provides them."
+        throw ("[build_windows_exe] No CUDA runtime DLLs found (need cudnn_ops64_9.dll, cublas64_12.dll and friends). " +
+            "Install torch in the build venv, or set VOICEFLOW_TORCH_LIB_DIR to a torch\lib folder that has them. " +
+            "Pass -AllowCpuOnly only if a CPU-only bundle is intended.")
     }
+} else {
+    Write-Warning "[build_windows_exe] ==== CPU-ONLY BUILD (-SkipCudaRuntime -AllowCpuOnly): no CUDA runtime will be bundled ===="
 }
 
 $args += $entryScript
@@ -483,6 +502,7 @@ if ($OneFile) {
     }
     $zipOut = Join-Path $packagePath "$OutputName-$timestamp-onefile.zip"
     Write-Host "[build_windows_exe] Built one-file executable: $oneFileExe"
+    Write-Warning "[build_windows_exe] verify_bundle.py checks the one-dir layout only; this one-file EXE is unverified. Run '$OutputName.exe --self-check=<report.json>' on the target machine."
     if (Compress-ArchiveWithRetry -Path @($oneFileExe) -DestinationPath $zipOut) {
         Write-Host "[build_windows_exe] Zip artifact: $zipOut"
     } else {
@@ -494,6 +514,23 @@ if ($OneFile) {
     }
     Remove-ConflictingRuntimeDlls -BundleRoot $bundleRoot
     Remove-DuplicateCudaDlls -BundleRoot $bundleRoot
+
+    # Post-build self-check: VAD asset, onnxruntime/ctranslate2 natives, CUDA
+    # runtime (loads, not just present) and the app's modules in the PYZ.
+    # A failure here exits non-zero instead of leaving a quietly broken bundle.
+    $verifyScript = Join-Path $repoRoot "scripts\setup\verify_bundle.py"
+    $verifyReport = Join-Path $workPath "verify_bundle.json"
+    $verifyArgs = @($verifyScript, $bundleRoot, "--json-out", $verifyReport)
+    if ($AllowCpuOnly) {
+        $verifyArgs += "--allow-cpu-only"
+    }
+    Write-Host "[build_windows_exe] Verifying bundle..."
+    & $pythonExe @verifyArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "[build_windows_exe] Bundle self-check FAILED (exit $LASTEXITCODE). Report: $verifyReport"
+    }
+    Write-Host "[build_windows_exe] Bundle self-check passed. Report: $verifyReport"
+
     $zipOut = Join-Path $packagePath "$OutputName-$timestamp-portable.zip"
     Write-Host "[build_windows_exe] Built bundled executable: $(Join-Path $bundleRoot "$OutputName.exe")"
     if (Compress-ArchiveWithRetry -Path @((Join-Path $bundleRoot "*")) -DestinationPath $zipOut) {

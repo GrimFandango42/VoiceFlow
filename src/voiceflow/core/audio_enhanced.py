@@ -271,9 +271,30 @@ def _fast_audio_validation_guard(audio_data: np.ndarray,
     return audio_data
 
 
+def _block_to_mono(indata) -> np.ndarray:
+    """Copy one PortAudio block into a fresh mono float32 array, cheaply.
+
+    Runs on the audio thread, so it must stay O(block) with no logging, no
+    allocation beyond the copy, and no locks. Non-finite samples (a driver
+    glitch, never seen from a real mic) are zeroed in place rather than
+    rejecting the block.
+    """
+    arr = np.asarray(indata, dtype=np.float32)
+    if arr.ndim == 2:
+        if arr.shape[1] == 1:
+            block = arr[:, 0].copy()
+        else:
+            block = arr.mean(axis=1, dtype=np.float32)
+    else:
+        block = arr.reshape(-1).copy()
+    if block.size and not np.isfinite(block).all():
+        np.nan_to_num(block, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
+    return block
+
+
 class BoundedRingBuffer:
     """Memory-safe ring buffer for audio data with size limits"""
-    
+
     def __init__(self, max_duration_seconds: float, sample_rate: int):
         self.max_samples = int(max_duration_seconds * sample_rate)
         self.sample_rate = sample_rate
@@ -282,50 +303,53 @@ class BoundedRingBuffer:
         self.samples_written = 0
         self.lock = threading.Lock()
         print(f"[AudioBuffer] Initialized with {max_duration_seconds}s capacity ({self.max_samples} samples)")
-    
+
     def append(self, data: np.ndarray):
-        """Add data to ring buffer, overwriting old data if full"""
+        """Add data to ring buffer, overwriting old data if full.
+
+        Validates first. Use `append_block` from the audio callback instead:
+        validation can log, and logging on the audio thread drops frames.
+        """
+        try:
+            data = audio_validation_guard(data, "RingBuffer.append", allow_empty=True)
+        except Exception as e:
+            logger.error(f"[RingBuffer] Critical error in append: {e}")
+            return
+        self.append_block(data)
+
+    def append_block(self, data: np.ndarray) -> None:
+        """Append an already-sanitized mono float32 block. Callback-safe.
+
+        The lock is held only for the memcpy, so a reader can never stall the
+        audio thread for longer than one copy.
+        """
+        data_len = int(data.size)
+        if data_len == 0:
+            return
         with self.lock:
-            try:
-                # CRITICAL: Validate and sanitize input data
-                data = audio_validation_guard(data, "RingBuffer.append", allow_empty=True)
-
-                # Skip if empty after validation
-                if data.size == 0:
-                    return
-
-                data_len = len(data)
-
-                if data_len >= self.max_samples:
-                    # Data larger than buffer - take only the most recent part
-                    data = data[-self.max_samples:]
-                    data_len = len(data)
-                    self.buffer[:data_len] = data
-                    self.write_pos = data_len % self.max_samples
-                    self.samples_written = data_len
-                    return
-
-                # Normal case: append to buffer
-                end_pos = self.write_pos + data_len
-
-                if end_pos <= self.max_samples:
-                    # No wraparound needed
-                    self.buffer[self.write_pos:end_pos] = data
-                else:
-                    # Wraparound needed
-                    first_part_len = self.max_samples - self.write_pos
-                    self.buffer[self.write_pos:] = data[:first_part_len]
-                    remaining = data[first_part_len:]
-                    self.buffer[:len(remaining)] = remaining
-
-                self.write_pos = end_pos % self.max_samples
+            if data_len >= self.max_samples:
+                # Data larger than buffer - keep only the most recent part.
+                self.buffer[:] = data[-self.max_samples:]
+                self.write_pos = 0
                 self.samples_written += data_len
-
-            except Exception as e:
-                logger.error(f"[RingBuffer] Critical error in append: {e}")
-                # Don't crash - just skip this data
                 return
-    
+
+            end_pos = self.write_pos + data_len
+            if end_pos <= self.max_samples:
+                self.buffer[self.write_pos:end_pos] = data
+            else:
+                first_part_len = self.max_samples - self.write_pos
+                self.buffer[self.write_pos:] = data[:first_part_len]
+                self.buffer[:data_len - first_part_len] = data[first_part_len:]
+
+            self.write_pos = end_pos % self.max_samples
+            self.samples_written += data_len
+
+    def overwritten_samples(self) -> int:
+        """Samples lost to wraparound since the last clear (0 if none)."""
+        with self.lock:
+            return max(0, int(self.samples_written) - int(self.max_samples))
+
     def get_data(self) -> np.ndarray:
         """Get all data from buffer in correct order"""
         with self.lock:
@@ -411,10 +435,29 @@ class EnhancedAudioRecorder:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self._stream: Optional[sd.InputStream] = None
-        
-        # CRITICAL FIX: Bounded buffer instead of unlimited list
-        max_duration = 300.0  # 5 minutes maximum
+
+        # Bounded buffer: memory is fixed at capacity no matter how long the
+        # key is held. Past capacity the oldest audio is overwritten; stop()
+        # logs how much was lost so it is never silent.
+        try:
+            max_duration = float(getattr(cfg, "max_recording_seconds", 300.0))
+        except (TypeError, ValueError):
+            max_duration = 300.0
+        if not (10.0 <= max_duration <= 1800.0):
+            max_duration = 300.0
+        self._max_duration = max_duration
         self._ring_buffer = BoundedRingBuffer(max_duration, cfg.sample_rate)
+
+        # Audio-thread health counters. Written only from the PortAudio
+        # callbacks (one writer per counter), read from anywhere. Nothing is
+        # logged on the audio thread: file I/O there is what drops frames.
+        self._overflow_count = 0             # recording stream input overflows
+        self._continuous_overflow_count = 0  # pre-buffer stream input overflows
+        self._other_status_count = 0         # any other PortAudio status flag
+        self._callback_error_count = 0
+        self._ring_wrap_count = 0            # recordings that exceeded capacity
+        self._overflow_at_start = 0
+        self._continuous_overflow_at_start = 0
         
         # PRE-RECORDING BUFFER: Continuously captures audio to prevent word loss
         self._pre_buffer_duration = 1.5  # 1500ms pre-buffer (optimized for key-press timing)
@@ -437,61 +480,81 @@ class EnhancedAudioRecorder:
         print(f"  - Max duration: {max_duration}s")
         print(f"  - Pre-buffer: {self._pre_buffer_duration}s")
 
-    def _callback(self, indata, frames, time, status):
-        """Enhanced audio callback with bounded buffer and validation"""
+    def _note_status(self, status, *, continuous: bool) -> None:
+        """Count a PortAudio status flag. Audio-thread safe: no I/O."""
+        if getattr(status, "input_overflow", False):
+            if continuous:
+                self._continuous_overflow_count += 1
+            else:
+                self._overflow_count += 1
+        else:
+            self._other_status_count += 1
+
+    def _callback(self, indata, frames, time_info, status):
+        """Recording-stream callback. Must never block: copy, append, return.
+
+        Previously this ran the full validation guard twice (once here, once in
+        the ring buffer), logged PortAudio status from the audio thread and
+        printed every 200 blocks. Any of those can stall long enough for the
+        driver to overrun -- the `input overflow` warnings in the field log.
+        """
         if status:
-            # Log non-fatal warnings from PortAudio
-            logger.warning(f"[AudioRecorder] PortAudio status: {status}")
+            self._note_status(status, continuous=False)
 
         if not self._recording:
             return
 
         try:
-            self._callback_count += 1
+            self._ring_buffer.append_block(_block_to_mono(indata))
             self._total_frames += frames
+            # Counted after the append so the stop-drain sees a block only once
+            # it is actually in the buffer.
+            self._callback_count += 1
+        except Exception:
+            self._callback_error_count += 1
 
-            # CRITICAL: Validate input data first
-            data = audio_validation_guard(indata.copy(), "AudioCallback", allow_empty=True)
-
-            # Skip if empty after validation
-            if data.size == 0:
-                return
-
-            # Convert to mono if needed (already handled by validation guard)
-            # Add to bounded buffer (thread-safe)
-            self._ring_buffer.append(data)
-
-            # Reduced logging: only log every 200 callbacks (~12.8 seconds)
-            if self._callback_count % 200 == 0:
-                duration = self._ring_buffer.get_duration_seconds()
-                print(f"[AudioRecorder] Recording: {duration:.1f}s")
-
-        except Exception as e:
-            logger.error(f"[AudioRecorder] Critical error in audio callback: {e}")
-            # Don't crash the audio stream - just skip this frame
-    
-    def _continuous_callback(self, indata, frames, time, status):
-        """Continuous pre-recording callback for seamless capture"""
+    def _continuous_callback(self, indata, frames, time_info, status):
+        """Pre-buffer callback. Same no-blocking rules as `_callback`."""
         if status:
-            logger.warning(f"[AudioRecorder] Continuous audio status: {status}")
+            self._note_status(status, continuous=True)
 
         if not self._continuous_recording:
             return
 
         try:
-            # CRITICAL: Validate input data first
-            data = audio_validation_guard(indata.copy(), "ContinuousCallback", allow_empty=True)
+            self._pre_buffer.append_block(_block_to_mono(indata))
+        except Exception:
+            self._callback_error_count += 1
 
-            # Skip if empty after validation
-            if data.size == 0:
-                return
+    def _stream_latency(self):
+        """PortAudio latency for both input streams.
 
-            # Add to pre-buffer (always running)
-            self._pre_buffer.append(data)
+        'high' gives the driver the most headroom before it overruns. The
+        hotkey-to-text path does not depend on this: the pre-buffer covers the
+        start, the stop drain covers the tail.
+        """
+        raw = getattr(self.cfg, "audio_input_latency", "high")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            value = float(raw)
+            return value if 0.0 < value <= 1.0 else "high"
+        text = str(raw or "").strip().lower()
+        if text in ("high", "low"):
+            return text
+        try:
+            value = float(text)
+        except ValueError:
+            return "high"
+        return value if 0.0 < value <= 1.0 else "high"
 
-        except Exception as e:
-            logger.error(f"[AudioRecorder] Critical error in continuous callback: {e}")
-            # Don't crash the audio stream - just skip this frame
+    def get_audio_health(self) -> dict:
+        """Snapshot of audio-thread health counters for the health report."""
+        return {
+            "overflow_recording": int(self._overflow_count),
+            "overflow_continuous": int(self._continuous_overflow_count),
+            "status_other": int(self._other_status_count),
+            "callback_errors": int(self._callback_error_count),
+            "ring_wraps": int(self._ring_wrap_count),
+        }
 
     def start(self):
         """Start recording with pre-buffer integration"""
@@ -522,18 +585,22 @@ class EnhancedAudioRecorder:
                 recent_samples = int(0.8 * self.cfg.sample_rate)
                 pre_buffer_data = pre_buffer_data[-recent_samples:]
             
-            # Add pre-buffer to main buffer for this recording only
-            self._ring_buffer.append(pre_buffer_data)
-        
+            # Add pre-buffer to main buffer for this recording only.
+            # Pre-buffer blocks were sanitized on the way in.
+            self._ring_buffer.append_block(pre_buffer_data)
+
         self._callback_count = 0
         self._total_frames = 0
         self._start_time = time.time()
-        
+        self._overflow_at_start = self._overflow_count
+        self._continuous_overflow_at_start = self._continuous_overflow_count
+
         self._stream = sd.InputStream(
             channels=self.cfg.channels,
             samplerate=self.cfg.sample_rate,
             dtype="float32",
             blocksize=self.cfg.blocksize,
+            latency=self._stream_latency(),
             callback=self._callback,
         )
         self._stream.start()
@@ -601,7 +668,26 @@ class EnhancedAudioRecorder:
             # Get the recorded audio data
             audio_data = self._ring_buffer.get_data()
             duration = len(audio_data) / self.cfg.sample_rate
-            
+            lost_samples = self._ring_buffer.overwritten_samples()
+
+            # Report audio-thread trouble from this (non-audio) thread.
+            overflows = self._overflow_count - self._overflow_at_start
+            continuous_overflows = self._continuous_overflow_count - self._continuous_overflow_at_start
+            if overflows > 0 or continuous_overflows > 0:
+                logger.warning(
+                    "audio_input_overflow recording=%d continuous=%d duration=%.2f",
+                    overflows,
+                    continuous_overflows,
+                    duration,
+                )
+            if lost_samples > 0:
+                self._ring_wrap_count += 1
+                logger.warning(
+                    "recording_ring_wrapped capacity_s=%.0f lost_seconds=%.2f",
+                    self._max_duration,
+                    lost_samples / float(self.cfg.sample_rate),
+                )
+
             # CRITICAL FIX: Clear buffer after getting data to prevent accumulation
             self._ring_buffer.clear()
             print(f"[AudioRecorder] Buffer cleared after extraction to prevent accumulation")
@@ -642,6 +728,7 @@ class EnhancedAudioRecorder:
             samplerate=self.cfg.sample_rate,
             dtype="float32",
             blocksize=self.cfg.blocksize,
+            latency=self._stream_latency(),
             callback=self._continuous_callback,
         )
         self._continuous_stream.start()

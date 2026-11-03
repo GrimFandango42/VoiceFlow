@@ -39,6 +39,23 @@ powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -Ou
 
 The build script stops stale VoiceFlow processes before packaging and bundles the setup wizard runtime assets needed by the packaged app.
 
+The build **fails (non-zero exit)** unless the bundle is fit for daily use. After PyInstaller it runs `scripts\setup\verify_bundle.py`, which checks:
+
+- the Silero VAD model (`_internal\faster_whisper\assets\silero_vad_v6.onnx`) is present and loads in onnxruntime
+- onnxruntime and ctranslate2 native libraries are present
+- the CUDA runtime (`cudnn_ops64_9.dll`, `cublas64_12.dll`, `cublasLt64_12.dll`, `cudnn64_9.dll`) is under `_internal\torch\lib` and loads
+- the app's modules are inside the executable's PYZ archive
+
+The report is written to `build\pyinstaller\verify_bundle.json`. CUDA DLLs come from torch in the build venv, or from `VOICEFLOW_TORCH_LIB_DIR` (any `torch\lib` folder that has them). A CPU-only bundle needs an explicit `-AllowCpuOnly` (with or without `-SkipCudaRuntime`); without it a missing CUDA runtime is an error, because a CPU-only bundle silently demotes a `device=cuda` config to int8.
+
+To check a bundle from inside the frozen app (imports every module, probes CUDA the way the app does, never starts the tray, hotkeys or microphone), with VoiceFlow not otherwise running:
+
+```powershell
+dist\VoiceFlow\VoiceFlow.exe --self-check=$env:TEMP\voiceflow_self_check.json
+```
+
+Exit code 0 means every check passed; the JSON lists each one.
+
 Output:
 
 - Bundle: `dist\VoiceFlow\`

@@ -144,9 +144,110 @@ def _run_diagnostic_benchmark(wav_path: Path) -> int:
     return 0
 
 
+# Modules the running app needs. A missing one here is a broken bundle.
+SELF_CHECK_MODULES = (
+    "voiceflow.core.asr_engine",
+    "voiceflow.core.audio_enhanced",
+    "voiceflow.core.streaming",
+    "voiceflow.integrations.inject",
+    "voiceflow.integrations.hotkeys_enhanced",
+    "voiceflow.ui.cli_enhanced",
+    "faster_whisper",
+    "faster_whisper.vad",
+    "ctranslate2",
+    "onnxruntime",
+    "sounddevice",
+    "keyboard",
+    "pystray",
+    "win32gui",
+    "tkinter",
+)
+
+
+def _run_self_check(out_path: str) -> int:
+    """Verify the frozen bundle without starting the app (no tray, hotkeys, mic).
+
+    Imports the app's modules, loads the Silero VAD asset through onnxruntime and
+    probes the CUDA runtime, then writes a JSON report. The windowed EXE has no
+    console, so the report goes to a file:
+        VoiceFlow.exe --self-check=C:\\path\\report.json
+    Exit code 0 = everything the daily-driver path needs is present.
+    """
+    import importlib
+    import json
+    import traceback
+
+    report: dict = {"frozen": bool(getattr(sys, "frozen", False)), "checks": {}}
+    ok = True
+
+    def _record(name: str, passed: bool, detail: str = "") -> None:
+        nonlocal ok
+        report["checks"][name] = {"ok": bool(passed), "detail": detail}
+        ok = ok and bool(passed)
+
+    for mod in SELF_CHECK_MODULES:
+        try:
+            importlib.import_module(mod)
+            _record(f"import:{mod}", True)
+        except Exception as exc:  # noqa: BLE001 - report every failure
+            _record(f"import:{mod}", False, f"{type(exc).__name__}: {exc}")
+
+    try:
+        from faster_whisper.utils import get_assets_path
+
+        vad_path = Path(get_assets_path()) / "silero_vad_v6.onnx"
+        if not vad_path.is_file():
+            _record("vad_asset", False, f"missing: {vad_path}")
+        else:
+            import onnxruntime
+
+            onnxruntime.InferenceSession(str(vad_path), providers=["CPUExecutionProvider"])
+            _record("vad_asset", True, str(vad_path))
+    except Exception as exc:  # noqa: BLE001
+        _record("vad_asset", False, f"{type(exc).__name__}: {exc}")
+
+    try:
+        from voiceflow.core import asr_engine
+
+        cuda_ready = bool(asr_engine._cuda_runtime_ready())
+        missing = asr_engine._missing_cuda_dlls(list(asr_engine.CUDA_REQUIRED_DLLS))
+        report["cuda_ready"] = cuda_ready
+        report["cuda_missing_dlls"] = missing
+        # Missing DLLs is a broken GPU bundle. "No GPU on this machine" is not.
+        _record("cuda_runtime_dlls", not missing, ",".join(missing) or "all present")
+    except Exception as exc:  # noqa: BLE001
+        _record("cuda_runtime_dlls", False, f"{type(exc).__name__}: {exc}")
+
+    report["ok"] = ok
+    text = json.dumps(report, indent=2)
+    try:
+        Path(out_path).write_text(text, encoding="utf-8")
+    except Exception:
+        traceback.print_exc()
+        ok = False
+    if sys.stdout is not None:
+        try:
+            print(text)
+        except Exception:
+            pass
+    return 0 if ok else 1
+
+
+def _self_check_target(argv: list[str]) -> str | None:
+    for arg in argv[1:]:
+        if arg == "--self-check":
+            return str(Path(os.environ.get("TEMP", ".")) / "voiceflow_self_check.json")
+        if arg.startswith("--self-check="):
+            return arg.split("=", 1)[1]
+    return None
+
+
 def main() -> int:
     _ensure_src_on_path()
     _configure_frozen_tk_runtime()
+    self_check_out = _self_check_target(sys.argv)
+    if self_check_out:
+        return _run_self_check(self_check_out)
     diag_wav = os.environ.get("VOICEFLOW_DIAG_BENCH_WAV", "").strip()
     if diag_wav:
         return _run_diagnostic_benchmark(Path(diag_wav).expanduser())
