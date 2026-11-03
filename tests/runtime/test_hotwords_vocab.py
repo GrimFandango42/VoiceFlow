@@ -118,11 +118,24 @@ def test_guardrail_keeps_the_default_and_trims_an_overlong_list() -> None:
 
 
 def test_hotword_list_read_back_on_silence_is_discarded() -> None:
-    assert _is_hotword_echo("VoiceFlow, Wispr Claude Codex", HOTWORDS) is True
+    # Hotwords only + the decoder says "probably no speech": a hallucinated echo.
+    assert _is_hotword_echo("VoiceFlow, Wispr Claude Codex", HOTWORDS, no_speech_prob=0.9) is True
+    # The entire list in order is discarded even without no-speech evidence.
+    assert _is_hotword_echo("VoiceFlow, Wispr, Claude, Codex, Atlas, LIMS, Veeva", HOTWORDS) is True
     # Real dictation that merely mentions some of the terms is kept.
-    assert _is_hotword_echo("Claude", HOTWORDS) is False
-    assert _is_hotword_echo("open Claude and ask Codex about Atlas", HOTWORDS) is False
-    assert _is_hotword_echo("anything at all", "") is False
+    assert _is_hotword_echo("Claude", HOTWORDS, no_speech_prob=0.99) is False
+    assert _is_hotword_echo("open Claude and ask Codex about Atlas", HOTWORDS, no_speech_prob=0.99) is False
+    assert _is_hotword_echo("anything at all", "", no_speech_prob=0.99) is False
+
+
+@pytest.mark.parametrize(
+    "spoken",
+    ["Claude, Codex, Atlas", "Claude Codex Atlas", "Wispr Claude Codex Atlas LIMS", "Atlas, Veeva, LIMS"],
+)
+def test_legitimate_hotword_only_speech_survives(spoken: str) -> None:
+    """VF-11 review: a spoken list of configured names is real speech, not a hallucination."""
+    assert _is_hotword_echo(spoken, HOTWORDS) is False
+    assert _is_hotword_echo(spoken, HOTWORDS, no_speech_prob=0.05) is False
 
 
 def test_engine_blanks_a_hotword_echo_but_keeps_real_speech(monkeypatch) -> None:
@@ -130,7 +143,27 @@ def test_engine_blanks_a_hotword_echo_but_keeps_real_speech(monkeypatch) -> None
     engine = asr_engine.ASREngine(model_name="tiny.en", device="cpu", hotwords=HOTWORDS)
     engine._backend = _backend(model)
     engine.model_config.hotwords = HOTWORDS
+
+    # Confident speech (the fixture segment has no_speech_prob=0.01): kept.
+    assert engine.transcribe(AUDIO).text == "VoiceFlow Wispr Claude Codex Atlas"
+
+    # Same words, but the decoder believes it is silence: discarded.
+    class _SilentModel(_ModelWithHotwords):
+        def transcribe(self, audio, **kw):
+            self.calls.append(kw)
+            seg = SimpleNamespace(text=self.text, start=0.0, end=1.0, avg_logprob=-0.2, no_speech_prob=0.95)
+            return iter([seg]), SimpleNamespace(language="en")
+
+    engine._backend = _backend(_SilentModel(text="VoiceFlow Wispr Claude Codex Atlas"))
     assert engine.transcribe(AUDIO).text == ""
+
+    # The whole list read back, with confident decoding: discarded.
+    model.text = "VoiceFlow, Wispr, Claude, Codex, Atlas, LIMS, Veeva"
+    engine._backend = _backend(model)
+    assert engine.transcribe(AUDIO).text == ""
+
+    model.text = "Claude Codex Atlas"
+    assert engine.transcribe(AUDIO).text == "Claude Codex Atlas"
 
     model.text = "send the Atlas report to Veeva"
     assert engine.transcribe(AUDIO).text == "send the Atlas report to Veeva"

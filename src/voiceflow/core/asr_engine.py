@@ -284,15 +284,34 @@ def _model_accepts_hotwords(model: Any) -> bool:
     )
 
 
-def _is_hotword_echo(text: str, hotwords: str) -> bool:
-    """True when ``text`` is nothing but the hotword list read back.
+# faster-whisper's own default ``no_speech_threshold``: a window the decoder itself
+# considers more likely silence than speech.
+_HOTWORD_ECHO_NO_SPEECH_PROB = 0.6
 
-    Biasing text can surface on silence or noise as a hallucination. Three or more
-    words that all come from the hotword list are never a real dictation.
+
+def _is_hotword_echo(text: str, hotwords: str, no_speech_prob: float = 0.0) -> bool:
+    """True when ``text`` is the hotword list read back on silence/noise.
+
+    Biasing text can surface on silence as a hallucination. A dictation that merely
+    consists of configured names ("Claude, Codex, Atlas") is real speech and must
+    survive, so a text made only of hotwords is discarded only when
+
+    * the decoder reported no-speech evidence (``no_speech_prob`` at or above
+      ``_HOTWORD_ECHO_NO_SPEECH_PROB``), or
+    * it is the entire hotword list, in order -- the exact string the bias text
+      spells out, which nobody dictates.
     """
-    vocab = {w for w in re.findall(r"[a-z0-9']+", (hotwords or "").lower()) if w}
-    words = re.findall(r"[a-z0-9']+", (text or "").lower())
-    return len(words) >= 3 and bool(vocab) and all(w in vocab for w in words)
+    pattern = r"[a-z0-9']+"
+    listed = re.findall(pattern, (hotwords or "").lower())
+    words = re.findall(pattern, (text or "").lower())
+    if len(words) < 3 or not listed:
+        return False
+    vocab = set(listed)
+    if not all(w in vocab for w in words):
+        return False
+    if words == listed:
+        return True
+    return float(no_speech_prob or 0.0) >= _HOTWORD_ECHO_NO_SPEECH_PROB
 
 
 # Predefined model configurations
@@ -1144,7 +1163,11 @@ class ASREngine:
         # Transcribe
         result = self._backend.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
 
-        if _is_hotword_echo(getattr(result, "text", ""), self.model_config.hotwords):
+        if _is_hotword_echo(
+            getattr(result, "text", ""),
+            self.model_config.hotwords,
+            getattr(result, "max_no_speech_prob", 0.0),
+        ):
             logger.info("hotword_echo_discarded words=%d", len(str(result.text).split()))
             result.text = ""
             result.segments = []

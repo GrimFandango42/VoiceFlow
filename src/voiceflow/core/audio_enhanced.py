@@ -641,6 +641,10 @@ class EnhancedAudioRecorder:
         )
         self._capture.ensure_worker()
         self._dropped_at_start = 0
+        # Blocks the shared stream's callback dropped while a recording was routed to
+        # the ring. The queue counts them on the continuous channel (that is the stream
+        # they came from); they belong to the recording. One writer: that callback.
+        self._shared_recording_dropped = 0
 
         print(f"[AudioRecorder] Enhanced recorder initialized:")
         print(f"  - Sample rate: {cfg.sample_rate}Hz")
@@ -732,8 +736,11 @@ class EnhancedAudioRecorder:
 
         try:
             queued = self._capture.offer(CHANNEL_CONTINUOUS, 0, _block_to_mono(indata))
-            if recording_on_this_stream and queued:
-                self._total_frames += frames
+            if recording_on_this_stream:
+                if queued:
+                    self._total_frames += frames
+                else:
+                    self._shared_recording_dropped += 1
         except Exception:
             self._callback_error_count += 1
         if recording_on_this_stream:
@@ -774,6 +781,15 @@ class EnhancedAudioRecorder:
             return "high"
         return value if 0.0 < value <= 1.0 else "high"
 
+    def _recording_queue_dropped(self) -> int:
+        """Queue-saturation drops that belong to recordings: those of the dedicated
+        recording stream plus those of the shared stream while it fed a recording."""
+        return int(self._capture.dropped[CHANNEL_RECORDING]) + int(self._shared_recording_dropped)
+
+    def _continuous_queue_dropped(self) -> int:
+        """Drops of the always-on stream while it was only filling the pre-roll."""
+        return max(0, int(self._capture.dropped[CHANNEL_CONTINUOUS]) - int(self._shared_recording_dropped))
+
     def get_audio_health(self) -> dict:
         """Snapshot of audio-thread health counters for the health report."""
         return {
@@ -783,8 +799,8 @@ class EnhancedAudioRecorder:
             "callback_errors": int(self._callback_error_count),
             "ring_wraps": int(self._ring_wrap_count),
             # Blocks the callback dropped because the worker was >queue bound behind.
-            "queue_dropped_recording": int(self._capture.dropped[CHANNEL_RECORDING]),
-            "queue_dropped_continuous": int(self._capture.dropped[CHANNEL_CONTINUOUS]),
+            "queue_dropped_recording": self._recording_queue_dropped(),
+            "queue_dropped_continuous": self._continuous_queue_dropped(),
             "queue_high_water": int(self._capture.high_water),
             "queue_capacity_blocks": int(self._capture.max_blocks),
             "capture_worker_alive": bool(self._capture.worker_alive()),
@@ -817,7 +833,7 @@ class EnhancedAudioRecorder:
         self._start_mono = time.monotonic()
         self._overflow_at_start = self._overflow_count
         self._continuous_overflow_at_start = self._continuous_overflow_count
-        self._dropped_at_start = self._capture.dropped[CHANNEL_RECORDING]
+        self._dropped_at_start = self._recording_queue_dropped()
         self._overflow_events = []
         self._max_cb_gap = 0.0
 
@@ -984,7 +1000,7 @@ class EnhancedAudioRecorder:
                     max_gap_ms,
                     self._capture.high_water,
                 )
-            queue_dropped = self._capture.dropped[CHANNEL_RECORDING] - self._dropped_at_start
+            queue_dropped = self._recording_queue_dropped() - self._dropped_at_start
             if queue_dropped > 0:
                 logger.warning(
                     "audio_queue_saturated dropped_blocks=%d capacity_blocks=%d duration=%.2f",

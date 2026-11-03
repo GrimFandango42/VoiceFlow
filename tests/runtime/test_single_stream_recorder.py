@@ -241,6 +241,56 @@ def test_overflow_between_recordings_is_not_charged_to_the_recording(streams, ca
     rec.close()
 
 
+def test_shared_stream_queue_drops_are_charged_to_the_recording(streams, caplog) -> None:
+    """VF-11 review: while the shared stream feeds a recording, queue drops are the
+    recording's (warned at stop, reported as recording drops), not 'continuous' ones."""
+    rec = _rec(audio_queue_max_seconds=0.5)  # 16 blocks
+    rec.start_continuous()
+    rec._capture.close()  # worker stopped: the queue fills and stays full
+    block = np.zeros((BLOCK, 1), dtype=np.float32)
+
+    # Idle: drops before the key goes down belong to the pre-roll stream.
+    for _ in range(rec._capture.max_blocks + 3):
+        rec._continuous_callback(block, BLOCK, None, None)
+    idle_drops = rec.get_audio_health()["queue_dropped_continuous"]
+    assert idle_drops == 3
+    assert rec.get_audio_health()["queue_dropped_recording"] == 0
+
+    rec.start()  # restarts the worker, drains the stale queue, routes the shared stream to the ring
+
+    # Stall the worker inside its sink so the queue fills while the key is down.
+    import threading
+
+    gate = threading.Event()
+    original_sink = rec._sink_continuous
+    rec._capture._sinks[audio_mod.CHANNEL_CONTINUOUS] = lambda g, b: gate.wait(5.0)
+    try:
+        for _ in range(rec._capture.max_blocks + 12):
+            rec._continuous_callback(block, BLOCK, None, None)
+        health = rec.get_audio_health()
+    finally:
+        gate.set()
+        rec._capture._sinks[audio_mod.CHANNEL_CONTINUOUS] = original_sink
+
+    # The worker may or may not have taken the first block before it stalled.
+    assert 11 <= health["queue_dropped_recording"] <= 12
+    assert health["queue_dropped_continuous"] == idle_drops
+    recorded_drops = health["queue_dropped_recording"]
+
+    with caplog.at_level(logging.WARNING):
+        rec.stop()
+    saturated = [r.getMessage() for r in caplog.records if r.getMessage().startswith("audio_queue_saturated")]
+    assert len(saturated) == 1 and f"dropped_blocks={recorded_drops}" in saturated[0]
+
+    # The next recording starts from zero, not from the previous recording's drops.
+    rec.start()
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        rec.stop()
+    assert not [r for r in caplog.records if r.getMessage().startswith("audio_queue_saturated")]
+    rec.close()
+
+
 def test_callback_count_advances_while_recording_for_the_stop_drain(streams) -> None:
     rec = _rec()
     rec.start_continuous()
