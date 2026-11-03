@@ -1,5 +1,4 @@
-"""
-Privacy-first adaptive learning for VoiceFlow.
+"""Privacy-first adaptive learning for VoiceFlow.
 
 This module keeps a temporary local audit log and learns lightweight
 replacement patterns from recurring correction deltas.
@@ -13,7 +12,6 @@ import logging
 import re
 import time
 from difflib import SequenceMatcher
-from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from voiceflow.utils.settings import config_dir
@@ -370,6 +368,12 @@ class AdaptiveLearningManager:
                 "last_seen": last_seen,
             }
         self._patterns["token_counts"] = fresh_tokens
+
+        # Persist the purged in-memory state so the on-disk file doesn't keep
+        # stale rules indefinitely between observations. Previously _purge_expired
+        # only mutated memory; on days with zero observe() calls the file never
+        # got rewritten.
+        self._save_patterns()
 
         if not self.audit_path.exists():
             return

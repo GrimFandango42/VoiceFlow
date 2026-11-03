@@ -2,13 +2,23 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from uuid import uuid4
 
 from voiceflow.ai.daily_learning import DailyLearningJob
-from voiceflow.ai.llm_client import LLMResponse
 from voiceflow.core.config import Config
+
+
+def _yesterday_epoch() -> float:
+    """Epoch for yesterday at local noon.
+
+    Unambiguously on yesterday's local date regardless of the current time of
+    day, so it always matches the job's ``target_date`` (``today - days_back``).
+    A one-day-and-one-hour offset from ``now()`` lands two calendar days back
+    when run between 00:00 and 01:00 local, which made these tests time-fragile.
+    """
+    return datetime.combine(date.today() - timedelta(days=1), time(12, 0)).timestamp()
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -89,7 +99,7 @@ def test_daily_learning_dry_run_does_not_update_patterns():
 def test_daily_learning_auto_analysis_learns_from_history():
     base_dir = _test_dir("daily-learning-auto-analysis")
     try:
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
         _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
         _write_jsonl(
             base_dir / "recent_history_events.jsonl",
@@ -118,7 +128,7 @@ def test_daily_learning_auto_analysis_learns_from_history():
 def test_daily_learning_auto_analysis_learns_phrase_replacements_from_history():
     base_dir = _test_dir("daily-learning-auto-analysis-phrases")
     try:
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
         _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
         _write_jsonl(
             base_dir / "recent_history_events.jsonl",
@@ -144,7 +154,7 @@ def test_daily_learning_auto_analysis_learns_phrase_replacements_from_history():
 def test_daily_learning_instructional_pass_updates_insights():
     base_dir = _test_dir("daily-learning-instructional")
     try:
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
         _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
         _write_jsonl(
             base_dir / "recent_history_events.jsonl",
@@ -178,7 +188,7 @@ def test_daily_learning_instructional_pass_updates_insights():
 def test_daily_learning_instructional_pass_dry_run_does_not_persist_insights():
     base_dir = _test_dir("daily-learning-instructional-dry-run")
     try:
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
         _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
         _write_jsonl(
             base_dir / "recent_history_events.jsonl",
@@ -277,7 +287,7 @@ def test_manual_correction_pairs_outrank_auto_pairs():
     base_dir = _test_dir("daily-learning-weight-ranking")
     try:
         yesterday = datetime.now() - timedelta(days=1)
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
 
         # One manual correction: "jon" → "john"
         # One auto-analysis source: "terraforce" → "terraform" (via history normalization)
@@ -327,7 +337,7 @@ def test_manual_correction_pairs_outrank_auto_pairs():
 def test_daily_learning_ai_analysis_returns_structured_suggestions(monkeypatch):
     base_dir = _test_dir("daily-learning-ai-analysis")
     try:
-        yesterday_epoch = (datetime.now() - timedelta(days=1, hours=1)).timestamp()
+        yesterday_epoch = _yesterday_epoch()
         _write_jsonl(base_dir / "transcription_corrections.jsonl", [])
         _write_jsonl(
             base_dir / "recent_history_events.jsonl",
@@ -340,14 +350,17 @@ def test_daily_learning_ai_analysis_returns_structured_suggestions(monkeypatch):
             ],
         )
 
+        from voiceflow.ai.learning_clients import LearningClientResponse
+
         class _FakeClient:
+            backend = "fake-cli"
             model = "fake-local"
 
             def is_available(self) -> bool:
                 return True
 
-            def generate(self, prompt, system=None, temperature=0.1, max_tokens=500):
-                return LLMResponse(
+            def generate(self, *, system: str, user: str) -> LearningClientResponse:
+                return LearningClientResponse(
                     text=json.dumps(
                         {
                             "summary": "Phrase-level learning should protect Claude product names.",
@@ -366,11 +379,12 @@ def test_daily_learning_ai_analysis_returns_structured_suggestions(monkeypatch):
                         ensure_ascii=True,
                     ),
                     success=True,
+                    backend=self.backend,
                     model=self.model,
                     duration_ms=12.0,
                 )
 
-        monkeypatch.setattr("voiceflow.ai.daily_learning.get_llm_client", lambda model=None: _FakeClient())
+        monkeypatch.setattr("voiceflow.ai.daily_learning.select_client", lambda: _FakeClient())
 
         cfg = Config(adaptive_min_count=1, adaptive_store_raw_text=False, adaptive_ai_analysis_enabled=True)
         job = DailyLearningJob(cfg=cfg, base_dir=base_dir)
@@ -378,8 +392,16 @@ def test_daily_learning_ai_analysis_returns_structured_suggestions(monkeypatch):
 
         analysis = report["ai_learning_analysis"]
         assert analysis["success"] is True
+        assert analysis["backend"] == "fake-cli"
         assert analysis["model"] == "fake-local"
         assert analysis["suggested_phrase_replacements"][0]["to"] == "Claude Desktop"
         assert "Claude Desktop" in analysis["protected_terms"]
+        # Suggest-only mode: every suggestion + every protected term should
+        # land in pending_review.jsonl, never auto-applied.
+        assert analysis["queued_for_review"] == 1 + 3
+        pending = base_dir / "pending_review.jsonl"
+        assert pending.exists()
+        pending_lines = [line for line in pending.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(pending_lines) == 4
     finally:
         shutil.rmtree(base_dir, ignore_errors=True)

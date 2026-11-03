@@ -161,9 +161,15 @@ def _missing_cuda_dlls(required_dlls: list[str]) -> list[str]:
     return [dll for dll in required_dlls if not _find_dll_in_path(dll)]
 
 
+# DLLs ctranslate2 needs for CUDA float16 on Windows. The build verifier
+# (scripts/setup/verify_bundle.py) checks the same list, so "bundle passed" and
+# "runtime found CUDA" cannot disagree.
+CUDA_REQUIRED_DLLS = ("cudnn_ops64_9.dll", "cublas64_12.dll")
+
+
 def _cuda_runtime_ready() -> bool:
     """Best-effort CUDA runtime check for faster-whisper/ctranslate2 on Windows."""
-    required_dlls = ["cudnn_ops64_9.dll", "cublas64_12.dll"]
+    required_dlls = list(CUDA_REQUIRED_DLLS)
     _register_external_cuda_runtime_path(required_dlls)
 
     # Source/venv fallback path: keep torch probing for environments that depend on
@@ -376,6 +382,7 @@ class TranscriptionSegment:
     speaker: Optional[str] = None
     confidence: float = 1.0
     words: Optional[List[Dict[str, Any]]] = None
+    no_speech_prob: float = 0.0
 
 
 @dataclass
@@ -389,6 +396,9 @@ class TranscriptionResult:
     confidence: float = 1.0
     words: Optional[List[Dict[str, Any]]] = None
     speaker_count: int = 0
+    #: Highest per-segment no-speech probability the decoder reported. Used to
+    #: tell a dictated "Thank you." from silence that decoded as one.
+    max_no_speech_prob: float = 0.0
 
 
 class ASRBackend(ABC):
@@ -512,15 +522,43 @@ class FasterWhisperBackend(ASRBackend):
 
         try:
             with self._lock:
-                beam_size = max(1, int(beam_size_override)) if beam_size_override else max(1, int(getattr(self.config, "beam_size", 1)))
+                cfg_beam = max(1, int(getattr(self.config, "beam_size", 1)))
+                beam_size = max(1, int(beam_size_override)) if beam_size_override else cfg_beam
+                # Final-pass long-form lift: callers that don't pass overrides
+                # are using config defaults (the legacy/main transcribe path).
+                # For ≥ 12s clips on that path, force beam=2 and cross-segment
+                # context — accuracy gain is worth the latency cost on CUDA.
+                # The streaming preview path passes overrides so it stays fast;
+                # otherwise growing previews past 12s would re-decode with
+                # conditioning every cycle and feel sluggish.
+                is_final_pass = beam_size_override is None and vad_filter_override is None
+                long_form = audio_duration >= 12.0 and is_final_pass
+                if long_form:
+                    beam_size = max(beam_size, 2)
                 best_of = max(1, int(getattr(self.config, "best_of", 1)))
                 use_vad = vad_filter_override if vad_filter_override is not None else self.config.vad_filter
+                cfg_condition = bool(getattr(self.config, "condition_on_previous_text", False))
+                # The beam lift applies to every long clip. The conditioning
+                # lift does not: feeding Whisper its own previous output back
+                # in helps a 15s clip and degrades a 90s one, because an early
+                # error propagates forward and the decode drifts, repeats, or
+                # drops words. Reported as "the longer I talk the worse it
+                # gets". Bound it to a window instead of applying it forever.
+                condition_ceiling = float(
+                    getattr(self.config, "long_form_condition_max_seconds", 30.0)
+                )
+                long_form_condition = (
+                    long_form
+                    and condition_ceiling > 0
+                    and audio_duration <= condition_ceiling
+                )
+                use_condition = cfg_condition or long_form_condition
                 kwargs: Dict[str, Any] = {
                     "language": "en",
                     "beam_size": beam_size,
                     "best_of": max(best_of, beam_size),
                     "temperature": float(getattr(self.config, "temperature", 0.0)),
-                    "condition_on_previous_text": bool(getattr(self.config, "condition_on_previous_text", False)),
+                    "condition_on_previous_text": use_condition,
                     "without_timestamps": True,
                     "vad_filter": use_vad,
                 }
@@ -543,7 +581,10 @@ class FasterWhisperBackend(ASRBackend):
         segments = []
         text_parts = []
 
+        max_no_speech_prob = 0.0
+
         for seg in segments_iter:
+            seg_no_speech = float(getattr(seg, 'no_speech_prob', 0.0) or 0.0)
             if seg.text and seg.text.strip():
                 text_parts.append(seg.text.strip())
                 segments.append(TranscriptionSegment(
@@ -551,7 +592,12 @@ class FasterWhisperBackend(ASRBackend):
                     start=seg.start,
                     end=seg.end,
                     confidence=getattr(seg, 'avg_logprob', 1.0),
+                    no_speech_prob=seg_no_speech,
                 ))
+            # Track silence evidence from every segment, including ones whose
+            # text was empty -- those are the strongest signal of all.
+            if seg_no_speech > max_no_speech_prob:
+                max_no_speech_prob = seg_no_speech
 
         processing_time = time.time() - start_time
 
@@ -561,6 +607,7 @@ class FasterWhisperBackend(ASRBackend):
             language=info.language,
             duration=audio_duration,
             processing_time=processing_time,
+            max_no_speech_prob=max_no_speech_prob,
         )
 
     def is_loaded(self) -> bool:
@@ -1026,22 +1073,30 @@ class ASREngine:
             TranscriptionResult with text and metadata
         """
         if audio is None or audio.size == 0:
+            self.last_no_speech_prob = 1.0
             return TranscriptionResult(text="", duration=0.0, processing_time=0.0)
 
         # Basic validation
         audio_duration = len(audio) / self.sample_rate
         if audio_duration < 0.1:
             logger.debug("Audio too short (<0.1s), skipping")
+            self.last_no_speech_prob = 1.0
             return TranscriptionResult(text="", duration=audio_duration, processing_time=0.0)
 
         # Check for silence
         energy = np.mean(audio ** 2)
         if energy < 1e-8:
             logger.debug("Audio too quiet, skipping")
+            self.last_no_speech_prob = 1.0
             return TranscriptionResult(text="", duration=audio_duration, processing_time=0.0)
 
         # Transcribe
         result = self._backend.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
+
+        # Expose the decoder's silence evidence to callers that only receive a
+        # string. Set on every path, including the early returns above, so a
+        # stale value can never leak into the next utterance's decision.
+        self.last_no_speech_prob = float(getattr(result, "max_no_speech_prob", 0.0) or 0.0)
 
         # Update statistics
         self.transcription_count += 1
@@ -1219,6 +1274,16 @@ class ModernWhisperASR(ASREngine):
     def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None, vad_filter_override: Optional[bool] = None) -> str:
         """Legacy interface returning just text"""
         self.session_transcription_count += 1
+        if initial_prompt is None and bool(getattr(self.cfg, "enable_smart_prompting", True)):
+            try:
+                from voiceflow.core.vocab import initial_prompt as _vocab_initial_prompt
+
+                vocab_prompt = _vocab_initial_prompt()
+                if vocab_prompt:
+                    initial_prompt = vocab_prompt
+            except Exception:
+                # Vocab is best-effort. If it fails, fall back to no prompt.
+                pass
         # Call parent's transcribe method and extract text
         result = ASREngine.transcribe(self, audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
         return result.text

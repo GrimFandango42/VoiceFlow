@@ -772,7 +772,8 @@ def validate_config(cfg: Config) -> Config:
             cfg.adaptive_snippet_chars = 200
 
         if not hasattr(cfg, 'adaptive_ai_analysis_enabled'):
-            cfg.adaptive_ai_analysis_enabled = True
+            # Privacy default: cloud analysis of transcripts is opt-in.
+            cfg.adaptive_ai_analysis_enabled = False
 
         if (
             not hasattr(cfg, 'adaptive_ai_analysis_max_items')

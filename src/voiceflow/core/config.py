@@ -19,7 +19,27 @@ class Config:
     # Audio - Optimized for speed
     sample_rate: int = 16000
     channels: int = 1
-    blocksize: int = 512  # frames per callback, ~64 ms at 16k
+    blocksize: int = 512  # frames per callback, 32 ms at 16 kHz
+    # Keep capturing briefly after the hotkey is released. Audio already taken
+    # by the driver but not yet handed to our callback is otherwise discarded,
+    # which clips the last word off the end of an utterance. `start()` prepends
+    # 800 ms of pre-buffer to protect the beginning; this protects the end.
+    # The wait exits early once callbacks go quiet, so it usually costs far less
+    # than the cap.
+    stop_drain_seconds: float = 0.25
+    # PortAudio input latency for the capture streams: "high", "low" or seconds.
+    # "high" gives the driver the most buffer before it overruns (dropped
+    # frames logged as `input overflow`); start/stop timing is covered by the
+    # pre-buffer and stop drain, so it does not add hotkey latency.
+    audio_input_latency: str = "high"
+    # Ring-buffer capacity. Memory is fixed at this size; a longer hold keeps
+    # the most recent audio and logs `recording_ring_wrapped`.
+    max_recording_seconds: float = 300.0
+    # Audio callbacks hand blocks to a worker thread through a lock-free queue
+    # so a reader holding the ring-buffer lock can never stall PortAudio. This
+    # bounds that queue: past it a block is dropped and counted
+    # (`queue_dropped_*` in the health report) instead of growing memory.
+    audio_queue_max_seconds: float = 4.0
 
     # Performance optimizations
     enable_batching: bool = True  # Enable VAD-based batching for 12.5x speedup
@@ -108,7 +128,13 @@ class Config:
 
     # Whisper transcription settings
     word_timestamps: bool = False  # Disabled by default for speed
-    condition_on_previous_text: bool = False  # Prevent context pollution
+    condition_on_previous_text: bool = False
+    # Cross-segment conditioning helps a medium clip and hurts a long one:
+    # Whisper feeds its own previous output back in, so an early error
+    # propagates and the decode drifts, repeats, or drops words the further
+    # it runs. Condition inside this window only; above it, decode each
+    # segment clean. 0 disables the long-form conditioning lift entirely.
+    long_form_condition_max_seconds: float = 30.0  # Prevent context pollution
     compression_ratio_threshold: float = 2.4  # Quality threshold
     log_prob_threshold: float = -1.0  # Confidence threshold
     no_speech_threshold: float = 0.9  # Silence detection sensitivity
@@ -262,8 +288,18 @@ class Config:
     adaptive_max_rules: int = 200  # Cap learned replacements to bound memory
     adaptive_max_phrase_tokens: int = 4  # Allow short phrase learning, not just single-token swaps
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
-    adaptive_ai_analysis_enabled: bool = True  # Use local LLM during daily learning to suggest higher-level learning changes
-    adaptive_ai_analysis_max_items: int = 8  # Bound history/correction samples sent to the local LLM
+    # OFF by default: when on, the nightly learning batch sends up to
+    # adaptive_ai_analysis_max_items verbatim transcripts (plus correction pairs)
+    # to a CLOUD model — Anthropic via the Claude CLI, or Google Gemini as
+    # fallback. Nothing leaves the machine while this is False. Exposed in the
+    # setup wizard as "Send a daily sample of transcripts to Claude".
+    adaptive_ai_analysis_enabled: bool = False
+    # Consent record for the flag above. 0 = never shown the toggle (configs
+    # written before VF-03 may carry adaptive_ai_analysis_enabled=True from the
+    # old default); load_config resets the flag to False once and bumps this to
+    # 1. The wizard writes 1 when the user saves the setting themselves.
+    cloud_learning_consent_version: int = 0
+    adaptive_ai_analysis_max_items: int = 8  # Max samples sent to the cloud model when enabled
     adaptive_ai_analysis_max_suggestions: int = 8  # Bound AI-proposed phrase/protected-term suggestions
     longrun_housekeeping_enabled: bool = True  # periodic long-run health telemetry and cleanup hooks
     longrun_health_log_interval_seconds: float = 900.0  # periodic memory/queue health snapshot cadence

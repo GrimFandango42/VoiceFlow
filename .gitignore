@@ -141,3 +141,12 @@ nul
 *.token
 *.key
 *_pat_*
+
+.venv-test/
+
+# Test scratch dirs created by pytest runs in-tree
+.pytest-tmp*/
+.venv-test/
+
+# Generated at package time by the Windows build script
+src/voiceflow/_build_stamp.py

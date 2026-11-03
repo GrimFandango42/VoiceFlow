@@ -221,6 +221,10 @@ _CHAT_PROCESS_HINTS = (
     "telegram",
     "whatsapp",
     "signal",
+    # Native AI desktop chat apps — Electron-based, treat newlines as send.
+    "claude",
+    "chatgpt",
+    "openai",
 )
 
 _DOCUMENT_PROCESS_HINTS = (
@@ -240,6 +244,15 @@ _CHAT_TITLE_HINTS = (
     "teams",
     "slack",
     "discord",
+    # Web-based AI chat surfaces — these treat newlines as "send message".
+    "claude",
+    "chatgpt",
+    "openai",
+    "gemini",
+    "google ai studio",
+    "perplexity",
+    "deepseek",
+    "mistral",
 )
 
 _LIGHT_TYPO_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -571,7 +584,10 @@ def format_transcript_for_destination(
     profile = infer_destination_profile(destination)
     # Keep formatting readable without turning ordinary pause points into paragraphs.
     long_form = len(formatted) >= 220 or float(audio_duration) >= 8.0
-    if long_form:
+    # Chat apps (Claude, ChatGPT, Slack, Discord, Teams) treat a newline as
+    # "send" — so paragraph-break insertion would submit the message before
+    # the user could review it. Skip all paragraph reshaping for chat.
+    if long_form and profile != "chat":
         if _has_explicit_paragraph_signals(formatted):
             formatted = _insert_light_paragraph_breaks(formatted)
         if profile == "terminal":
@@ -580,6 +596,12 @@ def format_transcript_for_destination(
             if _should_rebalance_paragraphs(formatted, profile=profile, audio_duration=audio_duration):
                 formatted = _rebalance_paragraphs_for_readability(formatted, profile=profile)
             formatted = _merge_short_paragraphs_for_readability(formatted, profile=profile)
+
+    if profile == "chat":
+        # Defense in depth: collapse any stray newlines back to spaces so a
+        # later code path can't accidentally submit a half-finished message.
+        formatted = re.sub(r"\s*\n+\s*", " ", formatted).strip()
+        formatted = re.sub(r"[ \t]{2,}", " ", formatted)
 
     if destination and not bool(destination.get("destination_wrap_enabled", True)):
         return formatted

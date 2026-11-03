@@ -19,6 +19,16 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def _is_missing_vad_dependency(exc: BaseException) -> bool:
+    """True when the error is faster-whisper refusing to run VAD without onnxruntime.
+
+    Matched on message text because faster-whisper raises a bare ValueError here,
+    with no dedicated exception type to catch.
+    """
+    message = str(exc).lower()
+    return "vad" in message and ("onnxruntime" in message or "requires the" in message)
+
+
 class StreamState(Enum):
     """Streaming state"""
     IDLE = "idle"
@@ -323,6 +333,28 @@ class StreamingTranscriber:
                         logger.warning(f"Partial callback error: {e}")
 
         except Exception as e:
+            # The live caption is a nice-to-have; VAD on the preview pass is not
+            # worth losing it over. faster-whisper's VAD needs onnxruntime, which
+            # the frozen Windows build does not ship -- when it is missing this
+            # raises on EVERY preview pass, roughly once a second, and the caption
+            # stays blank for the whole hold while the log fills with identical
+            # warnings. Disable VAD for previews permanently and carry on; the
+            # final transcription pass is unaffected.
+            if self.vad_filter is not False and _is_missing_vad_dependency(e):
+                logger.warning(
+                    "Partial transcription VAD unavailable (%s); disabling VAD for "
+                    "live previews for the rest of this session.",
+                    e,
+                )
+                self.vad_filter = False
+                try:
+                    self._do_partial_transcription(audio)
+                except Exception as retry_exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        "Partial transcription error after VAD fallback: %s",
+                        retry_exc,
+                    )
+                return
             logger.warning(f"Partial transcription error: {e}")
 
     def _process_final(self) -> Optional[StreamingResult]:
