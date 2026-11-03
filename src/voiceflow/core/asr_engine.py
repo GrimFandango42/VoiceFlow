@@ -1187,7 +1187,7 @@ class ASREngine:
         if result.duration > 0:
             rtf = result.processing_time / result.duration
             logger.debug(f"Transcribed {result.duration:.2f}s in {result.processing_time:.2f}s "
-                        f"(RTF: {rtf:.2f}, speed: {1/rtf:.1f}x realtime)")
+                        f"(RTF: {rtf:.2f}, speed: {1 / max(rtf, 0.001):.1f}x realtime)")
 
         return result
 
