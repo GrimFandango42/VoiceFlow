@@ -145,7 +145,16 @@ def _check_cuda(internal: Path, required: tuple[str, ...], allow_cpu_only: bool,
     report.add("cuda_runtime_dlls", True, f"{', '.join(wanted)} present and load from {CUDA_RELATIVE}")
 
 
-def _check_modules(exe: Path, modules: tuple[str, ...], report: Report) -> None:
+def _has_extension_module(internal: Path, module: str) -> bool:
+    """C extensions (e.g. pywin32's win32gui) ship as .pyd files, not in the PYZ."""
+    leaf = module.rsplit(".", 1)[-1]
+    for pattern in (f"{leaf}.pyd", f"{leaf}.*.pyd"):
+        if any(internal.rglob(pattern)):
+            return True
+    return False
+
+
+def _check_modules(exe: Path, internal: Path, modules: tuple[str, ...], report: Report) -> None:
     try:
         names = _pyz_module_names(exe)
     except Exception as exc:  # noqa: BLE001
@@ -155,7 +164,7 @@ def _check_modules(exe: Path, modules: tuple[str, ...], report: Report) -> None:
         report.add("bundled_modules", False, "no PYZ archive found in the executable")
         return
     expected = list(modules) + ["voiceflow._build_stamp"]
-    missing = [m for m in expected if m not in names]
+    missing = [m for m in expected if m not in names and not _has_extension_module(internal, m)]
     report.add(
         "bundled_modules",
         not missing,
@@ -178,7 +187,7 @@ def verify(bundle: Path, allow_cpu_only: bool) -> Report:
     _check_vad(internal, report)
     _check_native(internal, report)
     _check_cuda(internal, required, allow_cpu_only, report)
-    _check_modules(exe, modules, report)
+    _check_modules(exe, internal, modules, report)
     return report
 
 

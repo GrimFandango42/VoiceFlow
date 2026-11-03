@@ -114,6 +114,17 @@ def test_unreadable_exe_fails_module_check(tmp_path):
     assert not report.ok
 
 
+def test_extension_modules_count_as_bundled(tmp_path):
+    # pywin32's win32gui ships as _internal/win32/win32gui.pyd, never in the PYZ.
+    internal = _fake_bundle(tmp_path) / "_internal"
+    assert not vb._has_extension_module(internal, "win32gui")
+    (internal / "win32").mkdir()
+    (internal / "win32" / "win32gui.pyd").write_bytes(b"x")
+    assert vb._has_extension_module(internal, "win32gui")
+    (internal / "_tkinter.cp313-win_amd64.pyd").write_bytes(b"x")
+    assert vb._has_extension_module(internal, "_tkinter")
+
+
 def test_cli_exit_code_and_json(tmp_path):
     bundle = _fake_bundle(tmp_path, vad=False)
     out = tmp_path / "r.json"
