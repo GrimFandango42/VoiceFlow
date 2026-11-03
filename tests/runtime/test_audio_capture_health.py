@@ -98,6 +98,7 @@ class TestCallbackNeverBlocks:
                 _, last = rec._ring_buffer.get_samples_since(last)
                 rec._ring_buffer.get_latest_samples(4096)
                 reads["n"] += 1
+                time.sleep(0.001)  # like the real 180 ms feed loop, just faster
 
         reader = threading.Thread(target=_reader, daemon=True)
         reader.start()
