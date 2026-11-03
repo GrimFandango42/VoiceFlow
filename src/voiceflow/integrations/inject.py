@@ -191,6 +191,117 @@ def _schedule_clipboard_restore(
     thread.start()
 
 
+class _PendingRestore:
+    """A clipboard restore that has been scheduled but has not finished yet."""
+
+    def __init__(self, snapshot: Optional[dict], prev: Optional[str]) -> None:
+        self.snapshot = snapshot
+        self.prev = prev
+        self.timer: Optional[threading.Timer] = None
+        self.claimed = False          # a later paste took over the original contents
+        self.running = False          # the restore body has started
+        self.finished = threading.Event()
+        self.run: Optional[Any] = None  # the restore body, for flush
+
+
+# At most one restore is ever pending. Without this, two dictations less than the
+# restore delay apart would snapshot the *first dictation's text* as the "user's
+# clipboard", and the real clipboard would be gone for good.
+_pending_lock = threading.Lock()
+_pending_restore: Optional[_PendingRestore] = None
+
+#: Kill switch for the deferred restore. The test suite turns it off by default (see
+#: tests/conftest.py) so a timer can never outlive a test and touch a real clipboard.
+_ALLOW_DEFERRED_RESTORE = True
+
+
+def _cancel_pending_restore_without_running() -> None:
+    """Drop a pending restore without running it. Test teardown only."""
+    global _pending_restore
+    with _pending_lock:
+        pending, _pending_restore = _pending_restore, None
+    if pending is not None and pending.timer is not None:
+        pending.timer.cancel()
+
+
+def _claim_pending_restore(log: Optional[logging.Logger] = None) -> Optional[_PendingRestore]:
+    """Take over the original clipboard contents from a restore that has not run yet.
+
+    Returns the pending restore (its snapshot/prev are the user's real clipboard) with
+    its timer cancelled, or None if there was nothing pending. If the restore is
+    already running, waits for it to finish and returns None: the clipboard then holds
+    the real contents and can be snapshotted normally.
+    """
+    global _pending_restore
+    with _pending_lock:
+        pending = _pending_restore
+        if pending is None:
+            return None
+        if not pending.running and not pending.claimed:
+            if pending.timer is not None:
+                pending.timer.cancel()
+            pending.claimed = True
+            _pending_restore = None
+            return pending
+    pending.finished.wait(timeout=2.0)
+    with _pending_lock:
+        if _pending_restore is pending:
+            _pending_restore = None
+    return None
+
+
+def flush_pending_clipboard_restore(timeout: float = 2.0) -> None:
+    """Run any pending restore now (call at shutdown so the clipboard is never left holding a dictation)."""
+    with _pending_lock:
+        pending = _pending_restore
+    if pending is None or pending.run is None:
+        return
+    if pending.timer is not None:
+        pending.timer.cancel()
+    pending.run()
+    pending.finished.wait(timeout=max(0.0, float(timeout)))
+
+
+def _restore_now(
+    snapshot: Optional[dict],
+    prev: Optional[str],
+    *,
+    restore_attempts: int,
+    restore_base_delay: float,
+    restore_async_retry_seconds: float,
+    log: Optional[logging.Logger],
+) -> None:
+    """Restore the user's clipboard; on failure hand off to the bounded background retry."""
+    if snapshot is not None:
+        try:
+            _restore_clipboard_all_formats(snapshot)
+        except Exception as exc:
+            if log:
+                log.warning("clipboard_restore_immediate_failed error=%s", exc)
+            _schedule_clipboard_restore_all(
+                snapshot,
+                retry_window_seconds=float(restore_async_retry_seconds),
+                log=log,
+            )
+    elif prev is not None:
+        try:
+            _clipboard_copy_with_retry(
+                prev,
+                attempts=max(1, int(restore_attempts)),
+                base_delay=max(0.005, float(restore_base_delay)),
+            )
+        except Exception as exc:
+            if log:
+                log.warning("clipboard_restore_immediate_failed error=%s", exc)
+            _schedule_clipboard_restore(
+                prev,
+                retry_window_seconds=float(restore_async_retry_seconds),
+                attempts_per_try=max(2, int(restore_attempts)),
+                base_delay=max(0.005, float(restore_base_delay)),
+                log=log,
+            )
+
+
 @contextmanager
 def _preserve_clipboard(
     enabled: bool,
@@ -198,52 +309,70 @@ def _preserve_clipboard(
     restore_attempts: int = 10,
     restore_base_delay: float = 0.03,
     restore_async_retry_seconds: float = 8.0,
+    restore_delay: float = 0.0,
     log: Optional[logging.Logger] = None,
 ):
+    """Snapshot the clipboard, run the body, then put the clipboard back.
+
+    ``restore_delay`` > 0 defers the restore to a background timer so the caller
+    returns as soon as the body is done (the paste has landed). The restore is never
+    dropped: a following call inherits a still-pending original instead of
+    snapshotting the dictation, and ``flush_pending_clipboard_restore`` forces it.
+    ``restore_delay`` == 0 restores before returning.
+    """
+    global _pending_restore
     snapshot: Optional[dict] = None
     prev: Optional[str] = None
     if enabled:
-        # Prefer multi-format snapshot (preserves images, files, etc.)
-        snapshot = _snapshot_clipboard_all_formats()
-        if snapshot is None:
-            # Fallback: text-only via pyperclip for environments without win32clipboard
-            try:
-                prev = _clipboard_paste_with_retry()
-            except Exception as exc:
-                if log:
-                    log.warning("clipboard_snapshot_failed error=%s", exc)
+        inherited = _claim_pending_restore(log)
+        if inherited is not None:
+            snapshot, prev = inherited.snapshot, inherited.prev
+        else:
+            # Prefer multi-format snapshot (preserves images, files, etc.)
+            snapshot = _snapshot_clipboard_all_formats()
+            if snapshot is None:
+                # Fallback: text-only via pyperclip for environments without win32clipboard
+                try:
+                    prev = _clipboard_paste_with_retry()
+                except Exception as exc:
+                    if log:
+                        log.warning("clipboard_snapshot_failed error=%s", exc)
     try:
         yield
     finally:
-        if enabled:
-            if snapshot is not None:
-                try:
-                    _restore_clipboard_all_formats(snapshot)
-                except Exception as exc:
-                    if log:
-                        log.warning("clipboard_restore_immediate_failed error=%s", exc)
-                    _schedule_clipboard_restore_all(
-                        snapshot,
-                        retry_window_seconds=float(restore_async_retry_seconds),
-                        log=log,
-                    )
-            elif prev is not None:
-                try:
-                    _clipboard_copy_with_retry(
-                        prev,
-                        attempts=max(1, int(restore_attempts)),
-                        base_delay=max(0.005, float(restore_base_delay)),
-                    )
-                except Exception as exc:
-                    if log:
-                        log.warning("clipboard_restore_immediate_failed error=%s", exc)
-                    _schedule_clipboard_restore(
-                        prev,
-                        retry_window_seconds=float(restore_async_retry_seconds),
-                        attempts_per_try=max(2, int(restore_attempts)),
-                        base_delay=max(0.005, float(restore_base_delay)),
-                        log=log,
-                    )
+        if enabled and (snapshot is not None or prev is not None):
+            restore_kwargs = dict(
+                restore_attempts=restore_attempts,
+                restore_base_delay=restore_base_delay,
+                restore_async_retry_seconds=restore_async_retry_seconds,
+                log=log,
+            )
+            if float(restore_delay) <= 0.0 or not _ALLOW_DEFERRED_RESTORE:
+                _restore_now(snapshot, prev, **restore_kwargs)
+            else:
+                pending = _PendingRestore(snapshot, prev)
+
+                def _run(pending: _PendingRestore = pending) -> None:
+                    global _pending_restore
+                    with _pending_lock:
+                        if pending.claimed or pending.running:
+                            return
+                        pending.running = True
+                    try:
+                        _restore_now(pending.snapshot, pending.prev, **restore_kwargs)
+                    finally:
+                        with _pending_lock:
+                            if _pending_restore is pending:
+                                _pending_restore = None
+                        pending.finished.set()
+
+                pending.run = _run
+                timer = threading.Timer(float(restore_delay), _run)
+                timer.daemon = True
+                pending.timer = timer
+                with _pending_lock:
+                    _pending_restore = pending
+                timer.start()
 
 
 def _clipboard_copy_with_retry(text: str, attempts: int = 6, base_delay: float = 0.03) -> None:
@@ -326,6 +455,14 @@ class ClipboardInjector:
         if not text.strip():
             return False
 
+        # Some apps read the clipboard asynchronously, so the restore must not run
+        # right after the paste keystroke. That wait used to block this call (the
+        # bulk of the ~190 ms median paste step); it now happens on a timer and
+        # the call returns as soon as the keystroke is sent. When Enter must follow
+        # the paste we keep the old inline wait, since Enter has to land after it.
+        restore_delay = max(0, int(getattr(self.cfg, "clipboard_restore_delay_ms", 150))) / 1000.0
+        press_enter = bool(self.cfg.press_enter_after_paste)
+
         with _preserve_clipboard(
             self.cfg.restore_clipboard,
             restore_attempts=max(1, int(getattr(self.cfg, "clipboard_restore_retry_attempts", 10))),
@@ -337,6 +474,7 @@ class ClipboardInjector:
                 0.5,
                 float(getattr(self.cfg, "clipboard_restore_async_retry_seconds", 8.0)),
             ),
+            restore_delay=0.0 if press_enter else restore_delay,
             log=self._log,
         ):
             try:
@@ -346,10 +484,8 @@ class ClipboardInjector:
                 return False
             time.sleep(0.03)  # allow clipboard to settle
             keyboard.send(self.cfg.paste_shortcut)
-            # Some apps read clipboard asynchronously; avoid restoring too quickly.
-            restore_delay = max(0, int(getattr(self.cfg, "clipboard_restore_delay_ms", 150))) / 1000.0
-            time.sleep(restore_delay)
-            if self.cfg.press_enter_after_paste:
+            if press_enter:
+                time.sleep(restore_delay)
                 keyboard.send('enter')
         return True
 
