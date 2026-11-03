@@ -424,7 +424,7 @@ class EnhancedPTTHotkeyListener:
                     except Exception:
                         self._blocked_key = None
 
-                print(f"[PTT] Recording started")
+                print("[PTT] Recording started")
                 self._dispatch("on_start", self.on_start)
 
             # INITIATE STOP WITH TAIL BUFFER - only when all keys released
@@ -458,7 +458,7 @@ class EnhancedPTTHotkeyListener:
             
             # RESUME RECORDING (key pressed again during tail buffer)
             elif chord_active and self._recording and self._pending_stop:
-                print(f"[PTT] Key pressed again, canceling tail buffer")
+                print("[PTT] Key pressed again, canceling tail buffer")
                 self._cancel_tail_timer()
                 self._pending_stop = False
                 self._release_candidate_since = 0.0

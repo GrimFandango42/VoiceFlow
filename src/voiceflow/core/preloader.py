@@ -11,7 +11,7 @@ Handles background model preloading to eliminate first-transcription delays:
 import logging
 import threading
 import time
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict
 from dataclasses import dataclass
 from enum import Enum
 

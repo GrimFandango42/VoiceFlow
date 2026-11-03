@@ -8,7 +8,6 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Callable, Dict, Any
 import threading
-import time
 
 
 class TrayStatus(Enum):

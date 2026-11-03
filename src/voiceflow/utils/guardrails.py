@@ -13,7 +13,7 @@ import threading
 import time
 import gc
 import queue
-from typing import Any, Callable, Optional, Union, Tuple
+from typing import Any, Callable, Tuple
 from functools import wraps
 
 import numpy as np
@@ -726,7 +726,7 @@ def validate_config(cfg: Config) -> Config:
             cfg.heavy_second_pass_min_chars = 180
         else:
             try:
-                heavy_min = int(getattr(cfg, 'heavy_second_pass_min_chars'))
+                heavy_min = int(cfg.heavy_second_pass_min_chars)
             except Exception:
                 heavy_min = 180
             if heavy_min < 64 or heavy_min > 4000:

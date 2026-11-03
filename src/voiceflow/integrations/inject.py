@@ -302,10 +302,12 @@ def _run_restore(
         if log:
             log.warning("clipboard_restore_immediate_failed error=%s", exc)
 
+        failure = exc  # `exc` is unbound once the except block exits; retry() may run later
+
         def retry() -> None:
             _retry_restore(
                 pending,
-                exc,
+                failure,
                 restore_attempts=restore_attempts,
                 restore_base_delay=restore_base_delay,
                 restore_async_retry_seconds=restore_async_retry_seconds,

@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import queue
 import threading
-from typing import Optional, List
-from collections import deque
+from typing import Optional
 import time
 import logging
 
@@ -646,7 +645,7 @@ class EnhancedAudioRecorder:
         # they came from); they belong to the recording. One writer: that callback.
         self._shared_recording_dropped = 0
 
-        print(f"[AudioRecorder] Enhanced recorder initialized:")
+        print("[AudioRecorder] Enhanced recorder initialized:")
         print(f"  - Sample rate: {cfg.sample_rate}Hz")
         print(f"  - Channels: {cfg.channels}")
         print(f"  - Block size: {cfg.blocksize} frames")
@@ -860,7 +859,7 @@ class EnhancedAudioRecorder:
         )
         self._stream.start()
         self._recording = True
-        print(f"[AudioRecorder] Recording started successfully with pre-buffer integration")
+        print("[AudioRecorder] Recording started successfully with pre-buffer integration")
 
     def _append_pre_roll_locked(self) -> None:
         """Move the freshest pre-roll into the recording ring (caller holds _route_lock)."""
@@ -1018,11 +1017,11 @@ class EnhancedAudioRecorder:
 
             # CRITICAL FIX: Clear buffer after getting data to prevent accumulation
             self._ring_buffer.clear()
-            print(f"[AudioRecorder] Buffer cleared after extraction to prevent accumulation")
+            print("[AudioRecorder] Buffer cleared after extraction to prevent accumulation")
             
             # Performance summary
             actual_duration = time.time() - self._start_time
-            print(f"[AudioRecorder] Recording stopped:")
+            print("[AudioRecorder] Recording stopped:")
             print(f"  - Audio duration: {duration:.2f}s")
             print(f"  - Actual duration: {actual_duration:.2f}s")
             print(f"  - Callbacks: {self._callback_count}")

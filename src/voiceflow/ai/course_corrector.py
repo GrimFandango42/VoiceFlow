@@ -12,7 +12,7 @@ Works with or without LLM - falls back to rule-based correction.
 
 import re
 import logging
-from typing import Optional, Tuple
+from typing import Optional
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
