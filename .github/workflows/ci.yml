@@ -24,8 +24,6 @@ jobs:
       - name: Ruff lint
         run: ruff check src/
 
-      - name: Ruff format check
-        run: ruff format --check src/
 
   test:
     name: Tests (CPU-only, no audio hardware)

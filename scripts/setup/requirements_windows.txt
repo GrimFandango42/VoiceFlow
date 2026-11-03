@@ -25,6 +25,7 @@ pystray>=0.19.4
 # Configuration and utilities
 python-dotenv>=1.0.0
 psutil>=5.9.0
+pywin32>=306; sys_platform == "win32"
 
 # Optional: GPU acceleration (CUDA)
 # torch[cuda] # Uncomment if using CUDA

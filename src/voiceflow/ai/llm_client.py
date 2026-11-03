@@ -9,7 +9,7 @@ import json
 import time
 import urllib.request
 import urllib.error
-from typing import Optional, Dict, Any
+from typing import Optional
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)

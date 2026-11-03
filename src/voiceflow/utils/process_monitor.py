@@ -12,9 +12,8 @@ import time
 import psutil
 import os
 import logging
-import signal
 import subprocess
-from typing import Optional, Callable, Dict, Any, List
+from typing import Optional, Callable, List
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,7 +68,7 @@ class ProcessWatchdog:
         self.last_audio_processed = 0
         self.last_transcription_completed = 0
 
-        logger.info(f"ProcessWatchdog initialized:")
+        logger.info("ProcessWatchdog initialized:")
         logger.info(f"  - Health check interval: {health_check_interval}s")
         logger.info(f"  - Activity timeout: {activity_timeout}s")
         logger.info(f"  - Memory limit: {memory_limit_mb}MB")

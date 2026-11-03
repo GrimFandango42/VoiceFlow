@@ -10,7 +10,7 @@ Detects and executes voice commands for text manipulation:
 
 import re
 import logging
-from typing import Optional, Tuple, Callable, Dict, Any
+from typing import Optional, Tuple, Dict
 from dataclasses import dataclass
 from enum import Enum
 
