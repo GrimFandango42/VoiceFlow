@@ -143,3 +143,93 @@ def test_press_enter_keeps_the_inline_wait_and_restores_synchronously(env):
     assert (time.perf_counter() - started) >= 0.12
     assert env.sent[-1] == "enter"
     assert env.clipboard.get(CF_UNICODETEXT) == "ORIGINAL"
+
+
+# --- VF-11 review finding 1: a failed restore keeps its retry inside the pending lifecycle ---
+
+
+@pytest.fixture()
+def flaky(env, monkeypatch):
+    """Make the multi-format restore fail while ``state.fail`` is set."""
+    real = inj._restore_clipboard_all_formats
+    state = types.SimpleNamespace(fail=True, failures=0)
+
+    def restore(snapshot):
+        if state.fail:
+            state.failures += 1
+            raise OSError("clipboard locked")
+        real(snapshot)
+
+    monkeypatch.setattr(inj, "_restore_clipboard_all_formats", restore)
+    monkeypatch.setattr(inj, "_RETRY_BACKOFF_S", 0.03)
+    return state
+
+
+def test_immediate_restore_failure_then_second_paste_keeps_original(env, flaky):
+    injector = _injector(delay_ms=0)
+
+    assert injector.paste_text("FIRST_DICTATION") is True
+    assert flaky.failures >= 1
+    assert env.clipboard.get(CF_UNICODETEXT) == "FIRST_DICTATION"
+    # The failed restore is still owed: it must stay registered, not be forgotten.
+    assert inj._pending_restore is not None
+
+    # Second dictation arrives before the retry has succeeded.
+    assert injector.paste_text("SECOND_DICTATION") is True
+    flaky.fail = False
+
+    assert _wait_for(lambda: env.clipboard.get(CF_UNICODETEXT) == "ORIGINAL")
+    assert env.clipboard.get(CF_DIB) == b"IMG"
+    assert _wait_for(lambda: inj._pending_restore is None)
+
+
+def test_deferred_restore_failure_then_second_paste_keeps_original(env, flaky):
+    injector = _injector(delay_ms=40)
+
+    assert injector.paste_text("FIRST_DICTATION") is True
+    assert _wait_for(lambda: flaky.failures >= 1), "deferred restore never attempted"
+    pending = inj._pending_restore
+    assert pending is not None and not pending.done
+
+    assert injector.paste_text("SECOND_DICTATION") is True
+    flaky.fail = False
+
+    assert _wait_for(lambda: env.clipboard.get(CF_UNICODETEXT) == "ORIGINAL", timeout=3.0)
+    assert env.clipboard.get(CF_DIB) == b"IMG"
+    assert pending.finished.wait(timeout=2.0)
+    assert _wait_for(lambda: inj._pending_restore is None)
+
+
+def test_claimed_retry_never_overwrites_the_next_paste(env, flaky):
+    injector = _injector(delay_ms=0)
+    assert injector.paste_text("FIRST_DICTATION") is True
+    pending = inj._pending_restore
+    assert pending is not None
+
+    claimed = inj._claim_pending_restore()
+    assert claimed is pending and pending.claimed
+
+    # The next paste is now in flight and has put its text on the clipboard. Even with
+    # the clipboard free again, the abandoned retry must not write the original over it.
+    env.clipboard.clear()
+    env.clipboard[CF_UNICODETEXT] = "SECOND_DICTATION"
+    flaky.fail = False
+    assert pending.finished.wait(timeout=2.0)
+    time.sleep(0.15)
+    assert env.clipboard.get(CF_UNICODETEXT) == "SECOND_DICTATION"
+    assert inj._pending_restore is None
+
+
+def test_restore_that_definitively_fails_does_not_wedge_later_pastes(env, flaky):
+    injector = _injector(delay_ms=0, clipboard_restore_async_retry_seconds=0.5)
+    assert injector.paste_text("FIRST_DICTATION") is True
+    pending = inj._pending_restore
+    assert pending is not None
+    # Window is 0.5 s; after it the pending gives up and is released.
+    assert pending.finished.wait(timeout=3.0)
+    assert inj._pending_restore is None
+
+    flaky.fail = False
+    started = time.perf_counter()
+    assert injector.paste_text("SECOND_DICTATION") is True
+    assert time.perf_counter() - started < 1.5
