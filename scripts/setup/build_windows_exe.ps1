@@ -259,7 +259,13 @@ function Get-CudaRuntimeDlls {
         "zlibwapi.dll"
     )
 
+    # One file per DLL name, first candidate wins (VOICEFLOW_TORCH_LIB_DIR, then
+    # the venv, then previous bundles). Two sources for the same name used to
+    # both be passed to PyInstaller and the later one -- a previous bundle under
+    # dist\ -- won, then PyInstaller deleted dist\<name> before collecting it:
+    # a CPU-only bundle with no error. The post-build verifier caught that.
     $files = New-Object System.Collections.Generic.List[string]
+    $seenNames = @{}
     $seenDirs = @{}
     foreach ($dir in $candidates) {
         if (-not $dir) {
@@ -276,12 +282,41 @@ function Get-CudaRuntimeDlls {
         }
         foreach ($pattern in $patterns) {
             Get-ChildItem -Path $full -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
-                $files.Add($_.FullName)
+                $nameKey = $_.Name.ToLowerInvariant()
+                if (-not $seenNames.ContainsKey($nameKey)) {
+                    $seenNames[$nameKey] = $true
+                    $files.Add($_.FullName)
+                }
             }
         }
     }
 
-    return $files | Sort-Object -Unique
+    return $files
+}
+
+function Copy-DllsOutOfDist {
+    # PyInstaller empties dist\<OutputName> before it collects binaries, so a
+    # DLL sourced from a previous bundle there must be copied somewhere safe first.
+    param(
+        [string[]]$Dlls,
+        [string]$DistPath,
+        [string]$StageDir
+    )
+
+    $distFull = [System.IO.Path]::GetFullPath($DistPath).TrimEnd('\') + '\'
+    $result = New-Object System.Collections.Generic.List[string]
+    foreach ($dll in $Dlls) {
+        $full = [System.IO.Path]::GetFullPath($dll)
+        if ($full.StartsWith($distFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+            New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
+            $staged = Join-Path $StageDir ([System.IO.Path]::GetFileName($full))
+            Copy-Item -Path $full -Destination $staged -Force
+            $result.Add($staged)
+        } else {
+            $result.Add($full)
+        }
+    }
+    return $result
 }
 
 function Compress-ArchiveWithRetry {
@@ -464,8 +499,11 @@ if ($tclTkArgs.Count -gt 0) {
 }
 
 if (-not $SkipCudaRuntime) {
-    $cudaDlls = Get-CudaRuntimeDlls -RepoRoot $repoRoot -PythonExe $pythonExe
-    if ($cudaDlls -and $cudaDlls.Count -gt 0) {
+    $cudaDlls = @(Get-CudaRuntimeDlls -RepoRoot $repoRoot -PythonExe $pythonExe)
+    if ($cudaDlls.Count -gt 0) {
+        $cudaDlls = @(Copy-DllsOutOfDist -Dlls $cudaDlls -DistPath $distPath -StageDir (Join-Path $workPath "cuda_stage"))
+    }
+    if ($cudaDlls.Count -gt 0) {
         foreach ($dll in $cudaDlls) {
             # Bundle CUDA runtime DLLs when available so packaged builds can run GPU path
             # without depending on system-wide torch installs.
