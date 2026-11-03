@@ -41,6 +41,11 @@ def pytest_configure(config) -> None:
     if str(root) not in sys.path:
         sys.path.append(str(root))
 
+    # CUDA detection must not depend on whether this machine happens to have a built
+    # bundle next to the checkout (VF-11 made source processes probe it); otherwise
+    # tests silently take the GPU path on the developer's box and the CPU path in CI.
+    os.environ["VOICEFLOW_CUDA_PROBE_BUNDLE"] = "0"
+
     _SANDBOX = tempfile.TemporaryDirectory(prefix="voiceflow-test-appdata-")
     for var in ("LOCALAPPDATA", "APPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
         os.environ[var] = _SANDBOX.name

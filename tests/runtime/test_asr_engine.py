@@ -370,3 +370,43 @@ def run_quick_test():
 
 if __name__ == "__main__":
     run_quick_test()
+
+
+def test_source_process_finds_cuda_dlls_in_the_checkouts_bundle(monkeypatch, tmp_path):
+    """VF-11: the nightly learning job runs from source, not frozen, and used to report
+    'CUDA unavailable' because only venv torch installs were probed."""
+    from voiceflow.core import asr_engine as asr_mod
+
+    bundle_lib = tmp_path / "repo" / "dist" / "VoiceFlow" / "_internal" / "torch" / "lib"
+    bundle_lib.mkdir(parents=True)
+    for dll_name in asr_mod.CUDA_REQUIRED_DLLS:
+        (bundle_lib / dll_name).write_bytes(b"")
+
+    monkeypatch.setattr(asr_mod.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(asr_mod.Path, "cwd", staticmethod(lambda: tmp_path / "repo"))
+    monkeypatch.delenv("VOICEFLOW_TORCH_LIB_DIR", raising=False)
+    monkeypatch.delenv("VOICEFLOW_CUDA_DLL_DIR", raising=False)
+    monkeypatch.setenv("VOICEFLOW_CUDA_PROBE_BUNDLE", "1")  # the suite default is off
+
+    assert bundle_lib in asr_mod._probe_external_torch_lib_dirs()
+
+    # The switch really turns the bundle probe off (what the test suite relies on).
+    monkeypatch.setenv("VOICEFLOW_CUDA_PROBE_BUNDLE", "0")
+    assert bundle_lib not in asr_mod._probe_external_torch_lib_dirs()
+    monkeypatch.setenv("VOICEFLOW_CUDA_PROBE_BUNDLE", "1")
+
+    # And registering from it makes the runtime check see the DLLs.
+    registered: list[object] = []
+    monkeypatch.setattr(asr_mod, "_probe_external_torch_lib_dirs", lambda: [bundle_lib])
+    monkeypatch.setattr(asr_mod, "_add_dll_search_path", registered.append)
+    assert asr_mod._register_external_cuda_runtime_path(list(asr_mod.CUDA_REQUIRED_DLLS)) is True
+    assert registered == [bundle_lib]
+
+
+def test_explicit_cuda_dll_dir_override_is_probed(monkeypatch, tmp_path):
+    from voiceflow.core import asr_engine as asr_mod
+
+    custom = tmp_path / "gpu-dlls"
+    custom.mkdir()
+    monkeypatch.setenv("VOICEFLOW_CUDA_DLL_DIR", str(custom))
+    assert custom in asr_mod._probe_external_torch_lib_dirs()

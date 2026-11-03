@@ -112,6 +112,17 @@ def _probe_external_torch_lib_dirs() -> list[Path]:
         for venv_name in (".venv-gpu", "venv", ".venv"):
             candidates.append(root / venv_name / "Lib" / "site-packages" / "torch" / "lib")
 
+    # A source/venv process (the nightly learning job, dev runs) has no CUDA
+    # runtime of its own, but the packaged bundle next to the checkout does. Without
+    # this the job logged "CUDA unavailable" while the app itself ran CUDA float16,
+    # because the probe only knew about venv torch installs. Explicit override first.
+    bundle_override = os.environ.get("VOICEFLOW_CUDA_DLL_DIR", "").strip()
+    if bundle_override:
+        candidates.append(Path(bundle_override))
+    if os.environ.get("VOICEFLOW_CUDA_PROBE_BUNDLE", "1").strip() != "0":
+        for root in probe_roots:
+            candidates.append(root / "dist" / "VoiceFlow" / "_internal" / "torch" / "lib")
+
     deduped: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
