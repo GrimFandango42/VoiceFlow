@@ -32,6 +32,9 @@ class Config:
     # frames logged as `input overflow`); start/stop timing is covered by the
     # pre-buffer and stop drain, so it does not add hotkey latency.
     audio_input_latency: str = "high"
+    # One always-on mic stream shared by pre-roll and recording (False = the old
+    # second-stream-per-recording behaviour). See EnhancedAudioRecorder.
+    audio_single_stream: bool = True
     # Ring-buffer capacity. Memory is fixed at this size; a longer hold keeps
     # the most recent audio and logs `recording_ring_wrapped`.
     max_recording_seconds: float = 300.0
