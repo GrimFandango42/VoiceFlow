@@ -652,6 +652,7 @@ class EnhancedApp:
         self._checkpoint_live_injected = False
         self._idle_resume_warmup_lock = threading.Lock()
         self._idle_resume_last_warmup_at = 0.0
+        self._idle_prewarm_thread: Optional[threading.Thread] = None
         self.ptt_listener: Optional[Any] = None
         self._feedback_audio_enabled = str(os.environ.get("VOICEFLOW_FEEDBACK_AUDIO", "")).strip().lower() in {
             "1",
@@ -944,6 +945,51 @@ class EnhancedApp:
         if rms > 1e-9:
             signal *= 0.126 / rms
         return np.clip(signal, -1.0, 1.0)
+
+    def _idle_gap_seconds(self) -> float:
+        """Seconds since the last finished transcription (0 before the first one)."""
+        last_completed = float(getattr(self, "_last_transcription_completed_at", 0.0) or 0.0)
+        if last_completed <= 0.0:
+            return 0.0
+        return max(0.0, time.time() - last_completed)
+
+    def _maybe_prewarm_on_press(self) -> bool:
+        """Warm the ASR runtime while the user is still speaking.
+
+        After a long idle the first decode paid a 330-440 ms warm-up (VF-10 log
+        analysis: 11 of 57 dictations) inside the release-to-text path. The hotkey
+        press happens seconds before the release, so the warm-up runs then, in the
+        background, and the release path finds it already done. Returns True when a
+        warm-up was started.
+        """
+        if not bool(getattr(self.cfg, "idle_resume_guard_enabled", True)):
+            return False
+        if not bool(getattr(self.cfg, "idle_resume_warmup_enabled", True)):
+            return False
+        threshold = max(30.0, float(getattr(self.cfg, "idle_resume_threshold_seconds", 1200.0)))
+        if self._idle_gap_seconds() < threshold:
+            return False
+        if not self.is_model_ready():
+            return False
+        existing = self._idle_prewarm_thread
+        if existing is not None and existing.is_alive():
+            return False
+        thread = threading.Thread(
+            target=self._run_idle_resume_warmup, name="IdlePrewarm", daemon=True
+        )
+        self._idle_prewarm_thread = thread
+        thread.start()
+        self._log.info("idle_prewarm_on_press gap_seconds=%.1f", self._idle_gap_seconds())
+        return True
+
+    def _await_idle_prewarm(self, timeout: float = 2.0) -> float:
+        """Wait (bounded) for a press-time warm-up still in flight; returns ms waited."""
+        thread = self._idle_prewarm_thread
+        if thread is None or not thread.is_alive():
+            return 0.0
+        started = time.perf_counter()
+        thread.join(timeout=max(0.0, float(timeout)))
+        return (time.perf_counter() - started) * 1000.0
 
     def _run_idle_resume_warmup(self) -> float:
         """Warm ASR runtime once after long idle to reduce first-utterance quality dips."""
@@ -2025,6 +2071,10 @@ class EnhancedApp:
                     _play_beep(880, 60)
 
                 self.rec.start()
+                try:
+                    self._maybe_prewarm_on_press()
+                except Exception as prewarm_error:
+                    self._log.debug("idle_prewarm_failed error=%s", prewarm_error)
                 self._start_audio_visual_monitor()
                 if getattr(self.cfg, "live_flush_during_hold", False):
                     self._start_live_checkpoint_monitor()
@@ -2216,6 +2266,8 @@ class EnhancedApp:
                         idle_resume_threshold,
                     )
                     stage_start = time.perf_counter()
+                    # Normally already done: it started when the hotkey went down.
+                    self._await_idle_prewarm()
                     warmup_ms = self._run_idle_resume_warmup()
                     stage_ms["idle_resume_warmup"] = warmup_ms or ((time.perf_counter() - stage_start) * 1000.0)
 
@@ -2970,6 +3022,14 @@ class EnhancedApp:
         self.postprocess_executor.shutdown(wait=False)
         self.checkpoint_executor.shutdown(wait=False)
         self.injector.clear_target_window()
+        try:
+            # A paste defers its clipboard restore to a timer; never exit with the
+            # user's clipboard still holding the last dictation.
+            from voiceflow.integrations.inject import flush_pending_clipboard_restore
+
+            flush_pending_clipboard_restore()
+        except Exception:
+            pass
 
         # Session summary with ASR statistics
         session_duration = time.time() - self._session_start_time
