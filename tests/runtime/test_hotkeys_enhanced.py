@@ -4,7 +4,15 @@ import time
 from types import SimpleNamespace
 
 from voiceflow.core.config import Config
+import pytest
+
 import voiceflow.integrations.hotkeys_enhanced as hotkeys_mod
+
+
+@pytest.fixture(autouse=True)
+def _no_os_key_state(monkeypatch):
+    """These tests drive a fake keyboard; never consult the developer's real key state."""
+    monkeypatch.setattr(hotkeys_mod, "_os_key_state", lambda name: None)
 
 
 def test_short_press_release_stops_without_listener_lock_deadlock(monkeypatch):

@@ -5,7 +5,7 @@ Comprehensive input validation and security measures following DeepSeek recommen
 """
 
 import re
-from typing import Any, Union, Optional
+from typing import Any, Union
 import numpy as np
 from pathlib import Path
 

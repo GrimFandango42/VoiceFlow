@@ -106,7 +106,10 @@ def _ramp_blocks(seconds: float):
 
 class TestCallbackNeverBlocks:
     def test_status_is_counted_not_logged_on_the_audio_thread(self, caplog):
-        rec = _recorder()
+        # Two-stream mode: each callback feeds its own counter (single-stream mode
+        # counts the shared stream as "recording" while recording; see
+        # test_single_stream_recorder.py).
+        rec = _recorder(audio_single_stream=False)
         rec._recording = True
         block = np.zeros((BLOCK, 1), dtype=np.float32)
         with caplog.at_level(logging.DEBUG):

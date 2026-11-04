@@ -42,7 +42,7 @@ except Exception:
 
 try:
     from voiceflow.ui.visual_indicators import (
-        TranscriptionStatus,
+        TranscriptionStatus,  # noqa: F401
         hide_status,
         request_open_correction_review,
         request_open_recent_history,
@@ -53,7 +53,7 @@ try:
         show_listening,
         show_processing,
         show_transcribing,
-        show_transcription_status,
+        show_transcription_status,  # noqa: F401
     )
     VISUAL_INDICATORS_AVAILABLE = True
 except ImportError:

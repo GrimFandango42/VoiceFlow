@@ -11,6 +11,7 @@ Model Tiers:
 
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -111,6 +112,17 @@ def _probe_external_torch_lib_dirs() -> list[Path]:
     for root in probe_roots:
         for venv_name in (".venv-gpu", "venv", ".venv"):
             candidates.append(root / venv_name / "Lib" / "site-packages" / "torch" / "lib")
+
+    # A source/venv process (the nightly learning job, dev runs) has no CUDA
+    # runtime of its own, but the packaged bundle next to the checkout does. Without
+    # this the job logged "CUDA unavailable" while the app itself ran CUDA float16,
+    # because the probe only knew about venv torch installs. Explicit override first.
+    bundle_override = os.environ.get("VOICEFLOW_CUDA_DLL_DIR", "").strip()
+    if bundle_override:
+        candidates.append(Path(bundle_override))
+    if os.environ.get("VOICEFLOW_CUDA_PROBE_BUNDLE", "1").strip() != "0":
+        for root in probe_roots:
+            candidates.append(root / "dist" / "VoiceFlow" / "_internal" / "torch" / "lib")
 
     deduped: list[Path] = []
     seen: set[str] = set()
@@ -252,6 +264,54 @@ class ModelConfig:
     best_of: int = 1
     temperature: float = 0.0
     condition_on_previous_text: bool = False
+    # Comma-separated terms passed to faster-whisper as ``hotwords``. Unlike
+    # ``initial_prompt`` (which faster-whisper drops after the first 30 s window when
+    # it is not conditioning on previous text), hotwords are re-applied to every window,
+    # so a 2-minute dictation is biased as much at 100 s as at 5 s.
+    hotwords: str = ""
+
+
+def _model_accepts_hotwords(model: Any) -> bool:
+    """True when this faster-whisper build's ``transcribe`` takes ``hotwords`` (>= 1.0)."""
+    try:
+        import inspect
+
+        params = inspect.signature(model.transcribe).parameters
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return "hotwords" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+
+
+# faster-whisper's own default ``no_speech_threshold``: a window the decoder itself
+# considers more likely silence than speech.
+_HOTWORD_ECHO_NO_SPEECH_PROB = 0.6
+
+
+def _is_hotword_echo(text: str, hotwords: str, no_speech_prob: float = 0.0) -> bool:
+    """True when ``text`` is the hotword list read back on silence/noise.
+
+    Biasing text can surface on silence as a hallucination. A dictation that merely
+    consists of configured names ("Claude, Codex, Atlas") is real speech and must
+    survive, so a text made only of hotwords is discarded only when
+
+    * the decoder reported no-speech evidence (``no_speech_prob`` at or above
+      ``_HOTWORD_ECHO_NO_SPEECH_PROB``), or
+    * it is the entire hotword list, in order -- the exact string the bias text
+      spells out, which nobody dictates.
+    """
+    pattern = r"[a-z0-9']+"
+    listed = re.findall(pattern, (hotwords or "").lower())
+    words = re.findall(pattern, (text or "").lower())
+    if len(words) < 3 or not listed:
+        return False
+    vocab = set(listed)
+    if not all(w in vocab for w in words):
+        return False
+    if words == listed:
+        return True
+    return float(no_speech_prob or 0.0) >= _HOTWORD_ECHO_NO_SPEECH_PROB
 
 
 # Predefined model configurations
@@ -434,6 +494,8 @@ class FasterWhisperBackend(ASRBackend):
         self._model = None
         self._lock = threading.RLock()
         self._retried_cpu_fallback = False
+        # None until first needed: whether this faster-whisper build accepts hotwords.
+        self._hotwords_supported: Optional[bool] = None
 
     def load(self) -> None:
         with self._lock:
@@ -570,6 +632,12 @@ class FasterWhisperBackend(ASRBackend):
                     }
                 if initial_prompt:
                     kwargs["initial_prompt"] = initial_prompt
+                hotwords = str(getattr(self.config, "hotwords", "") or "").strip()
+                if hotwords:
+                    if self._hotwords_supported is None:
+                        self._hotwords_supported = _model_accepts_hotwords(self._model)
+                    if self._hotwords_supported:
+                        kwargs["hotwords"] = hotwords
                 segments_iter, info = self._model.transcribe(audio, **kwargs)
         except Exception as exc:
             if self._should_fallback_to_cpu(exc):
@@ -935,6 +1003,7 @@ class ASREngine:
         best_of: int = 1,
         temperature: float = 0.0,
         condition_on_previous_text: bool = False,
+        hotwords: str = "",
     ):
         """Initialize the ASR engine.
 
@@ -1006,6 +1075,7 @@ class ASREngine:
         self.model_config.best_of = max(1, int(best_of))
         self.model_config.temperature = float(temperature)
         self.model_config.condition_on_previous_text = bool(condition_on_previous_text)
+        self.model_config.hotwords = str(hotwords or "").strip()
 
         self.sample_rate = sample_rate
         self.enable_diarization = enable_diarization
@@ -1093,6 +1163,16 @@ class ASREngine:
         # Transcribe
         result = self._backend.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
 
+        if _is_hotword_echo(
+            getattr(result, "text", ""),
+            self.model_config.hotwords,
+            getattr(result, "max_no_speech_prob", 0.0),
+        ):
+            logger.info("hotword_echo_discarded words=%d", len(str(result.text).split()))
+            result.text = ""
+            result.segments = []
+            result.max_no_speech_prob = 1.0
+
         # Expose the decoder's silence evidence to callers that only receive a
         # string. Set on every path, including the early returns above, so a
         # stale value can never leak into the next utterance's decision.
@@ -1107,7 +1187,7 @@ class ASREngine:
         if result.duration > 0:
             rtf = result.processing_time / result.duration
             logger.debug(f"Transcribed {result.duration:.2f}s in {result.processing_time:.2f}s "
-                        f"(RTF: {rtf:.2f}, speed: {1/rtf:.1f}x realtime)")
+                        f"(RTF: {rtf:.2f}, speed: {1 / max(rtf, 0.001):.1f}x realtime)")
 
         return result
 
@@ -1216,6 +1296,7 @@ class ModernWhisperASR(ASREngine):
         beam_size = getattr(cfg, 'beam_size', 1)
         temperature = getattr(cfg, 'temperature', 0.0)
         condition_on_previous_text = getattr(cfg, 'condition_on_previous_text', False)
+        hotwords = getattr(cfg, 'asr_hotwords', '')
         force_cpu = str(os.environ.get("VOICEFLOW_FORCE_CPU", "")).strip().lower() in {"1", "true", "yes"}
         gpu_enabled = bool(getattr(cfg, "enable_gpu_acceleration", True))
 
@@ -1249,6 +1330,7 @@ class ModernWhisperASR(ASREngine):
                 beam_size=beam_size,
                 temperature=temperature,
                 condition_on_previous_text=condition_on_previous_text,
+                hotwords=hotwords,
             )
             logger.info(f"Using model tier '{model_tier}' -> {self.model_config.name}")
         else:
@@ -1263,6 +1345,7 @@ class ModernWhisperASR(ASREngine):
                 beam_size=beam_size,
                 temperature=temperature,
                 condition_on_previous_text=condition_on_previous_text,
+                hotwords=hotwords,
             )
         self.cfg = cfg
 

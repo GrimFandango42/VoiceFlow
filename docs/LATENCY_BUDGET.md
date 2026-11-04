@@ -1,0 +1,49 @@
+# Dictation latency budget (VF-11)
+
+What happens between letting go of the hotkey and text appearing, step by step.
+"Before" figures come from the VF-10 log analysis (57 recordings: release-to-text median
+388 ms, p90 775 ms, paste step median 192 ms) and from reading the code. "After" figures
+are **expected, not measured** - nothing here was run against a microphone or a live app.
+Re-measure with `python scripts/dev/log_latency.py <voiceflow.log>` after a few days of use.
+
+**The 388 ms the log reports is only the last two rows.** `transcription_timing` starts after
+`recorder.stop()` returns, so rows 1-4 (about 0.6 s of fixed waiting) are invisible to it.
+
+| # | Step | Before | After (expected) | Config knob | Visible in log |
+|---|------|--------|------------------|-------------|----------------|
+| 1 | Release detected and confirmed | ~120 ms confirm + 0-30 ms poll jitter | ~125 ms (timer; no longer needs a later key event) | `ptt_release_confirm_seconds` (0.12) | no |
+| 2 | Tail buffer (keeps recording after release; clips >= 0.35 s) | 250 ms | 250 ms | `ptt_tail_buffer_seconds` (0.25) | no |
+| 3 | Stop drain | up to 250 ms - in practice the full 250 ms, see note | 250 ms | `stop_drain_seconds` (0.25) | no |
+| 4 | Stream stop/close | one `stop()`+`close()` of the recording stream (ms to tens of ms) | none (shared stream stays open) | `audio_single_stream` | no |
+| 5 | Idle warm-up, first dictation after >= 20 min idle (11 of 57) | +329-439 ms | ~0 (runs at key press) unless the hold is shorter than the warm-up | `idle_resume_warmup_enabled` | `warmup_ms` |
+| 6 | ASR decode + cleanup (`total_ms`) | ~195 ms median | unchanged | - | `total_ms` |
+| 7 | Paste (`inject_ms`) | 192 ms median (30 ms settle + keystroke + 150 ms restore wait) | ~45 ms (settle + keystroke; restore on a timer) | `clipboard_restore_delay_ms` (150, now off the critical path) | `inject_ms` |
+
+**Expected effect on the logged figure (rows 6 + 7):** median 388 ms -> about 240 ms,
+p90 775 ms -> about 480-630 ms (the 11 idle-resume outliers lose their 330-440 ms; every paste
+loses about 145 ms). **Expected key-release-to-text for a typical dictation:** about 1.0 s ->
+about 0.85 s, of which about 0.62 s is rows 1-3.
+
+## Note on row 3
+
+`_drain_pending_audio` returns early only once the audio callbacks go quiet, but the input
+stream stays open during the drain, so callbacks keep arriving every 32 ms and the loop runs
+to its 250 ms cap on essentially every recording (inferred from the code; not yet confirmed from a log - the next analysis should record the drain time). The tail buffer (row 2) already keeps
+recording for 250 ms after release, so most of this drain is redundant with it. It was left
+alone in VF-11 because shortening it risks clipping the last word and cannot be validated
+without a microphone.
+
+## Levers worth trying next (config only, one at a time)
+
+| Setting | Now | Try | Saves | Risk |
+|---------|-----|-----|-------|------|
+| `stop_drain_seconds` | 0.25 | 0.10 | ~150 ms | last word clipped if the driver holds more than ~100 ms |
+| `ptt_release_confirm_seconds` | 0.12 | 0.06 | ~60 ms | a synthetic key event could end a recording early; the release check now asks Windows directly, which makes this safer than before |
+| `ptt_tail_buffer_seconds` | 0.25 | 0.15 | ~100 ms | trailing word cut off |
+
+## What was measured in tests (not in the field)
+
+* Paste returns in well under the restore delay while the restore still happens (`test_paste_async_restore.py`).
+* Warm-up cost on the release path drops from the full warm-up (~300 ms in the fake) to under 50 ms with a press-time pre-warm (`test_idle_prewarm.py`).
+* The hook path alone completes a release; without the release timer the same test fails (`test_hotkey_release_reliability.py`).
+* Pre-roll hand-over on the shared stream has no gap or duplicate under a concurrent producer (`test_single_stream_recorder.py`).

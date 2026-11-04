@@ -150,3 +150,6 @@ nul
 
 # Generated at package time by the Windows build script
 src/voiceflow/_build_stamp.py
+
+# local agent worktrees (never track)
+.claude/worktrees/
