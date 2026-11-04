@@ -11,6 +11,7 @@ import math
 import os
 import random
 import re
+import sys
 import threading
 import time
 import tkinter as tk
@@ -986,7 +987,6 @@ class BottomScreenIndicator:
                 glow_x0, bottom, glow_x1, bottom,
                 fill=self._bar_colors[i],
                 outline="",
-                stipple="gray50",
             )
             self._bar_glow.append(glow)
             # Main bar
@@ -1028,11 +1028,26 @@ class BottomScreenIndicator:
             self._idle_wave_job = None
         self._idle_wave_tick()
 
+    _WAVE_MODES = {
+        TranscriptionStatus.LISTENING: "listening",
+        TranscriptionStatus.PROCESSING: "processing",
+        TranscriptionStatus.TRANSCRIBING: "transcribing",
+    }
+
     def _idle_wave_tick(self):
+        """The single waveform clock: one physics step per frame, mode follows the status."""
         if not self.window or not self.wave_canvas:
             return
-        self._animate_waveform(mode="idle")
-        self._idle_wave_job = self.window.after(35, self._idle_wave_tick)
+        status = getattr(self, "current_status", None)
+        mode = self._WAVE_MODES.get(status, "idle")
+        self._animate_waveform(mode=mode)
+        interval = 35
+        if mode != "idle":
+            try:
+                interval = self._resolve_animation_interval(status)
+            except Exception:
+                interval = 33
+        self._idle_wave_job = self.window.after(interval, self._idle_wave_tick)
 
     def _animate_waveform(self, mode: str = "listening"):
         if not self.wave_canvas or not self.wave_bars:
@@ -1574,6 +1589,20 @@ class BottomScreenIndicator:
         version_label.pack(side=tk.RIGHT, padx=(0, 2), pady=2)
         self.dock_version_label = version_label
 
+        # Recording duration: counts while listening, then holds the last
+        # recording's length until the next one starts. Empty until first use.
+        self.dock_elapsed_var = tk.StringVar(value="")
+        self.dock_elapsed_label = tk.Label(
+            dock_frame,
+            textvariable=self.dock_elapsed_var,
+            bg=self._ui("panel_bg"),
+            fg=self._ui("text_primary"),
+            font=("Segoe UI", 8, "bold"),
+            anchor="e",
+            padx=4,
+        )
+        self.dock_elapsed_label.pack(side=tk.RIGHT, padx=(0, 2), pady=2)
+
         if not self.dock_enabled:
             self.dock_window.withdraw()
 
@@ -2047,7 +2076,6 @@ class BottomScreenIndicator:
             for bar in self.status_audio_bars:
                 self.status_icon_canvas.coords(bar, -10, -10, -10, -10)
         self._animate_geometric_strip(mode="idle")
-        self._animate_waveform(mode="idle")
 
     def _animate_geometric_strip(self, mode: str = "listening"):
         if not self.geo_canvas or not self.geo_nodes:
@@ -2086,15 +2114,12 @@ class BottomScreenIndicator:
         if status == TranscriptionStatus.LISTENING:
             if not self.reduced_motion:
                 self._animate_geometric_strip(mode="listening")
-            self._animate_waveform(mode="listening")
         elif status == TranscriptionStatus.PROCESSING:
             if not self.reduced_motion:
                 self._animate_geometric_strip(mode="processing")
-            self._animate_waveform(mode="processing")
         elif status == TranscriptionStatus.TRANSCRIBING:
             if not self.reduced_motion:
                 self._animate_geometric_strip(mode="transcribing")
-            self._animate_waveform(mode="transcribing")
         else:
             self._set_icon_idle()
             return
@@ -3139,6 +3164,7 @@ class BottomScreenIndicator:
                     pb.start(10)
                 self._start_animation(status)
                 self._start_elapsed_timer()
+                self._set_hires_timer(True)
             elif status in (TranscriptionStatus.PROCESSING, TranscriptionStatus.TRANSCRIBING):
                 self._stop_elapsed_timer()
                 # Keep overlay visible — user needs feedback that work is happening
@@ -3160,6 +3186,7 @@ class BottomScreenIndicator:
             else:
                 # IDLE — fade out and hide
                 self._stop_elapsed_timer()
+                self._set_hires_timer(False)
                 self._fade_out()
                 self._stop_animation()
                 if pb:
@@ -3175,12 +3202,32 @@ class BottomScreenIndicator:
         except Exception as e:
             print(f"[VisualIndicator] UI update error: {e}")
 
+    def _set_hires_timer(self, enabled: bool) -> None:
+        """Balanced timeBeginPeriod/timeEndPeriod(1) on Windows; no-op elsewhere."""
+        if bool(getattr(self, "_hires_timer_on", False)) == bool(enabled):
+            return
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            winmm = ctypes.WinDLL("winmm")
+            if enabled:
+                winmm.timeBeginPeriod(1)
+            else:
+                winmm.timeEndPeriod(1)
+            self._hires_timer_on = bool(enabled)
+        except Exception as exc:
+            logger.debug("hi-res timer toggle failed: %s", exc)
+
     def _start_elapsed_timer(self) -> None:
         """Tick the recording timer ~4x/s on the GUI thread until the status leaves LISTENING."""
         self._stop_elapsed_timer(clear=False)
         started = getattr(self, "_listening_started_at", None) or time.monotonic()
         self._elapsed_generation = getattr(self, "_elapsed_generation", 0) + 1
         generation = self._elapsed_generation
+
+        self._elapsed_running_since = started
 
         def _tick() -> None:
             if generation != self._elapsed_generation:
@@ -3189,7 +3236,12 @@ class BottomScreenIndicator:
             if var is None or not self.window:
                 return
             try:
-                var.set(format_elapsed(time.monotonic() - started))
+                label = format_elapsed(time.monotonic() - started)
+                dock_var = getattr(self, "dock_elapsed_var", None)
+                dock_shown = dock_var is not None and bool(getattr(self, "dock_enabled", False))
+                if dock_var is not None:
+                    dock_var.set(label)
+                var.set("" if dock_shown else label)
                 self._elapsed_after_id = self.window.after(250, _tick)
             except Exception:
                 self._elapsed_after_id = None
@@ -3197,6 +3249,15 @@ class BottomScreenIndicator:
         _tick()
 
     def _stop_elapsed_timer(self, clear: bool = True) -> None:
+        # Freeze the dock counter on the exact final length (the last tick may be ~250 ms stale).
+        running_since = getattr(self, "_elapsed_running_since", None)
+        self._elapsed_running_since = None
+        dock_var = getattr(self, "dock_elapsed_var", None)
+        if running_since is not None and dock_var is not None:
+            try:
+                dock_var.set(format_elapsed(time.monotonic() - running_since))
+            except Exception:
+                pass
         self._elapsed_generation = getattr(self, "_elapsed_generation", 0) + 1
         after_id = getattr(self, "_elapsed_after_id", None)
         self._elapsed_after_id = None
@@ -3417,6 +3478,7 @@ class BottomScreenIndicator:
 
     def _destroy_window(self):
         """Destroy window on main thread"""
+        self._set_hires_timer(False)
         try:
             if self._idle_wave_job and self.window:
                 self.window.after_cancel(self._idle_wave_job)
