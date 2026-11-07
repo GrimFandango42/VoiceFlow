@@ -24,11 +24,12 @@ class Config:
     # by the driver but not yet handed to our callback is otherwise discarded,
     # which clips the last word off the end of an utterance. `start()` prepends
     # 800 ms of pre-buffer to protect the beginning; this protects the end.
-    # VF-12: raised 0.25 -> 0.45. People release the hotkey slightly BEFORE the
-    # last word is finished, so this window doubles as deliberate tail padding:
-    # on the always-on shared stream callbacks never go quiet, so the wait runs
-    # the full cap and the mic keeps recording for that long after key-up.
-    stop_drain_seconds: float = 0.45
+    # VF-12 note: this is only the LAST stage of the post-key-up tail. The PTT listener
+    # already keeps the mic recording for ptt_release_confirm (0.12 s) +
+    # ptt_tail_buffer_seconds (0.35 s) before calling stop(), and this drain adds 0.25 s
+    # on top: about 0.7 s of capture after the key comes up. Raising it further would
+    # only add latency, so it stays at 0.25.
+    stop_drain_seconds: float = 0.25
     # Silence appended (room-tone level, never digital zero) to the audio right
     # before decoding so the final word has right context. Whisper decodes its
     # last window with no look-ahead, which is where sentence endings degrade.
@@ -42,6 +43,33 @@ class Config:
     segment_split_gap_seconds: float = 2.0   # a pause this long always starts a new piece
     segment_pad_ms: int = 350                # audio kept either side of a piece's speech
     paragraph_pause_seconds: float = 2.5     # pause that becomes a paragraph break
+
+    # VF-12 formatting for AI prompts (core/dictation_format.py)
+    prompt_cleanup_enabled: bool = True       # um/uh, stutters, "I mean," / "scratch that"
+    spoken_formatting_commands: bool = True   # "new line", "new paragraph", "bullet ..."
+    # Keep user-requested line breaks (spoken commands, long pauses) in chat windows when
+    # the text is PASTED. Typed injection still strips them (Enter would send).
+    chat_preserve_newlines: bool = True
+
+    # Which window receives the text. "start" = the window that had focus when the
+    # hotkey went down (what the code has always done: it is captured at press and
+    # re-focused before pasting); "release" = whatever has focus when the key comes up.
+    inject_target_policy: str = "start"
+
+    # Local transcript history (core/history.py): last N dictations, never uploaded.
+    history_enabled: bool = True
+    history_max_items: int = 50
+    # Re-paste the most recent transcript. Not Ctrl+Shift (VoiceFlow's PTT) and not
+    # Ctrl+Alt (Wispr Flow / VoiceFlow toggles). "" disables the hotkey.
+    repaste_hotkey: str = "alt+shift+v"
+    # Pressing this while recording throws the recording away. "" disables it.
+    cancel_recording_key: str = "esc"
+
+    # Corrections that stick: terms the user fixes repeatedly become Whisper hotwords
+    # (local only; see ai/hotword_learning.py).
+    learned_hotwords_enabled: bool = True
+    learned_hotword_min_count: int = 2
+    learned_hotwords_max: int = 24
     # PortAudio input latency for the capture streams: "high", "low" or seconds.
     # "high" gives the driver the most buffer before it overruns (dropped
     # frames logged as `input overflow`); start/stop timing is covered by the
@@ -172,7 +200,7 @@ class Config:
     enable_smart_prompting: bool = True  # Adaptive prompting for better accuracy
     # Names Whisper should prefer, re-applied to every 30 s window (faster-whisper hotwords).
     # Keep this SHORT: a long list biases ordinary speech toward the list. Empty disables.
-    asr_hotwords: str = "VoiceFlow, Wispr, Claude, Codex, Atlas, LIMS, Veeva"
+    asr_hotwords: str = "VoiceFlow, Wispr, Claude, Codex, Gemini, Ollama, Atlas, LIMS, Veeva, Madison"
     use_enhanced_post_processing: bool = True  # Smart text cleaning
     enable_light_typo_correction: bool = True  # Low-latency typo/spelling cleanup before injection
     enable_safe_second_pass_cleanup: bool = True  # Deterministic low-cost cleanup after main formatting

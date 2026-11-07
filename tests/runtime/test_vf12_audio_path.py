@@ -209,16 +209,25 @@ def _tail_seconds_captured(drain_seconds: float, monkeypatch) -> float:
 
 def test_recorder_keeps_listening_after_key_up(monkeypatch):
     captured = _tail_seconds_captured(Config().stop_drain_seconds, monkeypatch)
-    assert captured >= 0.35, f"only {captured:.2f}s captured after release"
+    assert captured >= 0.2, f"only {captured:.2f}s captured after release"
 
 
-def test_old_tail_window_was_shorter(monkeypatch):
-    assert _tail_seconds_captured(0.25, monkeypatch) < _tail_seconds_captured(0.45, monkeypatch)
+RELEASE_CONFIRM_S = 0.12   # hotkeys_enhanced: continuous key-up needed before a release counts
+
+
+def default_tail_seconds(cfg: Config) -> float:
+    """Mic time after key-up at default settings: release confirm + PTT tail buffer + stop drain."""
+    return RELEASE_CONFIRM_S + cfg.ptt_tail_buffer_seconds + cfg.stop_drain_seconds
+
+
+def test_post_key_up_capture_budget_meets_the_order():
+    # VF-12 asked for >= 300-500 ms of capture after key-up. The listener + recorder already
+    # deliver about 0.7 s; the order's first suspect (tail cut) is covered by existing code.
+    assert default_tail_seconds(Config()) >= 0.5
 
 
 def test_vf12_defaults():
     cfg = Config()
-    assert 0.4 <= cfg.stop_drain_seconds <= 0.6
     assert cfg.decode_right_context_seconds >= 0.3
     assert cfg.pause_compaction_keep_silence_ms >= 200
     assert cfg.pause_compaction_tail_keep_ms >= 400
@@ -235,19 +244,20 @@ def _endings():
     return out
 
 
-OLD = dict(stop_drain_seconds=0.25, decode_right_context_seconds=0.0,
-           pause_compaction_keep_silence_ms=80, pause_compaction_tail_keep_ms=0,
-           segmented_transcription_enabled=False)
+OLD = dict(decode_right_context_seconds=0.0, pause_compaction_keep_silence_ms=80,
+           pause_compaction_tail_keep_ms=0, segmented_transcription_enabled=False)
+EARLY_MS = [0, 100, 200, 300, 400]   # how long before the word ends the key came up
 
 
-def _end_errors(cfg_kwargs, release_early_ms) -> tuple[int, int]:
+def _end_errors(cfg_kwargs, release_early_ms, tail_s=None) -> tuple[int, int]:
     errors = total = 0
     for built in _endings():
         end = built.word_spans[-1][1]
         for early in release_early_ms:
             cfg = Config(**cfg_kwargs)
+            tail = default_tail_seconds(cfg) if tail_s is None else tail_s
             release_idx = end - int(early / 1000.0 * SR)
-            recorded = built.audio[: release_idx + int(cfg.stop_drain_seconds * SR)]
+            recorded = built.audio[: release_idx + int(tail * SR)]
             audio = _Compactor(cfg)._compact_pauses(recorded)
             toks = decode_for_duration(syn.OracleEngine(), audio, cfg).split()
             total += 1
@@ -256,18 +266,16 @@ def _end_errors(cfg_kwargs, release_early_ms) -> tuple[int, int]:
     return errors, total
 
 
-def test_end_of_utterance_word_loss_before_and_after(capsys):
-    early = [0, 100, 200, 300, 400]            # how long before the word ends the key came up
-    old_err, n = _end_errors(OLD, early)
-    new_err, _ = _end_errors({}, early)
+def test_end_of_utterance_word_loss_vs_tail_window(capsys):
+    grid = {t: _end_errors({}, EARLY_MS, tail_s=t) for t in (0.0, 0.25, default_tail_seconds(Config()))}
+    old_err, n = _end_errors(OLD, EARLY_MS)
+    new_err, _ = _end_errors({}, EARLY_MS)
     with capsys.disabled():
-        print(f"\n[VF-12] end-of-utterance word loss (synthetic audio path): "
-              f"before={old_err}/{n} after={new_err}/{n}")
-    assert new_err == 0
-    assert old_err > new_err
-
-
-def test_ending_survives_when_key_is_released_as_the_word_ends():
-    old_err, n = _end_errors(OLD, [0])
-    new_err, _ = _end_errors({}, [0])
-    assert new_err == 0 and old_err == 0           # no regression for the normal case
+        print("\n[VF-12] end-of-utterance word loss, synthetic audio path (final word cut when the "
+              "key comes up 0-400 ms early):")
+        for t, (e, total) in grid.items():
+            print(f"        tail window {t:.2f}s after key-up -> {e}/{total} endings clipped")
+        print(f"        default pipeline, old compaction/padding settings: {old_err}/{n}; new: {new_err}/{n}")
+    assert grid[default_tail_seconds(Config())][0] == 0      # shipped defaults lose nothing
+    assert grid[0.0][0] > 0                                  # and the fixture can see a clipped ending
+    assert new_err == 0 and old_err == 0                     # no regression from compaction/padding changes
