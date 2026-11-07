@@ -1296,7 +1296,12 @@ class ModernWhisperASR(ASREngine):
         beam_size = getattr(cfg, 'beam_size', 1)
         temperature = getattr(cfg, 'temperature', 0.0)
         condition_on_previous_text = getattr(cfg, 'condition_on_previous_text', False)
-        hotwords = getattr(cfg, 'asr_hotwords', '')
+        try:
+            from voiceflow.ai.hotword_learning import effective_hotwords_for_config
+
+            hotwords = effective_hotwords_for_config(cfg)
+        except Exception:
+            hotwords = getattr(cfg, 'asr_hotwords', '')
         force_cpu = str(os.environ.get("VOICEFLOW_FORCE_CPU", "")).strip().lower() in {"1", "true", "yes"}
         gpu_enabled = bool(getattr(cfg, "enable_gpu_acceleration", True))
 
@@ -1357,6 +1362,13 @@ class ModernWhisperASR(ASREngine):
     def transcribe(self, audio: np.ndarray, initial_prompt: Optional[str] = None, beam_size_override: Optional[int] = None, vad_filter_override: Optional[bool] = None) -> str:
         """Legacy interface returning just text"""
         self.session_transcription_count += 1
+        # VF-12: pick up terms learned since the last decode (cheap: cached on file mtime).
+        try:
+            from voiceflow.ai.hotword_learning import effective_hotwords_for_config
+
+            self.model_config.hotwords = effective_hotwords_for_config(self.cfg)
+        except Exception:
+            pass
         if initial_prompt is None and bool(getattr(self.cfg, "enable_smart_prompting", True)):
             try:
                 from voiceflow.core.vocab import initial_prompt as _vocab_initial_prompt

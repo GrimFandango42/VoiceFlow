@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from voiceflow.core.dictation_format import protect_codeish, restore_codeish
+
 SYMBOL_MAP: Dict[str, str] = {
     # Brackets
     "open bracket": "[",
@@ -523,6 +525,11 @@ def format_transcript_text(text: str) -> str:
     # Start with basic cleanup
     text = text.strip()
 
+    # VF-12: file names, paths, CamelCase, snake_case and flags are not prose. Every
+    # rule below (sentence breaks after '.', vocabulary rewrites, casing) used to
+    # mangle them: "config.yaml" -> "config. YAML", "src/voiceflow" -> "src/VoiceFlow".
+    text, _codeish = protect_codeish(text)
+
     # Context-aware correction for common dictation substitutions.
     text = _apply_context_corrections(text)
 
@@ -536,7 +543,7 @@ def format_transcript_text(text: str) -> str:
     text = _format_spoken_inline_lists(text)
     text = _fix_sentence_capitalization(text)
 
-    return text
+    return restore_codeish(text, _codeish)
 
 
 def infer_destination_profile(destination: Optional[Mapping[str, Any]]) -> str:
@@ -617,6 +624,43 @@ def format_transcript_for_destination(
     if wrap_width <= 0:
         return formatted
     return _wrap_transcript_blocks(formatted, wrap_width, profile)
+
+
+def format_transcript_preserving_breaks(
+    text: str,
+    destination: Optional[Mapping[str, Any]] = None,
+    audio_duration: float = 0.0,
+    *,
+    keep_chat_newlines: bool = False,
+) -> str:
+    """Format each explicit line/paragraph on its own so deliberate structure survives.
+
+    Line breaks that come from the user ("new line", "new paragraph", "bullet") or from a
+    long pause (VF-12 segmentation) are real structure. The whole-text formatter merges
+    "short paragraphs" and, for chat destinations, collapses every newline. Formatting
+    block by block keeps casing/punctuation/term fixes without touching that structure.
+
+    Chat apps: newlines are kept only with ``keep_chat_newlines`` (the caller sets it when
+    text is PASTED, which does not press Enter); otherwise the chat-safe collapse applies.
+    """
+    if "\n" not in text:
+        return format_transcript_for_destination(text, destination, audio_duration)
+    profile = infer_destination_profile(destination)
+    if profile == "chat" and not keep_chat_newlines:
+        return format_transcript_for_destination(text, destination, audio_duration)
+
+    out = []
+    for part in re.split(r"(\n+)", text):
+        if not part or part.startswith("\n"):
+            out.append(part)
+            continue
+        bullet = part.startswith("- ")
+        body = part[2:] if bullet else part
+        formatted = format_transcript_for_destination(body, destination, 0.0)
+        if profile == "chat":
+            formatted = re.sub(r"\s*\n+\s*", " ", formatted).strip()
+        out.append(("- " if bullet else "") + formatted)
+    return "".join(out).strip()
 
 
 def normalize_context_terms(
@@ -1343,13 +1387,17 @@ def _format_bullet_points(text: str) -> str:
             flags=re.IGNORECASE,
         )
 
-    # Handle ordinal words at sentence starts.
-    text = re.sub(
-        r"(?:(?<=^)|(?<=\n)|(?<=[.!?]\s))(first|second|third|fourth|fifth)\s*[,:\-]?\s*",
-        lambda m: _number_to_bullet(m.group(1)) + " ",
-        text,
-        flags=re.IGNORECASE,
-    )
+    # Handle ordinal words at sentence starts -- but only when they form a list. A lone
+    # "Second thought, I'd rather..." or "First, I want you to..." is prose; turning it
+    # into "- Second, thought" rewrote what the user said (VF-12).
+    _ordinal_start = r"(?:(?<=^)|(?<=\n)|(?<=[.!?]\s))(first|second|third|fourth|fifth)\s*[,:\-]?\s*"
+    if len(re.findall(_ordinal_start, text, flags=re.IGNORECASE)) >= 2:
+        text = re.sub(
+            _ordinal_start,
+            lambda m: _number_to_bullet(m.group(1)) + " ",
+            text,
+            flags=re.IGNORECASE,
+        )
 
     # Normalize line starts.
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -1394,9 +1442,35 @@ def _improve_punctuation(text: str) -> str:
 
     # Add periods to end sentences that need them
     if text and not text.endswith(('.', '!', '?', ':')):
-        text += '.'
+        text += '?' if _last_sentence_is_question(text) else '.'
 
     return text
+
+
+_WH_WORDS = frozenset("who whom whose what when where why how which".split())
+_AUX_WORDS = frozenset(
+    "can could would should will do does did is are was were have has am shall may might".split()
+)
+_AUX_FOLLOWERS = frozenset(
+    "i you we they he she it that this these those there the a an my your our his her their "
+    "anyone anybody everyone someone something anything everything any".split()
+)
+
+
+def _last_sentence_is_question(text: str) -> bool:
+    """True when the unpunctuated final sentence is plainly a question.
+
+    "when will that happen" -> "?" (a wh-word opens it, or an auxiliary followed by a
+    subject: "can you", "is that"). Deliberately narrow: a wrong "?" is as bad as a
+    wrong "."; ambiguous openers ("will", "may") need a subject word right after.
+    """
+    tail = re.split(r"[.!?\n]", text.rstrip())[-1].strip().lower()
+    words = re.findall(r"[a-z']+", tail)
+    if len(words) < 2:
+        return False
+    if words[0] in _WH_WORDS:
+        return True
+    return words[0] in _AUX_WORDS and words[1] in _AUX_FOLLOWERS
 
 
 def _fix_sentence_breaks(text: str) -> str:
