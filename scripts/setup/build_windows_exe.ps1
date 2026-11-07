@@ -190,9 +190,12 @@ function Remove-DuplicateCudaDlls {
                 $rootLen = (Get-Item $rootDll.FullName).Length
                 $torchLen = (Get-Item $torchDll).Length
                 if ($rootLen -eq $torchLen) {
-                    Remove-Item -Path $rootDll.FullName -Force -ErrorAction SilentlyContinue
+                    # Drop the torch/lib copy and keep the root one. The root is the
+                    # only directory Windows searches before ctranslate2.dll loads, so
+                    # removing it there is what silently demotes a build to CPU.
+                    Remove-Item -Path $torchDll -Force -ErrorAction SilentlyContinue
                     $removed += 1
-                    Write-Host "[build_windows_exe] Removed duplicate CUDA runtime: $($rootDll.Name)"
+                    Write-Host "[build_windows_exe] Removed duplicate CUDA runtime from torch/lib: $($rootDll.Name)"
                 }
             }
         }
@@ -201,6 +204,55 @@ function Remove-DuplicateCudaDlls {
     if ($removed -gt 0) {
         Write-Host ("[build_windows_exe] Removed duplicate CUDA DLL copies: {0}" -f $removed)
     }
+}
+
+function Assert-CudaRuntimeComplete {
+    <#
+      Fail the build rather than ship a bundle that will quietly run on CPU.
+
+      cudnn64_9.dll is only a front end; it loads the cudnn_* engine and
+      subsystem DLLs by name at runtime. Ship a partial set and nothing errors:
+      ctranslate2 reports zero CUDA devices, _cuda_runtime_ready() returns
+      false, and Whisper runs int8 on the CPU roughly 85x slower with no
+      message beyond one warning in a log nobody reads. A build that cannot
+      honour device=cuda should not reach a user silently.
+    #>
+    param([string]$BundleRoot)
+
+    # The bundle root is the only location Windows searches before our code runs.
+    $cudaDir = Join-Path $BundleRoot "_internal"
+    $required = @(
+        "cudnn64_9.dll",
+        "cudnn_ops64_9.dll",
+        "cudnn_graph64_9.dll",
+        "cudnn_cnn64_9.dll",
+        "cudnn_adv64_9.dll",
+        "cudnn_engines_precompiled64_9.dll",
+        "cudnn_engines_runtime_compiled64_9.dll",
+        "cudnn_heuristic64_9.dll",
+        "cublas64_12.dll",
+        "cublasLt64_12.dll"
+    )
+
+    $missing = @()
+    foreach ($dll in $required) {
+        $path = Join-Path $cudaDir $dll
+        if (-not (Test-Path $path)) {
+            $missing += $dll
+        } elseif ((Get-Item $path).Length -eq 0) {
+            $missing += ($dll + " (zero bytes)")
+        }
+    }
+
+    if ($missing.Count -gt 0) {
+        throw ("[build_windows_exe] Incomplete CUDA runtime in bundle; this build would " +
+               "silently run on CPU. Missing from the bundle root: " + ($missing -join ", ") +
+               ". Install the NVIDIA runtime wheels (pip install nvidia-cublas-cu12 " +
+               "nvidia-cudnn-cu12) and rebuild, or pass -SkipCudaRuntime to accept a " +
+               "deliberately CPU-only package.")
+    }
+
+    Write-Host ("[build_windows_exe] CUDA runtime verified: {0}/{0} required DLLs present." -f $required.Count)
 }
 
 function Get-CudaRuntimeDlls {
@@ -212,6 +264,24 @@ function Get-CudaRuntimeDlls {
     $candidates = @()
     if ($env:VOICEFLOW_TORCH_LIB_DIR) {
         $candidates += $env:VOICEFLOW_TORCH_LIB_DIR
+    }
+
+    # Prefer the standalone NVIDIA runtime wheels. They are the only source that
+    # is both coherent (cuDNN ships its whole dependency chain) and stable --
+    # unlike torch, which may be a CPU-only build, and unlike a previous bundle,
+    # which lives in the directory this build is about to overwrite.
+    try {
+        $nvidiaRoot = (& $PythonExe -c "import importlib.util,pathlib;print(pathlib.Path(importlib.util.find_spec('nvidia').submodule_search_locations[0]))" 2>$null | Select-Object -First 1)
+        if ($nvidiaRoot) {
+            $nvidiaPath = $nvidiaRoot.ToString().Trim()
+            if ($nvidiaPath) {
+                foreach ($pkg in @("cudnn", "cublas", "cuda_runtime", "cufft", "curand", "cusolver", "cusparse", "cuda_nvrtc")) {
+                    $candidates += (Join-Path $nvidiaPath ($pkg + "\bin"))
+                }
+            }
+        }
+    } catch {
+        # no-op
     }
 
     try {
@@ -452,12 +522,53 @@ if ($tclTkArgs.Count -gt 0) {
 
 if (-not $SkipCudaRuntime) {
     $cudaDlls = Get-CudaRuntimeDlls -RepoRoot $repoRoot -PythonExe $pythonExe
+
+    # Stage the DLLs outside dist\ before PyInstaller runs.
+    #
+    # Get-CudaRuntimeDlls can resolve to dist\VoiceFlow\_internal\torch\lib --
+    # the previous bundle -- and PyInstaller wipes its output directory on the
+    # way in. Adding those paths directly means it deletes the sources mid-build
+    # and copies whatever it still happens to find: on 2026-11-06 that produced
+    # a bundle with 8 of 18 CUDA DLLs and a torch so incomplete that importing
+    # it raised "module 'torch' has no attribute 'Tensor'". GPU was silently
+    # demoted to CPU int8. Copying first makes the sources immune to that.
+    $cudaStageDir = Join-Path $repoRoot "build\cuda-stage"
+    if (Test-Path $cudaStageDir) {
+        Remove-Item -Path $cudaStageDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Path $cudaStageDir -Force | Out-Null
+
+    $stagedDlls = New-Object System.Collections.Generic.List[string]
+    foreach ($dll in $cudaDlls) {
+        $staged = Join-Path $cudaStageDir ([System.IO.Path]::GetFileName($dll))
+        if (-not (Test-Path $staged)) {
+            Copy-Item -Path $dll -Destination $staged -Force -ErrorAction SilentlyContinue
+            if (Test-Path $staged) {
+                $stagedDlls.Add($staged)
+            }
+        }
+    }
+    $cudaDlls = $stagedDlls.ToArray()
+    Write-Host ("[build_windows_exe] Staged CUDA runtime DLLs outside dist: {0}" -f $cudaDlls.Count)
+
     if ($cudaDlls -and $cudaDlls.Count -gt 0) {
         foreach ($dll in $cudaDlls) {
-            # Bundle CUDA runtime DLLs when available so packaged builds can run GPU path
-            # without depending on system-wide torch installs.
-            # Keep them under torch/lib to avoid duplicate giant DLL copies at bundle root.
-            $args += @("--add-binary", ($dll + ";torch/lib"))
+            # Bundle CUDA runtime DLLs so packaged builds can run the GPU path without
+            # depending on a system-wide torch install.
+            #
+            # These MUST land at the bundle root, not under torch/lib. PyInstaller puts
+            # the root (sys._MEIPASS) on the DLL search path before any Python runs, and
+            # Windows resolves a DLL's dependencies when it loads. ctranslate2.dll loads
+            # the moment ctranslate2 is imported -- earlier than any code of ours -- so if
+            # cuDNN and cuBLAS are not already findable at that instant, ctranslate2
+            # initialises with CUDA unavailable and reports zero devices for the life of
+            # the process. Registering the directory afterwards is too late: that is why
+            # a bundle with a verified-complete torch/lib still ran on CPU.
+            #
+            # Landing at the root also avoids synthesising a 'torch' package directory,
+            # which turned the deliberate --exclude-module torch into a hollow namespace
+            # package: 'import torch' then succeeded and 'torch.Tensor' raised instead.
+            $args += @("--add-binary", ($dll + ";."))
         }
         Write-Host ("[build_windows_exe] Bundling CUDA runtime DLLs: {0}" -f $cudaDlls.Count)
     } else {
@@ -494,6 +605,9 @@ if ($OneFile) {
     }
     Remove-ConflictingRuntimeDlls -BundleRoot $bundleRoot
     Remove-DuplicateCudaDlls -BundleRoot $bundleRoot
+    if (-not $SkipCudaRuntime) {
+        Assert-CudaRuntimeComplete -BundleRoot $bundleRoot
+    }
     $zipOut = Join-Path $packagePath "$OutputName-$timestamp-portable.zip"
     Write-Host "[build_windows_exe] Built bundled executable: $(Join-Path $bundleRoot "$OutputName.exe")"
     if (Compress-ArchiveWithRetry -Path @((Join-Path $bundleRoot "*")) -DestinationPath $zipOut) {
