@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import os
 import re
 import threading
 import time
@@ -507,6 +508,9 @@ class ClipboardInjector:
         self._log = logging.getLogger("voiceflow")
         self._target_hwnd: Optional[int] = None
         self._target_context: Dict[str, Any] = {}
+        # Why the last inject() returned False: "" | "target_closed" | "focus_drift".
+        # The app reads it to pick the overlay message and the history status.
+        self.last_failure_reason: str = ""
 
     def _sanitize(self, text: str) -> str:
         """Enhanced sanitization with security validation"""
@@ -598,7 +602,15 @@ class ClipboardInjector:
 
     def inject(self, text: str) -> bool:
         self._throttle()
+        self.last_failure_reason = ""
+        if not self.target_window_exists():
+            # The window we were going to paste into is gone. Pasting would land in whatever
+            # has focus now; refusing lets the caller keep the text (history + clipboard).
+            self.last_failure_reason = "target_closed"
+            self._log.warning("inject_target_closed target_hwnd=%s", str(self._target_hwnd))
+            return False
         if not self._ensure_target_focus_for_release():
+            self.last_failure_reason = "focus_drift"
             fg = self._foreground_window()
             self._log.warning(
                 "inject_focus_drift target_hwnd=%s foreground_hwnd=%s",
@@ -647,6 +659,38 @@ class ClipboardInjector:
     def clear_target_window(self) -> None:
         self._target_hwnd = None
         self._target_context = {}
+
+    def target_window_exists(self) -> bool:
+        """False only when a captured target window is known to be destroyed."""
+        hwnd = self._target_hwnd
+        if not hwnd or not _HAS_WIN32_API:
+            return True
+        try:
+            return bool(ctypes.windll.user32.IsWindow(int(hwnd)))
+        except Exception:
+            return True
+
+    def retarget_to_foreground(self) -> bool:
+        """Make the window that has focus NOW the paste target (inject_target_policy=release).
+
+        Skips VoiceFlow's own windows (overlay, panels): if one of those is in front, the
+        window captured at key-down stays the target. Returns True when the target changed.
+        """
+        fg = self._foreground_window()
+        if not fg or not _HAS_WIN32_API:
+            return False
+        try:
+            pid = wintypes.DWORD(0)
+            ctypes.windll.user32.GetWindowThreadProcessId(int(fg), ctypes.byref(pid))
+            if int(pid.value) == os.getpid():
+                return False
+        except Exception:
+            return False
+        if self._target_hwnd == int(fg):
+            return False
+        self._target_hwnd = int(fg)
+        self._target_context = self._build_window_context(int(fg))
+        return True
 
     def get_target_context(self, refresh: bool = False) -> Dict[str, Any]:
         """Return cached target window context captured at recording start.

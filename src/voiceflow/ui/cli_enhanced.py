@@ -53,6 +53,8 @@ else:
 import keyboard
 
 from voiceflow.core.preloader import ModelPreloader, PreloadState
+from voiceflow.core.dictation_format import prepare_prompt_text
+from voiceflow.core.history import STATUS_CLIPBOARD, STATUS_PASTED, STATUS_SAVED, TranscriptHistory
 from voiceflow.core.segmenter import decode_audio, decode_for_duration, should_segment
 from voiceflow.core.silence_artifacts import classify as classify_silence_artifact
 
@@ -62,6 +64,7 @@ from voiceflow.core.textproc import (
     apply_code_mode,
     apply_second_pass_cleanup,
     format_transcript_for_destination,
+    format_transcript_preserving_breaks,
     format_transcript_text,
     infer_destination_profile,
     normalize_context_terms,
@@ -406,6 +409,19 @@ except ImportError:
     def visual_set_correction_feedback_handler(handler): pass
 
 
+def inject_failure_message(reason: str, clipboard_ok: bool) -> str:
+    """Overlay text when a paste did not land. The transcript is always in history."""
+    if reason == "target_closed":
+        return "Target window closed - saved to history"
+    if clipboard_ok:
+        return "Focus changed - copied, saved to history"
+    return "Focus changed - saved to history"
+
+
+def paste_success_message(word_count: int) -> str:
+    return "Pasted " + str(word_count) + (" word" if word_count == 1 else " words")
+
+
 class EnhancedTranscriptionManager:
     """Enhanced thread-safe transcription manager for long conversations"""
 
@@ -542,6 +558,17 @@ class EnhancedApp:
         self.rec = EnhancedAudioRecorder(cfg)
         self._audio_preprocessor = AudioPreprocessor(cfg)
         self.injector = injector_backend or create_injector_backend(cfg)
+
+        # VF-12: local transcript history (last N dictations; never uploaded) so a missed
+        # paste never loses text, plus Esc-to-cancel bookkeeping.
+        self.history: Optional[TranscriptHistory] = None
+        if bool(getattr(cfg, "history_enabled", True)):
+            try:
+                self.history = TranscriptHistory(max_items=int(getattr(cfg, "history_max_items", 50)))
+            except Exception as exc:
+                logging.getLogger("voiceflow").warning("history_unavailable error=%s", exc)
+        self._cancel_pending = False
+        self._cancel_hook: Any = None
 
         # Cold start elimination: Create ASR and start background preloading
         print("[STARTUP] Creating ASR engine...")
@@ -1625,6 +1652,23 @@ class EnhancedApp:
         context["destination_editor_chars"] = int(getattr(self.cfg, "destination_editor_chars", 94))
         return context
 
+    def _keep_chat_newlines(self, text: str) -> bool:
+        """May explicit line breaks reach a chat window?
+
+        Chat apps submit on Enter, so breaks were always stripped for them. A PASTE does
+        not press Enter in the chat apps checked so far, so breaks the user asked for
+        (spoken commands, long pauses) are kept when the text is pasted. Typed injection
+        sends "
+" as Enter and therefore stays stripped. ``chat_preserve_newlines``
+        turns the whole thing off.
+        """
+        if not bool(getattr(self.cfg, "chat_preserve_newlines", True)):
+            return False
+        if not bool(getattr(self.cfg, "paste_injection", True)):
+            return False
+        type_limit = int(getattr(self.cfg, "type_if_len_le", 0) or 0)
+        return not (type_limit > 0 and len(text or "") <= type_limit)
+
     def _normalize_context_terms_runtime(self, text: str) -> str:
         return normalize_context_terms(
             text,
@@ -2062,6 +2106,135 @@ class EnhancedApp:
             return
         self._observe_adaptive_async(raw, corrected, meta)
 
+    # ------------------------------------------------------------------ VF-12 history / cancel
+
+    def _history_add(self, text: str) -> int:
+        if self.history is None:
+            return 0
+        try:
+            ctx = self.injector.get_target_context()
+            target = str((ctx or {}).get("process_name", "") or "")
+            return self.history.add(text, target=target)
+        except Exception as exc:
+            self._log.warning("history_add_failed error=%s", exc)
+            return 0
+
+    def _history_mark(self, entry_id: int, status: str) -> None:
+        if self.history is None or not entry_id:
+            return
+        try:
+            self.history.set_status(entry_id, status)
+        except Exception as exc:
+            self._log.warning("history_mark_failed error=%s", exc)
+
+    def recent_history(self, limit: int = 10) -> list:
+        return self.history.recent(limit) if self.history is not None else []
+
+    def clear_history(self) -> None:
+        if self.history is not None:
+            self.history.clear()
+
+    def _overlay_message(self, message: str, *, error: bool = False) -> None:
+        if not (self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE):
+            return
+        try:
+            (show_error if error else show_complete)(message)
+        except Exception:
+            pass
+
+    def copy_history_entry(self, entry_id: int) -> bool:
+        """Put a past transcript on the clipboard (tray: Recent -> item)."""
+        entry = self.history.get(entry_id) if self.history is not None else None
+        if not entry:
+            return False
+        ok = bool(self.injector.copy_text_to_clipboard(entry["text"]))
+        self._overlay_message("Copied to clipboard" if ok else "Copy failed", error=not ok)
+        return ok
+
+    @staticmethod
+    def _wait_for_modifiers_released(timeout: float = 1.5) -> None:
+        """A hotkey fires while its modifiers are still down; pasting then would send
+        Ctrl+Alt+Shift+V to the target instead of Ctrl+V."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                if not any(keyboard.is_pressed(k) for k in ("alt", "shift", "ctrl", "windows")):
+                    return
+            except Exception:
+                return
+            time.sleep(0.02)
+
+    def repaste_last(self) -> bool:
+        """Paste the most recent transcript again into the window that has focus now."""
+        entry = self.history.last() if self.history is not None else None
+        if not entry:
+            self._overlay_message("No transcript to re-paste", error=True)
+            return False
+        self._wait_for_modifiers_released()
+        try:
+            self.injector.capture_target_window()   # re-paste where the user is now
+        except Exception:
+            pass
+        text = entry["text"]
+        ok = bool(self.injector.inject(text))
+        if ok:
+            words = int(entry.get("words", len(text.split())))
+            self._overlay_message("Re-pasted " + str(words) + (" word" if words == 1 else " words"))
+        else:
+            clip = bool(self.injector.copy_text_to_clipboard(text))
+            self._overlay_message(
+                "Could not paste - copied to clipboard" if clip else "Could not paste", error=True
+            )
+        return ok
+
+    def _arm_cancel_key(self) -> None:
+        key = str(getattr(self.cfg, "cancel_recording_key", "esc") or "").strip()
+        if not key or self._cancel_hook is not None:
+            return
+        try:
+            # Armed only while recording. suppress=True also keeps Ctrl+Shift+Esc (Task
+            # Manager) from opening when Esc is pressed with the default Ctrl+Shift hold.
+            self._cancel_hook = keyboard.on_press_key(
+                key,
+                lambda _event: threading.Thread(target=self.cancel_recording, daemon=True).start(),
+                suppress=True,
+            )
+        except Exception as exc:
+            self._cancel_hook = None
+            self._log.warning("cancel_key_arm_failed key=%s error=%s", key, exc)
+
+    def _disarm_cancel_key(self) -> None:
+        hook, self._cancel_hook = self._cancel_hook, None
+        if hook is None:
+            return
+        try:
+            keyboard.unhook(hook)
+        except Exception as exc:
+            self._log.warning("cancel_key_disarm_failed error=%s", exc)
+
+    def cancel_recording(self) -> bool:
+        """Throw the current recording away (Esc while recording). Nothing is transcribed."""
+        if self._cancel_pending or not self.rec.is_recording():
+            return False
+        self._cancel_pending = True
+        self._disarm_cancel_key()
+        try:
+            self._stop_streaming_preview()
+            self._stop_audio_visual_monitor()
+            self._stop_live_checkpoint_monitor()
+            self.rec.stop()          # audio is discarded
+            self._reset_checkpoint_state()
+            self._log.info("recording_cancelled")
+            print("[MIC] Recording cancelled (Esc) - discarded")
+            mark_idle()
+            if self.visual_indicators_enabled:
+                update_tray_status(self.tray_controller, "idle", False)
+                if VISUAL_INDICATORS_AVAILABLE:
+                    show_complete("Recording discarded")
+        except Exception as exc:
+            self._log.exception("cancel_recording_failed error=%s", exc)
+        return True
+
     def start_recording(self):
         """Enhanced recording start with better error handling"""
         try:
@@ -2085,6 +2258,8 @@ class EnhancedApp:
                     _play_beep(880, 60)
 
                 self.rec.start()
+                self._cancel_pending = False
+                self._arm_cancel_key()
                 try:
                     self._maybe_prewarm_on_press()
                 except Exception as prewarm_error:
@@ -2117,6 +2292,19 @@ class EnhancedApp:
 
     def stop_recording(self):
         """Enhanced recording stop with improved transcription handling"""
+        self._disarm_cancel_key()
+        if self._cancel_pending:
+            # Esc already discarded this recording; the key release that follows is a no-op.
+            self._cancel_pending = False
+            return
+        if str(getattr(self.cfg, "inject_target_policy", "start")).strip().lower() == "release":
+            # Paste into the window that has focus now rather than the one at key-down.
+            retarget = getattr(self.injector, "retarget_to_foreground", None)
+            if callable(retarget):
+                try:
+                    retarget()
+                except Exception as exc:
+                    self._log.debug("retarget_to_foreground_failed error=%s", exc)
         try:
             # Stop streaming preview first
             self._stop_streaming_preview()
@@ -2674,12 +2862,20 @@ class EnhancedApp:
             if effective_code_mode:
                 text = apply_code_mode(text, lowercase=self.cfg.code_mode_lowercase)
             else:
+                # VF-12: spoken "new line"/"new paragraph"/"bullet", ums/uhs, stutters and
+                # false starts -- conservative, code-ish tokens untouched.
+                text = prepare_prompt_text(
+                    text,
+                    spoken_commands=bool(getattr(self.cfg, "spoken_formatting_commands", True)),
+                    cleanup=bool(getattr(self.cfg, "prompt_cleanup_enabled", True)),
+                )
                 if self.adaptive_learning and text.strip():
                     text = self.adaptive_learning.apply(text)
-                text = format_transcript_for_destination(
+                text = format_transcript_preserving_breaks(
                     text,
                     destination=destination_context,
                     audio_duration=audio_duration,
+                    keep_chat_newlines=self._keep_chat_newlines(text),
                 )
                 self._log.info(
                     "format_profile profile=%s process=%s width=%s",
@@ -2747,10 +2943,11 @@ class EnhancedApp:
             if text and not effective_code_mode:
                 try:
                     final_destination = destination_context or self._destination_format_context()
-                    text = format_transcript_for_destination(
+                    text = format_transcript_preserving_breaks(
                         text,
                         destination=final_destination,
                         audio_duration=audio_duration,
+                        keep_chat_newlines=self._keep_chat_newlines(text),
                     )
                 except Exception:
                     text = format_transcript_text(text)
@@ -2842,16 +3039,26 @@ class EnhancedApp:
                 # Mark as injecting
                 mark_injecting()
 
+                # VF-12: the text is on disk before the paste is attempted, so a miss never loses it.
+                history_id = self._history_add(text)
+                word_count = len(text.split())
                 inject_ok = bool(self.injector.inject(text))
-                if not inject_ok:
+                if inject_ok:
+                    self._history_mark(history_id, STATUS_PASTED)
+                else:
+                    failure_reason = str(getattr(self.injector, "last_failure_reason", "") or "")
                     clipboard_ok = bool(self.injector.copy_text_to_clipboard(text))
+                    self._history_mark(history_id, STATUS_CLIPBOARD if clipboard_ok else STATUS_SAVED)
                     target_context = self.injector.get_target_context()
                     target_name = (
                         str(target_context.get("process_name", "") or "").strip()
                         or str(target_context.get("window_title", "") or "").strip()
                         or "target window"
                     )
-                    if clipboard_ok:
+                    overlay_msg = inject_failure_message(failure_reason, clipboard_ok)
+                    if failure_reason == "target_closed":
+                        print(f"[INJECT] {overlay_msg} ({target_name}); copy it from the tray's Recent list.")
+                    elif clipboard_ok:
                         print(
                             f"[INJECT] Focus changed before paste. Transcript copied to clipboard for manual paste in {target_name}."
                         )
@@ -2860,23 +3067,16 @@ class EnhancedApp:
                             f"[INJECT] Focus changed before paste and clipboard fallback failed. Verify focus and retry in {target_name}."
                         )
                     self._log.warning(
-                        "inject_failed clipboard_fallback=%s target=%s chars=%d",
+                        "inject_failed reason=%s clipboard_fallback=%s target=%s chars=%d",
+                        failure_reason or "unknown",
                         str(clipboard_ok),
                         target_name,
                         len(text),
                     )
                     if self.visual_indicators_enabled:
-                        update_tray_status(
-                            self.tray_controller,
-                            "error",
-                            False,
-                            "Focus changed; transcript copied to clipboard" if clipboard_ok else "Focus changed; injection failed",
-                        )
+                        update_tray_status(self.tray_controller, "error", False, overlay_msg)
                         if VISUAL_INDICATORS_AVAILABLE:
-                            if clipboard_ok:
-                                show_error("Focus changed; copied to clipboard")
-                            else:
-                                show_error("Focus changed; injection failed")
+                            show_error(overlay_msg)
 
                 self._log.info("transcribed chars=%d words=%d seconds=%.3f",
                              len(text), len(text.split()), transcription_time)
@@ -2889,7 +3089,7 @@ class EnhancedApp:
                         # Show the final corrected text in preview during the COMPLETE window
                         # so the user can see what was actually injected (post-cleanup version)
                         visual_show_preview(text)
-                        show_complete("Complete")
+                        show_complete(paste_success_message(word_count))
 
                     # CRITICAL: Schedule delayed reset to idle via tray auto-reset timer
                     # Don't immediately go to idle - let the tray controller handle the 2s auto-reset
@@ -3281,6 +3481,15 @@ def main(argv=None):
     _register_hotkey('ctrl+alt+c', toggle_code_mode, "toggle_code_mode")
     _register_hotkey('ctrl+alt+p', toggle_injection, "toggle_injection")
     _register_hotkey('ctrl+alt+enter', toggle_enter, "toggle_enter")
+    # VF-12: re-paste the last transcript. Default Alt+Shift+V -- not Ctrl+Shift (VoiceFlow's
+    # hold-to-talk) and not Ctrl+Alt (Wispr Flow / the toggles above). Empty string disables.
+    _repaste_chord = str(getattr(cfg, "repaste_hotkey", "") or "").strip()
+    if _repaste_chord and app.history is not None:
+        _register_hotkey(
+            _repaste_chord,
+            lambda: threading.Thread(target=app.repaste_last, daemon=True).start(),
+            "repaste_last",
+        )
 
     # Enhanced PTT listener with tail-end buffer
     listener = create_hotkey_backend(

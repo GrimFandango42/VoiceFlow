@@ -421,6 +421,38 @@ class EnhancedTrayController(ITrayManager):
             ),
         )
 
+        def _copy_recent(entry_id: int):
+            def _action(icon, item):
+                try:
+                    self.app.copy_history_entry(entry_id)
+                except Exception as e:
+                    print(f"[Tray] Copy from history failed: {e}")
+            return _action
+
+        def _recent_items():
+            # Rebuilt every time the menu opens, so it always shows the latest dictations.
+            from voiceflow.core.history import menu_label
+
+            try:
+                entries = self.app.recent_history(10)
+            except Exception:
+                entries = []
+            if not entries:
+                yield pystray.MenuItem("(no dictations yet)", None, enabled=False)
+            for entry in entries:
+                yield pystray.MenuItem(menu_label(entry), _copy_recent(int(entry["id"])))
+            yield pystray.Menu.SEPARATOR
+            yield pystray.MenuItem(
+                "Re-paste last transcript",
+                lambda icon, item: threading.Thread(target=self.app.repaste_last, daemon=True).start(),
+                enabled=bool(entries),
+            )
+            yield pystray.MenuItem(
+                "Clear history",
+                lambda icon, item: self.app.clear_history(),
+                enabled=bool(entries),
+            )
+
         return pystray.Menu(
             pystray.MenuItem(
                 lambda item: f"Code Mode: {'ON' if self.app.code_mode else 'OFF'}",
@@ -454,6 +486,7 @@ class EnhancedTrayController(ITrayManager):
             ),
             pystray.MenuItem("Reset Dock Position", reset_positions),
             pystray.MenuItem("Setup & Defaults", open_setup_defaults),
+            pystray.MenuItem("Recent", pystray.Menu(_recent_items)),
             pystray.MenuItem("Recent History", show_recent_history),
             pystray.MenuItem("Correction Review", show_correction_review),
             pystray.Menu.SEPARATOR,

@@ -66,6 +66,9 @@ def test_inject_refocuses_target_before_release_inject(monkeypatch):
     inj._target_hwnd = 4242
     state = {"focused": False}
 
+    # 4242 is a stand-in handle, not a real window; VF-12 refuses to paste into a destroyed
+    # window, so tell the injector this one still exists.
+    monkeypatch.setattr(inj, "target_window_exists", lambda: True)
     monkeypatch.setattr(inj, "_foreground_window", lambda: 4242 if state["focused"] else 9999)
     monkeypatch.setattr(inj, "_focus_target_window", lambda: state.__setitem__("focused", True))
 
