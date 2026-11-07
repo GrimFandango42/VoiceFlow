@@ -1,7 +1,18 @@
 param(
     [string]$PythonExe = "",
     [string]$OutputName = "VoiceFlow",
+    # Reusing PyInstaller's module cache shipped a bundle built from modules
+    # dated 2026-09-13 while every other signal said the build was current:
+    # no logging, no transcription history, no live caption, and a stamp
+    # naming the right commit. Cold builds are now the default; -ReuseCache
+    # trades that safety for speed when iterating.
+    [switch]$ReuseCache,
+    # Kept for callers that already pass it. Cleaning is now unconditional
+    # unless -ReuseCache is given, so this is a no-op.
     [switch]$Clean,
+    # Skip running the finished bundle to check it works. Only for building on
+    # a machine that cannot run it (no GPU, or a CI box without audio).
+    [switch]$SkipSmokeTest,
     [switch]$OneFile,
     [switch]$Console,
     [switch]$InstallPackagingDeps,
@@ -206,6 +217,104 @@ function Remove-DuplicateCudaDlls {
 
     if ($removed -gt 0) {
         Write-Host ("[build_windows_exe] Removed duplicate CUDA DLL copies: {0}" -f $removed)
+    }
+}
+
+function Assert-BundleBehaves {
+    <#
+      Run the thing we just built and check it actually works.
+
+      On 2026-11-07 a bundle shipped with no logging, no transcription history
+      and no live caption, because PyInstaller reused cached modules dated
+      2026-09-13. Every signal was green: the build reported success, 325 tests
+      passed against the source, and the embedded stamp named the right commit.
+      The stamp records what the source said, not what got compiled in, so it
+      cannot catch this. Only running the artifact can.
+
+      Checks, against a throwaway LOCALAPPDATA so a user's real log and history
+      are never touched:
+        * the app writes a log at all -- the symptom that hid the rest
+        * AsyncLogger actually initialised (single_instance_ok)
+        * it reached device=cuda, not a silent CPU demotion
+
+      A run that cannot be judged -- because another instance holds the
+      single-instance mutex -- warns loudly rather than passing quietly. The
+      whole lesson here is that a check which cannot tell pass from fail is
+      worse than no check.
+    #>
+    param(
+        [string]$BundleRoot,
+        [string]$ExeName,
+        [switch]$ExpectCuda
+    )
+
+    $exe = Join-Path $BundleRoot ($ExeName + ".exe")
+    if (-not (Test-Path $exe)) {
+        throw "[build_windows_exe] Smoke test: built exe not found at $exe"
+    }
+
+    if (Get-Process -Name $ExeName -ErrorAction SilentlyContinue) {
+        Write-Warning "[build_windows_exe] Smoke test SKIPPED: an instance of $ExeName is already running."
+        return
+    }
+
+    $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("vf-smoke-" + [Guid]::NewGuid().ToString("N").Substring(0,8))
+    New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
+    $logPath = Join-Path $sandbox "VoiceFlow\logs\voiceflow.log"
+
+    $savedLocal = $env:LOCALAPPDATA
+    $proc = $null
+    try {
+        $env:LOCALAPPDATA = $sandbox
+        $proc = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+
+        $deadline = (Get-Date).AddSeconds(90)
+        $text = ""
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 3
+            if (Test-Path $logPath) {
+                try {
+                    $text = Get-Content $logPath -Raw -ErrorAction Stop
+                } catch {
+                    $text = ""
+                }
+                if ($text -match "asr_engine_initialized") { break }
+            }
+            if ($proc.HasExited) { break }
+        }
+
+        if ($proc.HasExited -and -not ($text -match "asr_engine_initialized")) {
+            Write-Warning ("[build_windows_exe] Smoke test INCONCLUSIVE: the exe exited early " +
+                           "(code " + $proc.ExitCode + "). Most often another VoiceFlow holds the " +
+                           "single-instance mutex. Re-run with nothing else running to get a verdict.")
+            return
+        }
+
+        if (-not (Test-Path $logPath)) {
+            throw ("[build_windows_exe] Smoke test FAILED: the bundle wrote no log at all. " +
+                   "This is the 2026-11-07 failure -- a bundle that runs but persists nothing. " +
+                   "Rebuild with -Clean; PyInstaller may be serving cached modules.")
+        }
+        if ($text -notmatch "single_instance_ok") {
+            throw ("[build_windows_exe] Smoke test FAILED: log exists but AsyncLogger never " +
+                   "initialised (no single_instance_ok). The bundle's startup diverges from source.")
+        }
+        if ($ExpectCuda -and ($text -notmatch "device=cuda")) {
+            $demoted = if ($text -match "device=cpu") { " It reported device=cpu." } else { "" }
+            throw ("[build_windows_exe] Smoke test FAILED: the bundle did not reach the GPU." + $demoted +
+                   " Whisper on CPU int8 is roughly 85x slower. Pass -SkipCudaRuntime to accept this.")
+        }
+
+        $verdict = "logging OK"
+        if ($ExpectCuda) { $verdict += ", device=cuda OK" }
+        Write-Host "[build_windows_exe] Smoke test passed: $verdict."
+    }
+    finally {
+        if ($proc -and -not $proc.HasExited) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        }
+        $env:LOCALAPPDATA = $savedLocal
+        Remove-Item $sandbox -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -540,7 +649,10 @@ $args = @(
     "--specpath", $specPath
 )
 
-if ($Clean) {
+if ($ReuseCache) {
+    Write-Warning ("[build_windows_exe] Reusing PyInstaller's cache. This has shipped months-old " +
+                   "modules in a bundle whose stamp named the current commit. Do not release this build.")
+} else {
     $args += "--clean"
 }
 if ($OneFile) {
@@ -652,6 +764,9 @@ if ($OneFile) {
     Remove-DuplicateCudaDlls -BundleRoot $bundleRoot
     if (-not $SkipCudaRuntime) {
         Assert-CudaRuntimeComplete -BundleRoot $bundleRoot
+    }
+    if (-not $SkipSmokeTest) {
+        Assert-BundleBehaves -BundleRoot $bundleRoot -ExeName $OutputName -ExpectCuda:(-not $SkipCudaRuntime)
     }
     $zipOut = Join-Path $packagePath "$OutputName-$timestamp-portable.zip"
     Write-Host "[build_windows_exe] Built bundled executable: $(Join-Path $bundleRoot "$OutputName.exe")"
