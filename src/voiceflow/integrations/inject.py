@@ -155,7 +155,12 @@ class _PendingRestore:
 # restore delay apart would snapshot the *first dictation's text* as the "user's
 # clipboard", and the real clipboard would be gone for good.
 _pending_lock = threading.Lock()
+#: Notified whenever ``_active_preserves`` drops, so a shutdown flush can wait out a
+#: paste that is mid-flight (it holds the user's original, unregistered, until its end).
+_pending_cond = threading.Condition(_pending_lock)
 _pending_restore: Optional[_PendingRestore] = None
+#: Number of ``_preserve_clipboard`` bodies currently running with restore enabled.
+_active_preserves = 0
 
 #: Kill switch for the deferred restore. The test suite turns it off by default (see
 #: tests/conftest.py) so a timer can never outlive a test and touch a real clipboard.
@@ -198,6 +203,9 @@ def _claim_pending_restore(log: Optional[logging.Logger] = None) -> Optional[_Pe
                 pending.timer.cancel()
             pending.claimed = True
             _pending_restore = None
+            # Its obligation now belongs to the claiming paste; anyone waiting on this
+            # pending (a shutdown flush) must move on to that paste's restore.
+            pending.finished.set()
             return pending
     # The restore body is running: wait out any in-flight write, then stop its retries.
     # Never give up and snapshot instead: until the write finishes the clipboard holds
@@ -221,16 +229,68 @@ def _claim_pending_restore(log: Optional[logging.Logger] = None) -> Optional[_Pe
     return pending
 
 
-def flush_pending_clipboard_restore(timeout: float = 2.0) -> None:
-    """Run any pending restore now (call at shutdown so the clipboard is never left holding a dictation)."""
-    with _pending_lock:
-        pending = _pending_restore
-    if pending is None or pending.run is None:
-        return
-    if pending.timer is not None:
-        pending.timer.cancel()
-    pending.run()
-    pending.finished.wait(timeout=max(0.0, float(timeout)))
+_FLUSH_SLOW_LOG_S = 2.0
+
+
+def flush_pending_clipboard_restore(
+    timeout: Optional[float] = None,
+    log: Optional[logging.Logger] = None,
+) -> bool:
+    """Complete every restore still owed before returning (call at shutdown).
+
+    Waits out a paste that is mid-flight, runs a not-yet-fired deferred restore inline,
+    and waits for one that is already running -- including a slow write and the bounded
+    background retries after an immediate failure. Returns True once nothing is owed
+    (restored, or definitively given up after its bounded retries).
+
+    ``timeout`` None (the default, used at shutdown) waits for completion. That wait is
+    bounded by construction: each write attempt is ``restore_attempts`` x back-off and
+    the retry window is ``restore_async_retry_seconds`` (8 s default), so a wedged
+    clipboard can hold shutdown for roughly that long -- the price of never exiting
+    with the user's clipboard still holding a dictation (VF-11b review finding 1).
+    A finite ``timeout`` returns False if it expires first.
+    """
+    log = log or logging.getLogger("voiceflow")
+    started_at = time.monotonic()
+    deadline = None if timeout is None else started_at + max(0.0, float(timeout))
+    warned = False
+
+    def remaining() -> Optional[float]:
+        if deadline is None:
+            return _FLUSH_SLOW_LOG_S
+        return max(0.0, min(_FLUSH_SLOW_LOG_S, deadline - time.monotonic()))
+
+    def expired() -> bool:
+        nonlocal warned
+        if deadline is not None and time.monotonic() >= deadline:
+            log.warning("clipboard_restore_flush_timeout waited_s=%.1f", time.monotonic() - started_at)
+            return True
+        if not warned and time.monotonic() - started_at >= _FLUSH_SLOW_LOG_S:
+            warned = True
+            log.warning("clipboard_restore_flush_slow waited_s=%.1f still_waiting=1", time.monotonic() - started_at)
+        return False
+
+    while True:
+        with _pending_cond:
+            # A paste mid-flight holds the original (claimed, not yet re-registered).
+            while _active_preserves > 0:
+                _pending_cond.wait(timeout=remaining())
+                if _active_preserves > 0 and expired():
+                    return False
+            pending = _pending_restore
+        if pending is None:
+            return True
+        if pending.timer is not None:
+            pending.timer.cancel()
+        if pending.run is not None:
+            pending.run()  # inline if the timer has not fired; no-op if already running
+        # Immediate-mode pendings (run is None) are retrying on a background thread;
+        # waiting on ``finished`` covers them. (Do not set ``wake``: it stays set and
+        # would turn the retry back-off into a busy loop.)
+        while not pending.finished.wait(timeout=remaining()):
+            if expired():
+                return False
+        # Loop: a paste that landed meanwhile may have registered a new pending.
 
 
 def _restore_attempt(pending: _PendingRestore, *, attempts: int, base_delay: float) -> None:
@@ -348,11 +408,20 @@ def _preserve_clipboard(
     stays registered, and a following call inherits it instead of snapshotting the
     dictation. ``flush_pending_clipboard_restore`` forces it.
     ``restore_delay`` == 0 makes the first restore attempt before returning.
+
+    While the body runs the call is counted in ``_active_preserves``: between claiming
+    an inherited restore and registering its own, it is the only holder of the user's
+    original, and a shutdown flush must wait for it.
     """
-    global _pending_restore
+    global _pending_restore, _active_preserves
+    if not enabled:
+        yield
+        return
     snapshot: Optional[dict] = None
     prev: Optional[str] = None
-    if enabled:
+    with _pending_cond:
+        _active_preserves += 1
+    try:
         inherited = _claim_pending_restore(log)
         if inherited is not None:
             snapshot, prev = inherited.snapshot, inherited.prev
@@ -366,38 +435,42 @@ def _preserve_clipboard(
                 except Exception as exc:
                     if log:
                         log.warning("clipboard_snapshot_failed error=%s", exc)
-    try:
-        yield
-    finally:
-        if enabled and (snapshot is not None or prev is not None):
-            restore_kwargs = dict(
-                restore_attempts=restore_attempts,
-                restore_base_delay=restore_base_delay,
-                restore_async_retry_seconds=restore_async_retry_seconds,
-                log=log,
-            )
-            pending = _PendingRestore(snapshot, prev)
-            if float(restore_delay) <= 0.0 or not _ALLOW_DEFERRED_RESTORE:
-                pending.started = True
-                with _pending_lock:
-                    _pending_restore = pending
-                _run_restore(pending, retry_in_background=True, **restore_kwargs)
-            else:
-
-                def _run(pending: _PendingRestore = pending) -> None:
+        try:
+            yield
+        finally:
+            if snapshot is not None or prev is not None:
+                restore_kwargs = dict(
+                    restore_attempts=restore_attempts,
+                    restore_base_delay=restore_base_delay,
+                    restore_async_retry_seconds=restore_async_retry_seconds,
+                    log=log,
+                )
+                pending = _PendingRestore(snapshot, prev)
+                if float(restore_delay) <= 0.0 or not _ALLOW_DEFERRED_RESTORE:
+                    pending.started = True
                     with _pending_lock:
-                        if pending.claimed or pending.started:
-                            return
-                        pending.started = True
-                    _run_restore(pending, retry_in_background=False, **restore_kwargs)
+                        _pending_restore = pending
+                    _run_restore(pending, retry_in_background=True, **restore_kwargs)
+                else:
 
-                pending.run = _run
-                timer = threading.Timer(float(restore_delay), _run)
-                timer.daemon = True
-                pending.timer = timer
-                with _pending_lock:
-                    _pending_restore = pending
-                timer.start()
+                    def _run(pending: _PendingRestore = pending) -> None:
+                        with _pending_lock:
+                            if pending.claimed or pending.started:
+                                return
+                            pending.started = True
+                        _run_restore(pending, retry_in_background=False, **restore_kwargs)
+
+                    pending.run = _run
+                    timer = threading.Timer(float(restore_delay), _run)
+                    timer.daemon = True
+                    pending.timer = timer
+                    with _pending_lock:
+                        _pending_restore = pending
+                    timer.start()
+    finally:
+        with _pending_cond:
+            _active_preserves -= 1
+            _pending_cond.notify_all()
 
 
 def _clipboard_copy_with_retry(text: str, attempts: int = 6, base_delay: float = 0.03) -> None:

@@ -279,3 +279,121 @@ def test_second_paste_waits_for_a_slow_restore_and_keeps_original(env, monkeypat
     )
     assert env.clipboard.get(CF_DIB) == b"IMG", "image format must survive"
     assert "clipboard_restore_claim_timeout" not in caplog.text
+
+
+# --- VF-11b review (26ec09f) finding 1: shutdown flush must finish every owed restore ---
+
+
+def test_flush_waits_out_an_in_flight_restore_longer_than_two_seconds(env, monkeypatch):
+    """The reviewer's repro: a 2.25 s restore write already running when shutdown flushes."""
+    import threading
+
+    real = inj._restore_clipboard_all_formats
+    started = threading.Event()
+
+    def slow_restore(snapshot):
+        started.set()
+        time.sleep(2.25)
+        real(snapshot)
+
+    monkeypatch.setattr(inj, "_restore_clipboard_all_formats", slow_restore)
+    injector = _injector(delay_ms=40)
+    assert injector.paste_text("DICTATION") is True
+    assert started.wait(timeout=2.0), "deferred restore never started"
+    assert env.clipboard.get(CF_UNICODETEXT) == "DICTATION"
+
+    t0 = time.perf_counter()
+    flushed = inj.flush_pending_clipboard_restore()
+    elapsed = time.perf_counter() - t0
+    clip_at_return = env.clipboard.get(CF_UNICODETEXT)
+
+    # Checked synchronously at flush return: a process exit here must find the original.
+    assert clip_at_return == "ORIGINAL", f"clipboard held {clip_at_return!r} when flush returned"
+    assert elapsed >= 2.0, f"flush returned after {elapsed:.2f} s, before the write finished"
+    assert env.clipboard.get(CF_DIB) == b"IMG"
+    assert flushed is True
+    assert inj._pending_restore is None
+
+
+def test_flush_waits_for_background_retry_after_immediate_failure(env, flaky):
+    """Immediate mode (pending.run is None) retries on a thread; flush must wait for it."""
+    import threading
+
+    injector = _injector(delay_ms=0)
+    assert injector.paste_text("DICTATION") is True
+    assert flaky.failures >= 1
+    pending = inj._pending_restore
+    assert pending is not None and pending.run is None and not pending.done
+
+    result: list = []
+    flusher = threading.Thread(target=lambda: result.append(inj.flush_pending_clipboard_restore()))
+    flusher.start()
+    time.sleep(0.15)
+    # The retry is still failing: flush must not return with the dictation on the clipboard.
+    assert flusher.is_alive(), "flush returned while the restore was still owed"
+    assert env.clipboard.get(CF_UNICODETEXT) == "DICTATION"
+
+    flaky.fail = False
+    flusher.join(timeout=5.0)
+    assert not flusher.is_alive()
+    assert result == [True]
+    assert env.clipboard.get(CF_UNICODETEXT) == "ORIGINAL"
+    assert env.clipboard.get(CF_DIB) == b"IMG"
+    assert inj._pending_restore is None
+
+
+def test_flush_waits_for_a_paste_that_holds_the_inherited_original(env, monkeypatch):
+    """A paste mid-flight has claimed the original but not yet re-registered it."""
+    import threading
+
+    first = _injector(delay_ms=5000)
+    assert first.paste_text("FIRST_DICTATION") is True
+    assert inj._pending_restore is not None
+
+    in_send = threading.Event()
+    release = threading.Event()
+
+    def blocking_send(seq):
+        in_send.set()
+        assert release.wait(timeout=5.0)
+
+    monkeypatch.setattr(
+        inj, "keyboard", types.SimpleNamespace(send=blocking_send, write=lambda t, delay=0: None)
+    )
+    second = _injector(delay_ms=5000)
+    paster = threading.Thread(target=second.paste_text, args=("SECOND_DICTATION",))
+    paster.start()
+    assert in_send.wait(timeout=2.0)
+    assert inj._pending_restore is None  # claimed: only the in-flight paste holds the original
+
+    result: list = []
+    flusher = threading.Thread(target=lambda: result.append(inj.flush_pending_clipboard_restore()))
+    flusher.start()
+    time.sleep(0.15)
+    assert flusher.is_alive(), "flush returned while a paste still held the user's original"
+
+    release.set()
+    paster.join(timeout=5.0)
+    flusher.join(timeout=5.0)
+    assert not flusher.is_alive()
+    assert result == [True]
+    assert env.clipboard.get(CF_UNICODETEXT) == "ORIGINAL"
+    assert env.clipboard.get(CF_DIB) == b"IMG"
+    assert inj._pending_restore is None
+
+
+def test_flush_with_finite_timeout_reports_an_unfinished_restore(env, flaky):
+    injector = _injector(delay_ms=0)
+    assert injector.paste_text("DICTATION") is True
+    t0 = time.perf_counter()
+    assert inj.flush_pending_clipboard_restore(timeout=0.2) is False
+    assert time.perf_counter() - t0 < 1.0
+    flaky.fail = False
+    assert inj.flush_pending_clipboard_restore() is True
+    assert env.clipboard.get(CF_UNICODETEXT) == "ORIGINAL"
+
+
+def test_flush_with_nothing_pending_returns_immediately(env):
+    t0 = time.perf_counter()
+    assert inj.flush_pending_clipboard_restore() is True
+    assert time.perf_counter() - t0 < 0.1
