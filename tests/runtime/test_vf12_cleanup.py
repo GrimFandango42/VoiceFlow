@@ -162,6 +162,32 @@ def test_code_ish_tokens_survive_formatting_and_cleanup(token):
     assert "um" not in out.lower().split()
 
 
+@pytest.mark.parametrize("token", [
+    "config.yaml", "src/voiceflow/core/vocab.py", "getUserName", "ui_state.json", "README.md",
+])
+def test_a_code_ish_token_can_open_the_sentence(token):
+    # The first real word after a leading token used to be capitalised instead
+    # ("config.yaml Is broken"); the token itself must stay exactly as spoken.
+    out = format_transcript_text(f"{token} is broken")
+    assert out == f"{token} is broken."
+    out = format_transcript_for_destination(prepare_prompt_text(f"um {token} is broken"), EDITOR, 3.0)
+    assert out == f"{token} is broken."
+    assert format_transcript_text(f"we fixed it. {token} is next") == f"We fixed it. {token} is next."
+
+
+def test_filler_stripping_does_not_teach_the_adaptive_learner_anything():
+    # raw -> cleaned deltas now reach the learner on every dictation; deletions must not
+    # become replacement rules (extract_learning_pairs ignores pure deletions).
+    from voiceflow.ai.adaptive_memory import extract_learning_pairs
+
+    for raw, cleaned in [
+        ("um so the the thing is broken", "So the thing is broken"),
+        ("I think I think we should go", "I think we should go"),
+        ("Send it to John, no wait, send it to Jane.", "Send it to Jane."),
+    ]:
+        assert extract_learning_pairs(raw, cleaned, max_phrase_tokens=4) == []
+
+
 def test_a_missing_space_after_a_period_is_still_fixed():
     assert format_transcript_text("hello.world").startswith("Hello. World")
 

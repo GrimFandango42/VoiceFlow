@@ -1322,7 +1322,9 @@ def _fix_sentence_capitalization(text: str) -> str:
         return text
 
     # Capitalize first alphabetical character while preserving leading punctuation/quotes.
-    text = re.sub(r"^([^A-Za-z]*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
+    # A masked code-ish token (VF-12 placeholder, opens with U+27E6) at the start is the first
+    # "word": do not skip over it and capitalise the NEXT word ("config.yaml Is broken").
+    text = re.sub(r"^([^A-Za-z⟦]*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
 
     # Capitalize after sentence endings (including optional trailing quote/bracket).
     text = re.sub(r'([.!?][\'"\)\]]*\s+)([a-z])', lambda m: m.group(1) + m.group(2).upper(), text)
