@@ -2034,6 +2034,22 @@ class EnhancedApp:
                 if VISUAL_INDICATORS_AVAILABLE:
                     show_error(f"Audio error: {e}")
 
+    def _return_to_idle(self) -> None:
+        """
+        Put every status surface back to idle.
+
+        Call this on EVERY path that abandons a recording without injecting
+        text. Each surface has to be told separately -- the idle monitor, the
+        tray icon, and the floating overlay -- and forgetting the overlay is
+        what used to leave the dock stuck showing "processing" after a
+        suppressed or timed-out transcription.
+        """
+        mark_idle()
+        if self.visual_indicators_enabled:
+            update_tray_status(self.tray_controller, "idle", False)
+            if VISUAL_INDICATORS_AVAILABLE:
+                hide_status()
+
     def stop_recording(self):
         """Enhanced recording stop with improved transcription handling"""
         try:
@@ -2552,8 +2568,7 @@ class EnhancedApp:
                             suppress_reason,
                             transcription_no_speech_prob,
                         )
-                        mark_idle()
-                        update_tray_status(self.tray_controller, "idle", False)
+                        self._return_to_idle()
                         self._last_transcription_completed_at = time.time()
                         return ""
 
@@ -2561,8 +2576,7 @@ class EnhancedApp:
                     if len(text.strip()) < 3:
                         print("[TRANSCRIPTION] Content too short - skipping")
                         self._log.info("transcription_filtered reason=too_short")
-                        mark_idle()
-                        update_tray_status(self.tray_controller, "idle", False)
+                        self._return_to_idle()
                         self._last_transcription_completed_at = time.time()
                         return ""
 
@@ -2571,7 +2585,7 @@ class EnhancedApp:
                 print(f"[TRANSCRIPTION] Timeout after {timeout_seconds}s - skipping")
                 self._log.error("transcription_timeout duration=%.2f timeout=%.2f", audio_duration, timeout_seconds)
                 # Return to idle state after timeout
-                mark_idle()
+                self._return_to_idle()
                 self._last_transcription_completed_at = time.time()
                 return ""
 
