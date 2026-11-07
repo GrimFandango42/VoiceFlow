@@ -55,6 +55,9 @@ class SegmentPiece:
 class SegmentedTranscript:
     text: str
     pieces: List[SegmentPiece] = field(default_factory=list)
+    #: Non-empty when segmentation was not trusted and the whole recording was decoded in
+    #: one call instead ("no_speech_found" / "too_little_speech").
+    fallback_reason: str = ""
 
     @property
     def segment_count(self) -> int:
@@ -313,6 +316,17 @@ def transcribe_segmented(
         pad_ms=int(getattr(cfg, "segment_pad_ms", 350)),
         base_threshold=float(getattr(cfg, "min_rms_amplitude", 5e-4)),
     )
+    # Guardrail: an energy detector can be fooled (loud room tone, very quiet speaker). If it
+    # finds nothing, or implausibly little, quietly dropping the "silence" would drop words;
+    # decode the whole recording in one call instead, as before segmentation existed.
+    covered = sum(p.end - p.start for p in plans)
+    min_fraction = float(getattr(cfg, "segment_min_speech_fraction", 0.05))
+    if not plans or covered < min_fraction * max(1, len(audio)):
+        reason = "no_speech_found" if not plans else "too_little_speech"
+        log.info("segmentation_fallback reason=%s covered_s=%.1f total_s=%.1f", reason,
+                 covered / float(sample_rate), len(audio) / float(sample_rate))
+        return SegmentedTranscript(text=decode_audio(engine, audio, cfg).strip(), fallback_reason=reason)
+
     paragraph_gap = float(getattr(cfg, "paragraph_pause_seconds", 2.5))
     right_context = float(getattr(cfg, "decode_right_context_seconds", 0.4))
 
@@ -353,10 +367,11 @@ def decode_for_duration(engine, audio: np.ndarray, cfg=None, log: Optional[loggi
     if should_segment(duration, cfg):
         result = transcribe_segmented(engine, audio, cfg, log=log)
         (log or logger).info(
-            "segmented_decode duration=%.1f segments=%d suppressed=%d",
+            "segmented_decode duration=%.1f segments=%d suppressed=%d fallback=%s",
             duration,
             result.segment_count,
             result.suppressed_count,
+            result.fallback_reason or "none",
         )
         return result.text
     return decode_audio(engine, audio, cfg)

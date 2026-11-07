@@ -138,6 +138,38 @@ def test_segments_are_contiguous_around_speech_and_never_overlap():
     assert all(p.end > p.start for p in plans)
 
 
+def test_detector_finding_no_speech_falls_back_to_a_whole_recording_decode():
+    # Constant loud hum, no speech-like dynamics: nothing should be silently discarded.
+    class _Echo(syn.OracleEngine):
+        def transcribe(self, audio):
+            self.calls.append((len(audio) / SR, 1.0))
+            self.last_no_speech_prob = 0.0
+            return "whole recording decoded"
+
+    quiet_speaker = syn.noise(30.0, 9) * 0.0 + 1e-6
+    eng = _Echo()
+    result = transcribe_segmented(eng, quiet_speaker, Config(min_rms_amplitude=0.5))
+    assert result.fallback_reason in {"no_speech_found", "too_little_speech"}
+    assert result.text == "whole recording decoded"
+    assert len(eng.calls) == 1 and eng.calls[0][0] > 30.0
+
+
+def test_too_little_detected_speech_also_falls_back():
+    built = syn.build([[1, 2]], [], lead_s=0.4, tail_s=40.0)      # 1 s of speech in 41 s
+    class _Echo(syn.OracleEngine):
+        def transcribe(self, audio):
+            super().transcribe(audio)
+            return "w1 w2"
+    result = transcribe_segmented(_Echo(), built.audio, Config(segment_min_speech_fraction=0.2))
+    assert result.fallback_reason == "too_little_speech"
+    assert result.text == "w1 w2"
+
+
+def test_normal_long_dictation_does_not_trigger_the_fallback():
+    built, _, _ = _long_dictation()
+    assert transcribe_segmented(syn.OracleEngine(), built.audio, Config()).fallback_reason == ""
+
+
 def test_short_recordings_use_a_single_padded_decode():
     built = syn.build([[1, 2, 3]], [], tail_s=0.0)
     eng = syn.OracleEngine()

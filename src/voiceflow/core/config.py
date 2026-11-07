@@ -42,6 +42,9 @@ class Config:
     segment_max_seconds: float = 25.0        # cap on one decode piece
     segment_split_gap_seconds: float = 2.0   # a pause this long always starts a new piece
     segment_pad_ms: int = 350                # audio kept either side of a piece's speech
+    # If the detector finds less speech than this fraction of the recording, segmentation is
+    # not trusted and the whole recording is decoded in one call (never drop words).
+    segment_min_speech_fraction: float = 0.05
     paragraph_pause_seconds: float = 2.5     # pause that becomes a paragraph break
 
     # VF-12 formatting for AI prompts (core/dictation_format.py)

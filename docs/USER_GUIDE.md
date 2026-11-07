@@ -99,6 +99,15 @@ Performance/quality telemetry in logs now includes:
 - `second_pass` mode (`none`, `safe`, `heavy`, `safe+heavy`)
 - `delta_chars` after second-pass cleanup
 
+## Dictating to AI Assistants (VF-12)
+
+- **Say structure out loud.** "new line", "new paragraph" and "bullet <text>" work when you pause around them (Whisper then punctuates them as their own phrase). In a sentence they stay literal.
+- **Pauses are paragraphs.** A pause of 2.5 s or more in a long dictation starts a new paragraph. In chat windows the paragraph breaks are kept when VoiceFlow pastes; set `chat_preserve_newlines` to `false` to flatten them.
+- **Ums and false starts** ("um", "the, the thing", "I mean, ...", "scratch that") are cleaned conservatively; real repeats ("that that", "very very") are left alone. File names and paths are never edited.
+- **Where the text goes.** By default into the window that had focus when you pressed the hotkey (`inject_target_policy = start`). Set it to `release` to follow your focus to the window you are in when you let go. If that window has closed, nothing is pasted; the text is in the tray's **Recent** list and on the clipboard.
+- **Get text back.** Tray -> **Recent** lists the last 10 dictations (click to copy). **Alt+Shift+V** re-pastes the last one where your cursor is. The last 50 are kept locally in `%LOCALAPPDATA%\VoiceFlow\transcript_history.json`; **Clear history** wipes them.
+- **Cancel.** Press **Esc** while recording to throw the recording away.
+
 ## Animation Quality Controls
 
 Visual indicator animation is now configurable with performance-aware defaults:
