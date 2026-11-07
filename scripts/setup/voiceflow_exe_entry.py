@@ -17,6 +17,49 @@ from pathlib import Path
 import numpy as np
 
 
+def _ensure_std_streams() -> None:
+    """
+    Give the app real stdout/stderr before anything prints.
+
+    A windowed PyInstaller build has no console, so sys.stdout and sys.stderr
+    are None. The app prints diagnostics throughout startup, and print() to a
+    None stream raises AttributeError -- so how VoiceFlow was launched decided
+    how far it got through startup. Launched from a shell with redirected
+    output it logged normally; launched by Task Scheduler, the watchdog or the
+    Startup shortcut -- which is to say, nearly always -- a print somewhere
+    ahead of AsyncLogger threw, logging was never initialised, and the app ran
+    for days with no telemetry at all. That is why a bug reported from daily
+    use left nothing in the log to diagnose.
+
+    Redirect to os.devnull rather than inventing a log file: the real log is
+    AsyncLogger's, and the point here is only that printing must never be able
+    to interrupt startup.
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        usable = False
+        if stream is not None:
+            try:
+                stream.write("")
+                stream.flush()
+                usable = True
+            except Exception:
+                usable = False
+        if not usable:
+            try:
+                setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+            except Exception:
+                # Last resort: a sink that satisfies print() and never raises.
+                class _NullStream:
+                    def write(self, _data):
+                        return 0
+
+                    def flush(self):
+                        return None
+
+                setattr(sys, name, _NullStream())
+
+
 def _ensure_src_on_path() -> None:
     """Allow direct invocation from source tree during local packaging."""
     if getattr(sys, "frozen", False):
@@ -145,6 +188,7 @@ def _run_diagnostic_benchmark(wav_path: Path) -> int:
 
 
 def main() -> int:
+    _ensure_std_streams()
     _ensure_src_on_path()
     _configure_frozen_tk_runtime()
     diag_wav = os.environ.get("VOICEFLOW_DIAG_BENCH_WAV", "").strip()
