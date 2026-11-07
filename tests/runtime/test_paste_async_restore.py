@@ -233,3 +233,49 @@ def test_restore_that_definitively_fails_does_not_wedge_later_pastes(env, flaky)
     started = time.perf_counter()
     assert injector.paste_text("SECOND_DICTATION") is True
     assert time.perf_counter() - started < 1.5
+
+
+# --- VF-11b review finding 1: a restore write that outlasts the old 2 s claim timeout ---
+
+
+def test_second_paste_waits_for_a_slow_restore_and_keeps_original(env, monkeypatch, caplog):
+    """The second paste must wait out a restore write longer than 2 s, never snapshot."""
+    import threading
+
+    real = inj._restore_clipboard_all_formats
+    started = threading.Event()
+
+    def slow_restore(snapshot):
+        if not started.is_set():
+            started.set()
+            time.sleep(2.25)  # hold the restore write beyond the old 2 s claim timeout
+        real(snapshot)
+
+    monkeypatch.setattr(inj, "_restore_clipboard_all_formats", slow_restore)
+    # First restore runs on the timer thread (40 ms) so the second paste overlaps it;
+    # the second paste's own restore (400 ms) lands after the slow write has finished.
+    first = _injector(delay_ms=40)
+    second = _injector(delay_ms=400)
+
+    assert first.paste_text("FIRST_DICTATION") is True
+    assert started.wait(timeout=2.0), "deferred restore never started"
+
+    with caplog.at_level("WARNING", logger="voiceflow"):
+        t0 = time.perf_counter()
+        assert second.paste_text("SECOND_DICTATION") is True
+        blocked = time.perf_counter() - t0
+
+        # It was serialized behind the in-flight restore rather than giving up at 2 s.
+        assert blocked >= 2.0, f"second paste only waited {blocked:.2f} s"
+        assert env.sent.count("ctrl+v") == 2
+
+        # Let every restore settle, then check the final clipboard.
+        assert _wait_for(lambda: inj._pending_restore is None, timeout=4.0)
+        time.sleep(0.6)
+
+    # Both the original text and the image survive, not FIRST_DICTATION.
+    assert env.clipboard.get(CF_UNICODETEXT) == "ORIGINAL", (
+        f"clipboard ended as {env.clipboard.get(CF_UNICODETEXT)!r}"
+    )
+    assert env.clipboard.get(CF_DIB) == b"IMG", "image format must survive"
+    assert "clipboard_restore_claim_timeout" not in caplog.text

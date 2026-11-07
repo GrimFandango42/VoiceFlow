@@ -163,6 +163,10 @@ _ALLOW_DEFERRED_RESTORE = True
 
 _RETRY_BACKOFF_S = 0.35
 
+#: How long a paste waits on an in-flight restore write before logging that it is slow.
+#: It keeps waiting after this; it only stops waiting once the write has finished.
+_CLAIM_SLOW_WARN_S = 2.0
+
 
 def _cancel_pending_restore_without_running() -> None:
     """Drop a pending restore without running it. Test teardown only."""
@@ -196,10 +200,14 @@ def _claim_pending_restore(log: Optional[logging.Logger] = None) -> Optional[_Pe
             _pending_restore = None
             return pending
     # The restore body is running: wait out any in-flight write, then stop its retries.
-    if not pending.attempt_lock.acquire(timeout=2.0):
+    # Never give up and snapshot instead: until the write finishes the clipboard holds
+    # the previous dictation, and snapshotting it would lose the user's original for
+    # good (VF-11b review finding 1). Each write attempt is itself bounded
+    # (restore_attempts x back-off), so this wait always ends.
+    if not pending.attempt_lock.acquire(timeout=_CLAIM_SLOW_WARN_S):
         if log:
-            log.warning("clipboard_restore_claim_timeout")
-        return None
+            log.warning("clipboard_restore_claim_slow waited_s=%.1f", _CLAIM_SLOW_WARN_S)
+        pending.attempt_lock.acquire()
     try:
         with _pending_lock:
             if _pending_restore is pending:
