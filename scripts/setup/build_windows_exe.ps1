@@ -6,7 +6,10 @@ param(
     [switch]$Console,
     [switch]$InstallPackagingDeps,
     [switch]$SkipCudaRuntime,
-    [switch]$SkipProcessCleanup
+    [switch]$SkipProcessCleanup,
+    # How many timestamped build snapshots to keep in dist\packages. Each is
+    # ~2 GB. Published release assets are never pruned. 0 keeps all of them.
+    [int]$KeepPackages = 2
 )
 
 Set-StrictMode -Version Latest
@@ -203,6 +206,48 @@ function Remove-DuplicateCudaDlls {
 
     if ($removed -gt 0) {
         Write-Host ("[build_windows_exe] Removed duplicate CUDA DLL copies: {0}" -f $removed)
+    }
+}
+
+function Remove-StaleBuildArtifacts {
+    <#
+      Keep the last few build snapshots and delete the rest.
+
+      Every build drops a ~2 GB timestamped zip into dist\packages and nothing
+      ever removed them: by 2026-11-07 that was 15.5 GB of snapshots, most of
+      them months old, on a disk with 34 GB free. The published release assets
+      live in the same folder, so prune by name pattern and never touch a file
+      that does not carry a build timestamp.
+    #>
+    param(
+        [string]$PackagePath,
+        [int]$Keep = 2
+    )
+
+    if (-not (Test-Path $PackagePath)) {
+        return
+    }
+
+    # Only files this script generates: <name>-YYYYMMDD-HHMMSS-(portable|onefile).zip.
+    # Release assets (VoiceFlow-win64.exe, VoiceFlow-portable-win64.zip,
+    # SHA256SUMS.txt) carry no timestamp and are therefore never matched.
+    $snapshots = Get-ChildItem -Path $PackagePath -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '-\d{8}-\d{6}-(portable|onefile)\.zip$' } |
+        Sort-Object LastWriteTime -Descending
+
+    if ($snapshots.Count -le $Keep) {
+        return
+    }
+
+    $freed = 0
+    foreach ($old in ($snapshots | Select-Object -Skip $Keep)) {
+        $freed += $old.Length
+        Remove-Item -Path $old.FullName -Force -ErrorAction SilentlyContinue
+        Write-Host "[build_windows_exe] Pruned old build snapshot: $($old.Name)"
+    }
+
+    if ($freed -gt 0) {
+        Write-Host ("[build_windows_exe] Reclaimed {0:N1} GB; keeping the {1} most recent snapshots." -f ($freed / 1GB), $Keep)
     }
 }
 
@@ -615,4 +660,5 @@ if ($OneFile) {
     } else {
         Write-Warning "[build_windows_exe] Continuing without zip artifact. Bundled build directory is still available."
     }
+    Remove-StaleBuildArtifacts -PackagePath $packagePath -Keep $KeepPackages
 }
