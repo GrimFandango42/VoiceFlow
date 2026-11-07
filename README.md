@@ -17,9 +17,9 @@ VoiceFlow runs quietly in the system tray and surfaces a minimal overlay only wh
 
 ### Recording overlay
 
-While you hold `Ctrl+Shift`, a compact overlay appears at the bottom of your screen with a reactive waveform and a live streaming preview of the transcription. Release the hotkey and the finalized text is injected into whatever window has focus.
-
-![Recording overlay with audio visualization and live transcription preview](screenshot.png)
+While you hold `Ctrl+Shift`, a compact overlay appears at the bottom of your screen with a
+reactive waveform and a live streaming preview of the transcription — shown above. Release
+the hotkey and the finalized text is injected into whatever window has focus.
 
 ### Control Center
 
