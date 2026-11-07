@@ -24,9 +24,24 @@ class Config:
     # by the driver but not yet handed to our callback is otherwise discarded,
     # which clips the last word off the end of an utterance. `start()` prepends
     # 800 ms of pre-buffer to protect the beginning; this protects the end.
-    # The wait exits early once callbacks go quiet, so it usually costs far less
-    # than the cap.
-    stop_drain_seconds: float = 0.25
+    # VF-12: raised 0.25 -> 0.45. People release the hotkey slightly BEFORE the
+    # last word is finished, so this window doubles as deliberate tail padding:
+    # on the always-on shared stream callbacks never go quiet, so the wait runs
+    # the full cap and the mic keeps recording for that long after key-up.
+    stop_drain_seconds: float = 0.45
+    # Silence appended (room-tone level, never digital zero) to the audio right
+    # before decoding so the final word has right context. Whisper decodes its
+    # last window with no look-ahead, which is where sentence endings degrade.
+    decode_right_context_seconds: float = 0.4
+    # Long recordings are cut at their own pauses and decoded piece by piece
+    # (core/segmenter.py) so every piece gets the same vocabulary prompt and no
+    # silence reaches the decoder. Replaces pause compaction on those clips.
+    segmented_transcription_enabled: bool = True
+    segmented_min_audio_seconds: float = 20.0
+    segment_max_seconds: float = 25.0        # cap on one decode piece
+    segment_split_gap_seconds: float = 2.0   # a pause this long always starts a new piece
+    segment_pad_ms: int = 350                # audio kept either side of a piece's speech
+    paragraph_pause_seconds: float = 2.5     # pause that becomes a paragraph break
     # PortAudio input latency for the capture streams: "high", "low" or seconds.
     # "high" gives the driver the most buffer before it overruns (dropped
     # frames logged as `input overflow`); start/stop timing is covered by the
@@ -63,7 +78,10 @@ class Config:
     enable_pause_compaction: bool = True  # Trim long silent spans before ASR for faster long dictation
     pause_compaction_min_audio_seconds: float = 7.0  # compact pauses earlier for medium/long dictations
     pause_compaction_frame_ms: int = 30  # frame size for pause detection
-    pause_compaction_keep_silence_ms: int = 80  # tighter silence retention for better medium/long latency
+    # VF-12: 80 -> 250 ms. 80 ms left the last word of a compacted clip with almost no
+    # right context. The true end of the recording is also always kept (below).
+    pause_compaction_keep_silence_ms: int = 250
+    pause_compaction_tail_keep_ms: int = 450  # always keep this much of the recording's real end
     pause_compaction_max_reduction_pct: float = 82.0  # allow stronger dead-air removal in long conversations
     pause_compaction_retry_on_short_output: bool = True  # Retry raw audio when compaction result looks clipped
     pause_compaction_retry_min_reduction_pct: float = 38.0  # Trigger raw retry only after heavy compaction
@@ -144,7 +162,11 @@ class Config:
     latency_boost_enabled: bool = True  # Use a smaller model for short utterances
     latency_boost_model_tier: str = "tiny"  # Fast-path model tier for short utterances
     latency_boost_max_audio_seconds: float = 10.0  # Keep ultra-fast path short; preserve accuracy on longer utterances
-    latency_boost_tiny_max_audio_seconds: float = 3.0  # Hard cap for tiny tier to protect recognition quality
+    # VF-12: 3.0 -> 1.2 s. Suspected contributor to end-of-sentence errors: a ~1.5 s
+    # question ("when will that happen" heard as "remember that happened") was
+    # routed to the tiny model (not yet measured on real audio). Tiny now only
+    # handles one-word/very short clips; anything longer uses the primary tier.
+    latency_boost_tiny_max_audio_seconds: float = 1.2
 
     # Quality improvements without speed impact
     enable_smart_prompting: bool = True  # Adaptive prompting for better accuracy

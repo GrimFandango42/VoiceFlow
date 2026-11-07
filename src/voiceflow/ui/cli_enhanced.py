@@ -53,6 +53,7 @@ else:
 import keyboard
 
 from voiceflow.core.preloader import ModelPreloader, PreloadState
+from voiceflow.core.segmenter import decode_audio, decode_for_duration, should_segment
 from voiceflow.core.silence_artifacts import classify as classify_silence_artifact
 
 # Streaming preview
@@ -1217,7 +1218,9 @@ class EnhancedApp:
     ) -> tuple[str, Any, bool, str, float, float]:
         """Decode with the selected engine, retrying blank fast-path results on primary."""
         decode_start = time.perf_counter()
-        text = active_asr.transcribe(audio_data)
+        # VF-12: every final decode goes through decode_for_duration: right-context
+        # padding always, pause-segmented decoding for long recordings.
+        text = decode_for_duration(active_asr, audio_data, self.cfg, self._log)
         decode_ms = (time.perf_counter() - decode_start) * 1000.0
 
         retry_used = False
@@ -1247,7 +1250,7 @@ class EnhancedApp:
         )
 
         retry_start = time.perf_counter()
-        retry_text = self.asr.transcribe(audio_data)
+        retry_text = decode_for_duration(self.asr, audio_data, self.cfg, self._log)
         retry_ms = (time.perf_counter() - retry_start) * 1000.0
         retry_chars = len(str(retry_text or "").strip())
         retry_words = len(str(retry_text or "").split())
@@ -1315,8 +1318,12 @@ class EnhancedApp:
 
         for idx, chunk in enumerate(chunks):
             chunk_duration = len(chunk) / float(sample_rate)
-            retry_asr, retry_path = self._pick_asr_engine(chunk_duration, force_primary=force_primary)
-            piece = str(retry_asr.transcribe(chunk) or "").strip()
+            # VF-12: a short FINAL chunk must not drop to the fast model while the
+            # earlier chunks used the primary one; multi-chunk decodes stay primary.
+            retry_asr, retry_path = self._pick_asr_engine(
+                chunk_duration, force_primary=force_primary or len(chunks) > 1
+            )
+            piece = str(decode_audio(retry_asr, chunk, self.cfg) or "").strip()
             chunks_used += 1
             if not piece:
                 continue
@@ -1418,6 +1425,13 @@ class EnhancedApp:
             dilated[:-shift] |= speech[shift:]
             dilated[shift:] |= speech[:-shift]
 
+        # VF-12: never trim the real end of the recording. The words nearest key-up are
+        # the ones the decoder is least sure of and they need their right context.
+        tail_keep_ms = int(options.get("tail_keep_ms", getattr(self.cfg, "pause_compaction_tail_keep_ms", 450)))
+        tail_frames = max(0, int(tail_keep_ms / frame_ms))
+        if tail_frames:
+            dilated[-tail_frames:] = True
+
         kept_frames = framed[dilated]
         if kept_frames.size == 0:
             return audio_data
@@ -1432,7 +1446,7 @@ class EnhancedApp:
             return audio_data
         # Keep any tail samples if original ends with speech-like energy.
         tail = audio_data[usable:]
-        if tail.size > 0 and np.sqrt(np.mean(tail * tail)) >= dyn_thr:
+        if tail.size > 0:
             compacted = np.concatenate((compacted, tail))
         return compacted
 
@@ -2294,7 +2308,14 @@ class EnhancedApp:
                 compaction_overrides["max_reduction_pct"] = float(
                     getattr(self.cfg, "idle_resume_compaction_max_reduction_pct", 68.0)
                 )
-            if skip_pause_compaction:
+            if should_segment(raw_audio_duration, self.cfg):
+                # VF-12: long recordings are cut at their own pauses and decoded piece
+                # by piece (core/segmenter.py), which replaces pause compaction.
+                skip_pause_compaction = True
+                compacted_audio = audio_data
+                stage_ms["pause_compaction"] = 0.0
+                self._log.info("pause_compaction_replaced_by_segmentation raw_duration=%.2f", raw_audio_duration)
+            elif skip_pause_compaction:
                 compacted_audio = audio_data
                 stage_ms["pause_compaction"] = 0.0
                 self._log.info(
@@ -2537,7 +2558,7 @@ class EnhancedApp:
                                     raw_audio_duration,
                                     force_primary=idle_resume_force_primary,
                                 )
-                            retry_text = retry_asr.transcribe(audio_data)
+                            retry_text = decode_for_duration(retry_asr, audio_data, self.cfg, self._log)
 
                         stage_ms["asr_retry"] = (time.perf_counter() - stage_start) * 1000.0
                         retry_words = len((retry_text or "").split())
