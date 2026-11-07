@@ -4,13 +4,12 @@
 
 .DESCRIPTION
   VoiceFlow is a tray app with no service wrapper, so nothing restarts it when
-  it dies. On 2026-11-05 it stopped at 22:35:50 and stayed down for roughly a
-  day before anyone noticed, because:
+  it dies, and it can stay down unnoticed, because:
 
-    * the Startup-folder shortcut only fires at logon, and this machine had
-      been up 1,412 hours without one, and
-    * the process had been launched by a tool session, so it went down when
-      that session's host service stopped.
+    * the Startup-folder shortcut only fires at logon, so a desktop left
+      running for weeks never gets one, and
+    * a process launched from a tool or terminal session goes down when that
+      session's host does.
 
   Run from Task Scheduler this is session-independent: the scheduler owns the
   process, so it outlives whatever started the watchdog.
@@ -18,8 +17,8 @@
   Idempotent and quiet. Exits 0 when the app is already running.
 
 .NOTES
-  Deliberately does NOT touch Wispr Flow. Nithin runs both side by side on
-  different hotkeys (Wispr on Ctrl+Alt, VoiceFlow on Ctrl+Shift).
+  Deliberately does NOT touch other dictation apps. VoiceFlow is safe to run
+  side by side with one, as long as the hotkeys differ.
 #>
 [CmdletBinding()]
 param(
