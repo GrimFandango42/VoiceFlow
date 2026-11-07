@@ -1746,7 +1746,16 @@ class EnhancedApp:
 
     def _schedule_streaming_preview(self) -> None:
         """Delay caption ASR startup so short utterances stay ultra-fast."""
+        # The live caption has four places it can quietly not happen: disabled,
+        # model not ready, the recording ends before the delay elapses, or the
+        # overlay refuses the text. Each was previously silent, which is why
+        # "the preview doesn't work" took a day to narrow down. Say which.
         if not self.streaming_enabled or not self._model_ready:
+            self._log.info(
+                "streaming_preview_skipped enabled=%s model_ready=%s",
+                bool(self.streaming_enabled),
+                bool(self._model_ready),
+            )
             return
         delay = max(0.0, float(getattr(self.cfg, "live_caption_start_delay_seconds", 1.8)))
         if delay <= 0.0:
@@ -1758,6 +1767,8 @@ class EnhancedApp:
         def _delayed_start() -> None:
             if self.rec.is_recording():
                 self._start_streaming_preview()
+            else:
+                self._log.info("streaming_preview_skipped reason=recording_ended_before_delay delay=%.2f", delay)
 
         self._streaming_start_timer = threading.Timer(delay, _delayed_start)
         self._streaming_start_timer.daemon = True
