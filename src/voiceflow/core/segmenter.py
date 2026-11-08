@@ -190,6 +190,28 @@ def plan_segments(
         merge_gap_ms=merge_gap_ms,
         base_threshold=base_threshold,
     )
+    return plan_from_regions(
+        regions,
+        audio,
+        sample_rate,
+        max_segment_seconds=max_segment_seconds,
+        split_gap_seconds=split_gap_seconds,
+        pad_ms=pad_ms,
+        frame_ms=frame_ms,
+    )
+
+
+def plan_from_regions(
+    regions: Sequence[Region],
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    max_segment_seconds: float = 25.0,
+    split_gap_seconds: float = 2.0,
+    pad_ms: int = 350,
+    frame_ms: int = 30,
+) -> List[SegmentPlan]:
+    """Group already-detected speech ``regions`` into padded decode segments."""
     if not regions:
         return []
 
@@ -225,6 +247,52 @@ def plan_segments(
         gap = 0.0 if prev_end is None else max(0.0, (start - prev_end) / float(sample_rate))
         plans.append(SegmentPlan(start=int(left), end=int(right), gap_before_s=gap))
     return plans
+
+
+# --------------------------------------------------------------------------
+# Speech evidence from a real VAD (Silero, bundled with faster-whisper)
+# --------------------------------------------------------------------------
+
+_vad_warned = False
+
+
+def vad_speech_regions(audio: np.ndarray, sample_rate: int, cfg=None) -> Optional[List[Region]]:
+    """Speech regions (samples) found by Silero VAD, or ``None`` when VAD cannot run.
+
+    ``None`` means "no evidence either way" and callers fall back to the energy detector;
+    an empty list means "VAD ran and heard no speech". Whisper's own ``no_speech_prob`` is not
+    a substitute: on stationary noise it reports about 0.04 while still emitting "I think.
+    Thank you." (VF-12 review finding 1), so the decode of audio VAD calls speechless is
+    never trusted.
+    """
+    global _vad_warned
+    if not bool(getattr(cfg, "silence_vad_gate_enabled", True)):
+        return None
+    if audio is None or len(audio) == 0:
+        return []
+    if int(sample_rate) != 16000:          # Silero is trained for 16 kHz only
+        return None
+    try:
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+        opts = VadOptions(
+            threshold=float(getattr(cfg, "silence_vad_threshold", 0.5)),
+            min_speech_duration_ms=int(getattr(cfg, "silence_vad_min_chunk_ms", 100)),
+            min_silence_duration_ms=300,
+            speech_pad_ms=100,
+        )
+        stamps = get_speech_timestamps(np.asarray(audio, dtype=np.float32), opts, sampling_rate=16000)
+    except Exception as exc:  # missing onnxruntime / asset, bad build: degrade, but say so once
+        if not _vad_warned:
+            _vad_warned = True
+            logger.warning("silence_vad_unavailable error=%s: using energy detection only", exc)
+        return None
+    n = len(audio)
+    return [(max(0, int(t["start"])), min(n, int(t["end"]))) for t in stamps if int(t["end"]) > int(t["start"])]
+
+
+def _overlap_samples(regions: Sequence[Region], start: int, end: int) -> int:
+    return sum(max(0, min(end, b) - max(start, a)) for a, b in regions)
 
 
 # --------------------------------------------------------------------------
@@ -321,10 +389,34 @@ def transcribe_segmented(
     # decode the whole recording in one call instead, as before segmentation existed.
     covered = sum(p.end - p.start for p in plans)
     min_fraction = float(getattr(cfg, "segment_min_speech_fraction", 0.05))
+    vad_regions = vad_speech_regions(audio, sample_rate, cfg)
+    min_vad_s = float(getattr(cfg, "silence_vad_min_speech_seconds", 0.25))
     if not plans or covered < min_fraction * max(1, len(audio)):
         reason = "no_speech_found" if not plans else "too_little_speech"
         log.info("segmentation_fallback reason=%s covered_s=%.1f total_s=%.1f", reason,
                  covered / float(sample_rate), len(audio) / float(sample_rate))
+        if vad_regions is not None:
+            vad_s = sum(b - a for a, b in vad_regions) / float(sample_rate)
+            if vad_s < min_vad_s:
+                # Real VAD heard no speech: nothing here is worth decoding, and decoding stationary
+                # noise is exactly what produces "I think. Thank you." with a low no_speech_prob.
+                log.info("segmentation_fallback_vad_no_speech vad_speech_s=%.2f", vad_s)
+                return SegmentedTranscript(text="", fallback_reason="no_speech_vad")
+            # VAD found speech the energy detector missed (quiet speaker, loud room): decode just
+            # those regions, not the whole recording of noise around them.
+            plans = plan_from_regions(
+                vad_regions,
+                audio,
+                sample_rate,
+                max_segment_seconds=float(getattr(cfg, "segment_max_seconds", 25.0)),
+                split_gap_seconds=float(getattr(cfg, "segment_split_gap_seconds", 2.0)),
+                pad_ms=int(getattr(cfg, "segment_pad_ms", 350)),
+            )
+            log.info("segmentation_fallback_vad_regions pieces=%d vad_speech_s=%.2f", len(plans), vad_s)
+            result = _decode_plans(engine, audio, plans, cfg, log, vad_regions=vad_regions,
+                                   min_vad_s=min_vad_s)
+            result.fallback_reason = reason
+            return result
         text = decode_audio(engine, audio, cfg).strip()
         # The whole-recording decode must not bypass the silence-artifact guard: a recording
         # that really is silence otherwise comes back as "Thank you." (review finding 3).
@@ -336,20 +428,49 @@ def transcribe_segmented(
             text = ""
         return SegmentedTranscript(text=text, fallback_reason=reason)
 
+    return _decode_plans(engine, audio, plans, cfg, log, vad_regions=vad_regions, min_vad_s=min_vad_s)
+
+
+def _decode_plans(
+    engine,
+    audio: np.ndarray,
+    plans: Sequence[SegmentPlan],
+    cfg,
+    log: logging.Logger,
+    *,
+    vad_regions: Optional[Sequence[Region]],
+    min_vad_s: float,
+) -> SegmentedTranscript:
+    """Decode each planned piece and join them (paragraph break at long pauses)."""
+    from voiceflow.core.silence_artifacts import classify
+
+    sample_rate = int(getattr(cfg, "sample_rate", 16000) or 16000)
     paragraph_gap = float(getattr(cfg, "paragraph_pause_seconds", 2.5))
     right_context = float(getattr(cfg, "decode_right_context_seconds", 0.4))
 
     pieces: List[SegmentPiece] = []
     for plan in plans:
+        start_s = plan.start / float(sample_rate)
+        end_s = plan.end / float(sample_rate)
+        overlap = _overlap_samples(vad_regions, plan.start, plan.end) if vad_regions is not None else None
+        if overlap == 0:
+            # Energy found a "segment" but VAD heard no speech anywhere in it (a clatter, a cough,
+            # a fan surge). Whisper invents text for such audio and its no_speech_prob does not
+            # reliably say so, so the piece is not decoded at all.
+            log.info("segment_suppressed reason=vad_no_speech start=%.1f end=%.1f", start_s, end_s)
+            pieces.append(SegmentPiece(text="", gap_before_s=plan.gap_before_s, start_s=start_s,
+                                       end_s=end_s, suppressed="vad_no_speech"))
+            continue
         chunk = audio[plan.start:plan.end]
         text = _result_text(engine.transcribe(pad_right_context(chunk, sample_rate, right_context))).strip()
         no_speech = float(getattr(engine, "last_no_speech_prob", 0.0) or 0.0)
-        suppress, reason = classify(text, no_speech_prob=no_speech)
+        suspected = overlap is not None and overlap < min_vad_s * sample_rate
+        suppress, reason = classify(text, no_speech_prob=no_speech, non_speech_suspected=suspected)
         piece = SegmentPiece(
             text="" if suppress else text,
             gap_before_s=plan.gap_before_s,
-            start_s=plan.start / float(sample_rate),
-            end_s=plan.end / float(sample_rate),
+            start_s=start_s,
+            end_s=end_s,
             suppressed=reason if suppress else "",
         )
         if suppress and reason != "empty":
@@ -366,7 +487,7 @@ def transcribe_segmented(
             out.append("\n\n" if pending_gap >= paragraph_gap else " ")
         out.append(piece.text)
         pending_gap = 0.0
-    return SegmentedTranscript(text="".join(out).strip(), pieces=pieces)
+    return SegmentedTranscript(text="".join(out).strip(), pieces=list(pieces))
 
 
 def decode_for_duration(engine, audio: np.ndarray, cfg=None, log: Optional[logging.Logger] = None) -> str:
@@ -392,6 +513,8 @@ __all__: Sequence[str] = (
     "SegmentedTranscript",
     "find_speech_regions",
     "plan_segments",
+    "plan_from_regions",
+    "vad_speech_regions",
     "room_tone",
     "pad_right_context",
     "decode_audio",

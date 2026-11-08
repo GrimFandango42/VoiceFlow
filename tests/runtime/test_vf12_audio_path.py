@@ -14,6 +14,7 @@ import pytest
 
 import vf12_synth as syn
 from voiceflow.core import audio_enhanced as audio_mod
+from voiceflow.core import segmenter as seg_mod
 from voiceflow.core.audio_enhanced import EnhancedAudioRecorder
 from voiceflow.core.config import Config
 from voiceflow.core.segmenter import (
@@ -27,6 +28,17 @@ from voiceflow.core.segmenter import (
 from voiceflow.ui.cli_enhanced import EnhancedApp
 
 SR = syn.SR
+
+
+@pytest.fixture(autouse=True)
+def _energy_path_only(monkeypatch):
+    """These fixtures are synthetic tone bursts, which a real speech VAD rightly rejects.
+
+    They measure what the energy-based audio path hands the decoder, so VAD is treated as
+    unavailable here (the documented degrade path). VAD behaviour has its own file:
+    test_vf12_vad_gate.py.
+    """
+    monkeypatch.setattr(seg_mod, "vad_speech_regions", lambda audio, sample_rate, cfg=None: None)
 
 
 class _Compactor:

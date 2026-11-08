@@ -13,7 +13,7 @@ import win32com.client  # type: ignore[import-not-found]
 HERE = Path(__file__).resolve().parent
 
 
-def main(out_dir: str = "build/vf12-real/clips") -> None:
+def main(out_dir: str = "build/vf12-real/clips", only: str = "") -> None:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     rows = [
@@ -21,9 +21,12 @@ def main(out_dir: str = "build/vf12-real/clips") -> None:
         for ln in (HERE / "vf12_eval_sentences.txt").read_text(encoding="utf-8").splitlines()
         if ln.strip() and not ln.startswith("#")
     ]
+    wanted = {x for x in only.split(",") if x}
     voice = win32com.client.Dispatch("SAPI.SpVoice")
     voices = voice.GetVoices()
     for i, (clip_id, text) in enumerate(rows):
+        if wanted and clip_id not in wanted:
+            continue
         stream = win32com.client.Dispatch("SAPI.SpFileStream")
         fmt = win32com.client.Dispatch("SAPI.SpAudioFormat")
         fmt.Type = 22  # SAFT16kHz16BitMono

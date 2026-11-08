@@ -46,3 +46,5 @@ g09|Please add a note to the file explaining why the setting is disabled by defa
 g10|The marathon training plan has a long run every Sunday morning
 g11|Veeva makes software for the life sciences industry in Madison and beyond
 g12|Gemini and Codex gave different answers so I asked Claude to compare them
+# t* clips are genuine short spoken filler phrases (used by the silence-gate scenarios, not scored as sentences)
+t01|Thank you.

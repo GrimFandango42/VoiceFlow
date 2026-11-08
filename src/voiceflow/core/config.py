@@ -45,6 +45,15 @@ class Config:
     # If the detector finds less speech than this fraction of the recording, segmentation is
     # not trusted and the whole recording is decoded in one call (never drop words).
     segment_min_speech_fraction: float = 0.05
+    # VF-12 review finding 1: Whisper's no_speech_prob is unreliable on stationary noise (0.04
+    # while emitting "I think. Thank you."), so speech/noise evidence comes from Silero VAD
+    # (bundled with faster-whisper, CPU, offline). VAD hears no speech -> nothing is decoded;
+    # a piece with no VAD speech in it is not decoded. If VAD cannot load, the old behaviour
+    # applies (logged once).
+    silence_vad_gate_enabled: bool = True
+    silence_vad_threshold: float = 0.5
+    silence_vad_min_chunk_ms: int = 100          # shorter VAD chunks are ignored
+    silence_vad_min_speech_seconds: float = 0.25  # total speech needed to decode a whole recording
     paragraph_pause_seconds: float = 2.5     # pause that becomes a paragraph break
 
     # VF-12 formatting for AI prompts (core/dictation_format.py)
