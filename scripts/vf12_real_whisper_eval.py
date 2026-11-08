@@ -138,10 +138,11 @@ class Pipeline:
         tiny_cfg.model_tier = "tiny"
         self.tiny = ModernWhisperASR(tiny_cfg)
         try:
-            from voiceflow.core.segmenter import decode_for_duration
-        except ImportError:                       # the old tree has no segmenter
-            decode_for_duration = None
+            from voiceflow.core.segmenter import decode_for_duration, should_segment
+        except ImportError:                       # the old tree has no segmenter: always compacts
+            decode_for_duration = should_segment = None
         self.decode_for_duration = decode_for_duration
+        self.should_segment = should_segment
 
         cfg = self.cfg
 
@@ -156,18 +157,28 @@ class Pipeline:
         self.tiny_name = getattr(getattr(self.tiny, "model_config", None), "name", "?")
 
     def run(self, audio: np.ndarray) -> tuple[str, str]:
-        """Same order as EnhancedApp.stop_recording: route by raw duration, compact, decode."""
+        """Same routing and buffer as EnhancedApp.stop_recording (cli_enhanced.py, "if should_segment").
+
+        Route by raw duration. A segmentable recording (>= segmented_min_audio_seconds) goes to
+        the decoder RAW because the segmenter replaces pause compaction; anything else is
+        pause-compacted first. A tree without a segmenter (the old baseline) always compacts and
+        does one transcribe call, which is what that tree did.
+        """
         duration = len(audio) / SR
         threshold = min(
             float(getattr(self.cfg, "latency_boost_max_audio_seconds", 12.0)),
             float(getattr(self.cfg, "latency_boost_tiny_max_audio_seconds", 3.0)),
         )
         engine, path = (self.tiny, "fast") if 0.0 < duration <= threshold else (self.primary, "primary")
-        compacted = self._compactor._compact_pauses(audio)
-        if self.decode_for_duration is not None:
-            text = self.decode_for_duration(engine, compacted, self.cfg)
+        if self.should_segment is not None and self.should_segment(duration, self.cfg):
+            decode_in = audio
+            path += "+segmented"
         else:
-            text = engine.transcribe(compacted)
+            decode_in = self._compactor._compact_pauses(audio)
+        if self.decode_for_duration is not None:
+            text = self.decode_for_duration(engine, decode_in, self.cfg)
+        else:
+            text = engine.transcribe(decode_in)
             text = getattr(text, "text", text)
         return str(text or "").strip(), path
 
@@ -209,7 +220,7 @@ def scenario_ending(p: Pipeline, texts: dict[str, str], conditions) -> list[dict
             words += len(ref)
             last_bad = int(not hyp or hyp[-1] != ref[-1])
             last_err += last_bad
-            fast += path == "fast"
+            fast += path.startswith("fast")
             if s + d + i:
                 detail.append(f"{cid}: '{text}'")
         rows.append({"name": f"ending_tail_{tail:.2f}s_noise_{noise_std}", "utterances": 25, "ref_words": words, "word_errors": errs,
@@ -239,11 +250,16 @@ def scenario_silence(p: Pipeline, texts: dict[str, str]) -> list[dict]:
         "room_tone_30s": tone(30.0, 21),
         "fan_noise_30s": tone(30.0, 22, std=0.01),
         "speech_then_20s_silence": np.concatenate([tone(0.4, 31), load_clip("e03"), tone(20.0, 32)]),
+        # A genuinely spoken "Thank you." inside 30 s of noise must be KEPT (not scored as a hallucination).
+        "spoken_thank_you_in_30s_noise": np.concatenate(
+            [tone(12.0, 70, std=0.01), load_clip("t01") + tone(len(load_clip("t01")) / SR, 71, std=0.01),
+             tone(16.0, 72, std=0.01)]),
         "speech_then_5x_pauses": np.concatenate(
             [tone(0.4, 41)] + [x for k in range(4) for x in (load_clip(f"e0{k + 1}"), tone(12.0, 50 + k))]
             + [load_clip("e05"), tone(0.7, 60)]),
     }
     refs = {"speech_then_20s_silence": texts["e03"],
+            "spoken_thank_you_in_30s_noise": texts["t01"],
             "speech_then_5x_pauses": " ".join(texts[f"e0{k}"] for k in range(1, 6))}
     rows = []
     for name, audio in cases.items():
@@ -261,14 +277,20 @@ def scenario_silence(p: Pipeline, texts: dict[str, str]) -> list[dict]:
 
 # ------------------------------------------------------------------ driver
 
-def run_tree(src: str, label: str) -> None:
+SCENARIOS = ("ending", "general", "silence", "long")
+
+
+def run_tree(src: str, label: str, only: tuple[str, ...] = SCENARIOS) -> None:
     texts = sentences()
     p = Pipeline(str(Path(src).resolve()))
     # warm the models so the first scenario is not charged for load time
     p.run(utterance("e01", 0.7))
     rows: list[dict] = []
-    for fn in (lambda: scenario_ending(p, texts, [(t, n) for n in (0.002, 0.03, 0.06) for t in (0.0, 0.2, 0.7)]), lambda: scenario_general(p, texts),
-               lambda: scenario_silence(p, texts), lambda: scenario_long(p, texts)):
+    fns = {"ending": lambda: scenario_ending(p, texts, [(t, n) for n in (0.002, 0.03, 0.06) for t in (0.0, 0.2, 0.7)]),
+           "general": lambda: scenario_general(p, texts),
+           "silence": lambda: scenario_silence(p, texts),
+           "long": lambda: scenario_long(p, texts)}
+    for fn in (fns[k] for k in SCENARIOS if k in only):
         rows.extend(fn())
         print(f"[{label}] done {rows[-1]['name']}", flush=True)
     out = {"label": label, "src": src, "primary_model": p.primary_name, "tiny_model": p.tiny_name,
@@ -287,6 +309,8 @@ def compare(a: str, b: str) -> None:
     print(f"| scenario | metric | {a} | {b} |\n|---|---|---|---|")
     by_b = {r["name"]: r for r in rb["rows"]}
     for x in ra["rows"]:
+        if x["name"] not in by_b:
+            continue
         y = by_b[x["name"]]
         keys = [k for k in ("wer", "word_errors", "last_word_errors", "routed_to_tiny", "sub", "del", "ins",
                             "hallucinated_words", "decode_s") if k in x]
@@ -304,9 +328,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--src")
     ap.add_argument("--label")
+    ap.add_argument("--only", default=",".join(SCENARIOS), help="comma list of: " + ",".join(SCENARIOS))
     ap.add_argument("--compare", nargs=2)
     a = ap.parse_args()
     if a.compare:
         compare(*a.compare)
     else:
-        run_tree(a.src, a.label)
+        run_tree(a.src, a.label, tuple(x for x in a.only.split(",") if x))
