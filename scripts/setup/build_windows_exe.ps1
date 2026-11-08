@@ -229,6 +229,11 @@ function Remove-StaleBuildArtifacts {
         [int]$Keep = 2
     )
 
+    # 0 means keep everything, as the -KeepPackages help says.
+    if ($Keep -le 0) {
+        return
+    }
+
     if (-not (Test-Path $PackagePath)) {
         return
     }
