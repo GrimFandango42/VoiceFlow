@@ -69,16 +69,33 @@ Write-WatchdogLog "VoiceFlow not running; starting $ExePath"
 if ($WhatIfOnly) { exit 0 }
 
 try {
-    # Win32_Process::Create parents the new process to the WMI host rather than
-    # to this script, so the app outlives the watchdog invocation itself.
-    $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-        CommandLine      = "`"$ExePath`""
-        CurrentDirectory = (Split-Path -Parent $ExePath)
-    }
-    if ($result.ReturnValue -eq 0) {
-        Write-WatchdogLog "started pid=$($result.ProcessId)"
+    # Start-Process, NOT Win32_Process::Create.
+    #
+    # Win32_Process::Create was the original choice because it parents the new
+    # process to the WMI host, so the app outlives the watchdog invocation. It
+    # does that, and it also hands back a crippled process: launched that way
+    # VoiceFlow cannot reach the GPU (Whisper silently drops to CPU int8,
+    # roughly 85x slower and no live caption), writes nothing to its log, and
+    # records no transcription history. The app otherwise looks fine -- tray,
+    # hotkey, injection all work -- so nothing announces the damage.
+    #
+    # That is not a theory. The transcription history's last entry was
+    # 2026-11-03 20:32, the last time VoiceFlow started from the Startup
+    # shortcut. This watchdog took over on 2026-11-06 and every launch after
+    # it was degraded. The same binary started with Start-Process is on
+    # device=cuda compute=float16, appears in nvidia-smi, and logs normally.
+    #
+    # Start-Process is safe here: this script runs from Task Scheduler, so the
+    # child is parented to a PowerShell that exits immediately, and the app
+    # keeps running. The scheduler, not an interactive session, owns the chain.
+    $proc = Start-Process -FilePath $ExePath `
+                          -WorkingDirectory (Split-Path -Parent $ExePath) `
+                          -WindowStyle Hidden `
+                          -PassThru
+    if ($proc) {
+        Write-WatchdogLog "started pid=$($proc.Id)"
     } else {
-        Write-WatchdogLog "START FAILED rc=$($result.ReturnValue)"
+        Write-WatchdogLog "START FAILED: no process handle returned"
         exit 1
     }
 } catch {
