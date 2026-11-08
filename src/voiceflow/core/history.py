@@ -152,6 +152,22 @@ class TranscriptHistory:
             return len(self._items)
 
 
+def menu_pages(entries: List[Dict[str, Any]], first: int = 10, page: int = 10) -> List[tuple]:
+    """Split newest-first ``entries`` into tray-menu pages so every retained item is reachable.
+
+    Returns ``[(title, [entry, ...]), ...]``. The first page (title ``None``) is shown inline in
+    the Recent menu; the rest become submenus titled e.g. ``"Older (11-20)"``.
+    """
+    entries = list(entries)
+    pages: List[tuple] = [(None, entries[:first])]
+    start = first
+    while start < len(entries):
+        chunk = entries[start : start + page]
+        pages.append((f"Older ({start + 1}-{start + len(chunk)})", chunk))
+        start += page
+    return pages
+
+
 def menu_label(entry: Dict[str, Any], width: int = 56) -> str:
     """One-line label for a tray menu item: ``12:41  first words of the transcript...``."""
     text = " ".join(str(entry.get("text", "")).split())

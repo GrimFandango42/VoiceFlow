@@ -179,6 +179,41 @@ def test_release_target_is_sampled_at_release_not_after_the_tail(rig):
     assert sampled == ["A", "stop:B"], "target must be taken at release (A), before the tail"
 
 
+def test_release_window_is_pinned_synchronously_even_if_the_callback_queue_is_busy(rig):
+    # VF-12 review finding 1: capture at the instant of release, not when the queued callback
+    # eventually runs. Block the callback worker, alt-tab A -> B right after the release, and
+    # check the callback still receives A.
+    focus = {"hwnd": "A"}
+    gate = threading.Event()
+    received: list = []
+    sampled = threading.Event()
+
+    def sampler():
+        value = focus["hwnd"]
+        sampled.set()                   # only after the read: the test flips focus next
+        return value
+
+    rig.listener.release_sampler = sampler
+    rig.listener.on_release = lambda sample: received.append(sample)
+
+    rig.press("ctrl", True)
+    rig.press("shift", True)
+    assert _wait(lambda: "start" in rig.events)
+    time.sleep(0.3)
+    rig.listener._dispatch("block", gate.wait)      # worker is now stuck ahead of on_release
+    time.sleep(0.05)
+
+    rig.press("shift", False)
+    rig.press("ctrl", False)
+    # the release is confirmed (sampler ran) once the confirm window has passed
+    assert sampled.wait(1.0), "release never confirmed"
+    focus["hwnd"] = "B"                            # user alt-tabs; callback has not run yet
+    assert received == [], "callback must still be queued behind the blocked worker"
+    gate.set()
+    assert _wait(lambda: received, timeout=1.0)
+    assert received == ["A"], "target must be the window focused at release"
+
+
 def test_release_is_reported_once_per_release_and_again_after_a_resume(rig):
     notes: list = []
     rig.listener.on_release = lambda: notes.append(time.time())

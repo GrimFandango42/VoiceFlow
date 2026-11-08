@@ -431,16 +431,24 @@ class EnhancedTrayController(ITrayManager):
 
         def _recent_items():
             # Rebuilt every time the menu opens, so it always shows the latest dictations.
-            from voiceflow.core.history import menu_label
+            from voiceflow.core.history import DEFAULT_MAX_ITEMS, menu_label, menu_pages
 
             try:
-                entries = self.app.recent_history(10)
+                entries = self.app.recent_history(DEFAULT_MAX_ITEMS)
             except Exception:
                 entries = []
             if not entries:
                 yield pystray.MenuItem("(no dictations yet)", None, enabled=False)
-            for entry in entries:
-                yield pystray.MenuItem(menu_label(entry), _copy_recent(int(entry["id"])))
+            # Newest 10 inline; the rest (up to all 50 retained) in "Older (n-m)" submenus.
+            for title, page_entries in menu_pages(entries):
+                items = [
+                    pystray.MenuItem(menu_label(e), _copy_recent(int(e["id"])))
+                    for e in page_entries
+                ]
+                if title is None:
+                    yield from items
+                else:
+                    yield pystray.MenuItem(title, pystray.Menu(*items))
             yield pystray.Menu.SEPARATOR
             yield pystray.MenuItem(
                 "Re-paste last transcript",

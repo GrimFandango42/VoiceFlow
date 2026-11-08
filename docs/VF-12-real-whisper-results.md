@@ -23,14 +23,17 @@ redirected to a scratch folder; nothing outside `build/` is read or written.
 
 ## Results (final code, one deterministic run, same audio for both trees)
 
-Long/silence rows were re-run with the production routing; ending/general rows were re-run at the
-final commit as well and are identical to the earlier run.
+Review `VF-12-review-codex-20261108-052303` (finding 3) found that `--compare old new` read stale
+files, because earlier partial re-runs had been saved under other labels (`old-r2`, `new-r2`,
+`new-r2b`). The whole table below was therefore regenerated in a single pass with exactly the three
+commands above (all scenarios, labels `old` and `new`; `build/` is git-ignored, so the JSON stays
+local). Every row matches the earlier figures except decode time (the primary model was warm).
 
 | scenario | metric | old 15be897 | candidate |
 |---|---|---|---|
 | Long dictation, 251 s, 16 sentences, 5-20 s pauses (236 words) | WER | 2.97 % | **1.27 %** |
 | | deleted / inserted words | 3 / 1 | **0** / 1 |
-| | decode time (GPU) | 0.8 s | 2.7 s (16 pieces + VAD pass) |
+| | decode time (GPU) | 0.6 s | 1.9 s (16 pieces + VAD pass) |
 | 5 sentences separated by 12 s pauses (26 words) | WER | 34.6 % (repeats: "What time? What time does the meeting?", "Who is this the right file? Who is going to...") | **0 %** (paragraph breaks at the pauses) |
 | Speech + 20 s trailing silence | WER | 0 % | 0 % |
 | Digital silence 30 s | output | "" | "" |
@@ -63,7 +66,7 @@ Reading it:
   the tiny-model change. Right-context padding and the tail window are not separated here.
 * General accuracy did not drop (identical misses). The candidate's segment pieces decode at
   beam 1, the known trade-off; the long-dictation WER improved regardless.
-* Cost: a 251 s dictation takes about 2 s longer to decode than the old single call on this GPU
+* Cost: a 251 s dictation takes about 1.3 s longer to decode than the old single call on this GPU
   (16 separate decodes plus about 0.9 s of CPU VAD per 5 minutes of audio). Dictations under 20 s
   are unchanged.
 

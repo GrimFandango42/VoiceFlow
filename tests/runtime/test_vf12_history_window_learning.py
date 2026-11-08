@@ -24,6 +24,7 @@ from voiceflow.core.history import (
     TranscriptHistory,
     default_history_path,
     menu_label,
+    menu_pages,
 )
 from voiceflow.integrations import inject as inject_mod
 from voiceflow.integrations.inject import ClipboardInjector
@@ -138,7 +139,7 @@ class _Injector:
     def get_target_context(self, refresh=False):
         return {"process_name": "notepad.exe", "window_title": "secret title"}
 
-    def retarget_to_foreground(self):
+    def retarget_to_foreground(self, hwnd=None):
         self.retargeted += 1
         return True
 
@@ -174,6 +175,7 @@ class _App:
     cancel_recording = EnhancedApp.cancel_recording
     stop_recording = EnhancedApp.stop_recording
     note_release_target = EnhancedApp.note_release_target
+    sample_release_target = EnhancedApp.sample_release_target
 
     def __init__(self, tmp_path, *, inject_ok=True, **cfg):
         self.cfg = Config(audio_feedback_beeps=False, **cfg)
@@ -231,6 +233,28 @@ class TestRepasteAndCopy:
         assert app.copy_history_entry(a) is True
         assert app.injector.copied == ["first"]
         assert app.copy_history_entry(9999) is False
+
+    def test_every_retained_transcript_is_reachable_from_the_recent_menu(self, tmp_path, overlay):
+        # Review finding 2: the menu used to stop at 10 of the 50 retained transcripts.
+        app = _App(tmp_path)
+        ids = [app.history.add(f"transcript number {i}") for i in range(60)]   # 50 retained
+        pages = menu_pages(app.recent_history(50))
+        assert pages[0][0] is None and len(pages[0][1]) == 10
+        assert [t for t, _ in pages[1:]] == [
+            "Older (11-20)", "Older (21-30)", "Older (31-40)", "Older (41-50)"]
+        reachable = [e["id"] for _, page in pages for e in page]
+        assert reachable == ids[-1:-51:-1], "all 50, newest first, none twice"
+        oldest = pages[-1][1][-1]                       # entry 50: older than the newest ten
+        assert oldest["text"] == "transcript number 10"
+        assert app.copy_history_entry(int(oldest["id"])) is True
+        assert app.injector.copied == ["transcript number 10"]
+
+    def test_menu_pages_handles_short_and_empty_history(self):
+        assert menu_pages([]) == [(None, [])]
+        few = [{"id": i} for i in range(3)]
+        assert menu_pages(few) == [(None, few)]
+        eleven = [{"id": i} for i in range(11)]
+        assert [t for t, _ in menu_pages(eleven)] == [None, "Older (11-11)"]
 
     def test_history_add_records_process_but_not_title(self, tmp_path):
         app = _App(tmp_path)
@@ -423,6 +447,24 @@ class TestWindowTargeting:
         win.user32.foreground = 400         # B: user alt-tabs while the tail is still recording
         app.stop_recording()                # runs after the tail
         assert win.inj._target_hwnd == 300, "stop_recording must not re-sample the foreground window"
+
+    def test_handle_sampled_at_release_wins_even_if_focus_moves_before_the_callback(
+            self, tmp_path, overlay, win):
+        # Review finding 1: the listener samples the handle synchronously at release and the
+        # (possibly delayed) callback applies THAT handle, not whatever is focused by then.
+        app = _App(tmp_path)
+        app.injector = win.inj
+        win.user32.foreground = 300         # A at release
+        sample = app.sample_release_target()
+        win.user32.foreground = 400         # B before the callback gets to run
+        app.note_release_target(sample)
+        app.stop_recording()
+        assert sample == 300 and win.inj._target_hwnd == 300
+
+    def test_sampler_is_a_noop_under_the_start_policy(self, tmp_path, win):
+        app = _App(tmp_path, inject_target_policy="start")
+        app.injector = win.inj
+        assert app.sample_release_target() is None
 
     def test_stop_without_a_release_report_samples_at_stop(self, tmp_path, overlay, win):
         app = _App(tmp_path)                # a backend that never calls on_release

@@ -4,7 +4,7 @@ import ctypes
 import queue
 import threading
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 # Graceful import for environments without the keyboard module during tests
 try:
@@ -115,7 +115,11 @@ class EnhancedPTTHotkeyListener:
         # VF-12: called the moment a release is confirmed, BEFORE the tail buffer, so the app
         # can pin the window that had focus at release (inject_target_policy="release").
         # Set by the owner after construction; optional.
-        self.on_release: Optional[Callable[[], None]] = None
+        self.on_release: Optional[Callable[..., None]] = None
+        # Optional cheap, non-blocking probe run SYNCHRONOUSLY the instant a release is
+        # confirmed; its result is passed to on_release (which runs later on the callback
+        # thread). This pins "the window at release" even when the callback queue is busy.
+        self.release_sampler: Optional[Callable[[], Any]] = None
         self._release_noted = False
         # One-shot timer armed by the first key-up of a release. Without it the
         # hook path could only finish a release when ANOTHER key event arrived
@@ -202,7 +206,15 @@ class EnhancedPTTHotkeyListener:
         if cb is None:
             return
         try:
-            self._dispatch("on_release", cb)
+            sampler = self.release_sampler
+            if sampler is None:
+                self._dispatch("on_release", cb)
+            else:
+                try:
+                    sample = sampler()          # synchronous: this IS the moment of release
+                except Exception:
+                    sample = None
+                self._dispatch("on_release", lambda: cb(sample))
         except Exception as exc:  # focus sampling must never break a stop
             print(f"[PTT] on_release dispatch error: {exc}")
 

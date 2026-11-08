@@ -2291,11 +2291,28 @@ class EnhancedApp:
                 if VISUAL_INDICATORS_AVAILABLE:
                     show_error(f"Audio error: {e}")
 
-    def note_release_target(self) -> None:
+    def sample_release_target(self):
+        """Handle of the window focused right now. Runs synchronously on the key-release
+        thread, so it must stay a single cheap OS call; the heavier retarget happens later in
+        ``note_release_target`` on the callback thread."""
+        if str(getattr(self.cfg, "inject_target_policy", "release")).strip().lower() != "release":
+            return None
+        snap = getattr(self.injector, "foreground_snapshot", None)
+        if not callable(snap):
+            return None
+        try:
+            return snap()
+        except Exception as exc:
+            self._log.debug("foreground_snapshot_failed error=%s", exc)
+            return None
+
+    def note_release_target(self, hwnd=None) -> None:
         """Pin the window focused at key release as the paste target (policy "release").
 
         Called by the hotkey listener as soon as a release is confirmed, i.e. before the
         post-key-up audio tail, so a focus change during the tail cannot redirect the text.
+        ``hwnd`` is the handle the listener sampled synchronously at the moment of release;
+        without it (backends with no sampler) the foreground window at call time is used.
         """
         self._release_target_noted = True
         if str(getattr(self.cfg, "inject_target_policy", "release")).strip().lower() != "release":
@@ -2303,7 +2320,7 @@ class EnhancedApp:
         retarget = getattr(self.injector, "retarget_to_foreground", None)
         if callable(retarget):
             try:
-                retarget()
+                retarget(hwnd) if hwnd else retarget()
             except Exception as exc:
                 self._log.debug("retarget_to_foreground_failed error=%s", exc)
 
@@ -3516,6 +3533,8 @@ def main(argv=None):
     app.ptt_listener = listener
     if hasattr(listener, "on_release"):
         listener.on_release = app.note_release_target
+        if hasattr(listener, "release_sampler"):
+            listener.release_sampler = app.sample_release_target
 
     # Final bootstrap guard: if this process spawned an identical child, yield to child.
     # This avoids dual hotkey listeners in parent+child launch environments.

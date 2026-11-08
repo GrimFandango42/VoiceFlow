@@ -670,13 +670,23 @@ class ClipboardInjector:
         except Exception:
             return True
 
-    def retarget_to_foreground(self) -> bool:
-        """Make the window that has focus NOW the paste target (inject_target_policy=release).
+    def foreground_snapshot(self) -> Optional[int]:
+        """Cheap, non-blocking read of the foreground window handle (no title lookup).
 
-        Skips VoiceFlow's own windows (overlay, panels): if one of those is in front, the
-        window captured at key-down stays the target. Returns True when the target changed.
+        The hotkey listener calls this synchronously the instant a release is confirmed, then
+        hands the handle to ``retarget_to_foreground`` later, off the hook thread.
         """
-        fg = self._foreground_window()
+        return self._foreground_window()
+
+    def retarget_to_foreground(self, hwnd: Optional[int] = None) -> bool:
+        """Make a window the paste target (inject_target_policy=release).
+
+        ``hwnd`` is the handle sampled at release (see ``foreground_snapshot``); when omitted the
+        window that has focus NOW is used. Skips VoiceFlow's own windows (overlay, panels): if one
+        of those is in front, the window captured at key-down stays the target. Returns True when
+        the target changed.
+        """
+        fg = int(hwnd) if hwnd else self._foreground_window()
         if not fg or not _HAS_WIN32_API:
             return False
         try:
