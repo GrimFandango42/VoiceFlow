@@ -298,6 +298,21 @@ def _run_self_check(out_path: str, *, allow_cpu_only: bool = False) -> int:
     except Exception as exc:  # noqa: BLE001
         _record("cuda_runtime_dlls", False, f"{type(exc).__name__}: {exc}", warn_only=allow_cpu_only)
 
+    # Which commit this bundle was built from, as the frozen code itself sees
+    # it. Informational (not a check): verify_bundle.py compares it to HEAD so a
+    # stale bundle cannot pass as a build of the current tip.
+    try:
+        from voiceflow import _build_stamp as stamp
+
+        report["build"] = {
+            "version": getattr(stamp, "VERSION", None),
+            "commit": getattr(stamp, "COMMIT", None),
+            "built_at": getattr(stamp, "BUILT_AT", None),
+            "dirty": getattr(stamp, "DIRTY", None),
+        }
+    except Exception as exc:  # noqa: BLE001 - absent in source checkouts that were never built
+        report["build"] = {"error": f"{type(exc).__name__}: {exc}"}
+
     report["ok"] = ok
     text = json.dumps(report, indent=2)
     try:

@@ -39,6 +39,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ASR_ENGINE = REPO_ROOT / "src" / "voiceflow" / "core" / "asr_engine.py"
 EXE_ENTRY = REPO_ROOT / "scripts" / "setup" / "voiceflow_exe_entry.py"
 
+BUILD_STAMP = REPO_ROOT / "src" / "voiceflow" / "_build_stamp.py"
+
 VAD_RELATIVE = Path("faster_whisper") / "assets" / "silero_vad_v6.onnx"
 CUDA_RELATIVE = Path("torch") / "lib"
 FROZEN_SELF_CHECK_TIMEOUT_S = 300.0
@@ -279,6 +281,81 @@ def run_frozen_self_check(
     return data
 
 
+def _git_head(repo: Path) -> str | None:
+    """Full SHA of HEAD in the source checkout, or None if git cannot say."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    head = (proc.stdout or "").strip()
+    return head if proc.returncode == 0 and head else None
+
+
+def _read_source_stamp(path: Path) -> dict | None:
+    """COMMIT/DIRTY from the stamp the build wrote, without importing it."""
+    if not path.is_file():
+        return None
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+    values: dict = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            try:
+                values[node.targets[0].id.lower()] = ast.literal_eval(node.value)
+            except ValueError:
+                continue
+    return values
+
+
+def _check_build_commit(report: Report, frozen_report: dict | None) -> None:
+    """The bundle must be a build of the checkout's HEAD (VF-11b review finding 2).
+
+    A bundle left over from an older commit passes every other check, so a
+    stale build could be reviewed and accepted as the current tip. The commit
+    the frozen EXE reports about itself is authoritative; the stamp file the
+    build wrote into the source tree is the fallback (static-only runs, or an
+    EXE too old to report it).
+    """
+    frozen_build = (frozen_report or {}).get("build") if isinstance(frozen_report, dict) else None
+    if isinstance(frozen_build, dict) and frozen_build.get("commit"):
+        stamp, source = frozen_build, "frozen EXE"
+    else:
+        stamp, source = _read_source_stamp(BUILD_STAMP), f"{BUILD_STAMP.name}"
+    if not stamp:
+        report.add("build_commit_matches_head", False, f"no build stamp found ({BUILD_STAMP})")
+        return
+    commit = str(stamp.get("commit") or "").strip()
+    head = _git_head(REPO_ROOT)
+    if head is None or commit in ("", "unknown"):
+        report.add(
+            "build_commit_matches_head",
+            False,
+            f"cannot compare: build commit={commit or '?'}, HEAD={head or 'git unavailable'}",
+            warn_only=True,
+        )
+        return
+    if len(commit) < 7 or not head.startswith(commit):
+        report.add(
+            "build_commit_matches_head",
+            False,
+            f"stale bundle: built from {commit} ({source}) but HEAD is {head[:12]} -- rebuild",
+        )
+        return
+    if stamp.get("dirty"):
+        report.add(
+            "build_commit_matches_head",
+            False,
+            f"{commit} ({source}) matches HEAD but was built from a dirty tree",
+            warn_only=True,
+        )
+        return
+    report.add("build_commit_matches_head", True, f"{commit} ({source}) == HEAD, clean tree")
+
+
 def verify(
     target: Path,
     allow_cpu_only: bool,
@@ -299,6 +376,7 @@ def verify(
             report.add("frozen_self_check", False, "one-file builds can only be verified by the frozen self-check")
             return report
         report.frozen_report = run_frozen_self_check(target, work_dir, allow_cpu_only, report)
+        _check_build_commit(report, report.frozen_report)
         return report
 
     exe = target / "VoiceFlow.exe"
@@ -317,6 +395,7 @@ def verify(
     _check_modules(exe, internal, modules, report)
     if run_frozen:
         report.frozen_report = run_frozen_self_check(exe, work_dir, allow_cpu_only, report)
+    _check_build_commit(report, report.frozen_report)
     return report
 
 
