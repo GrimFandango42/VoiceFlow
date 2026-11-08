@@ -190,15 +190,21 @@ class EnhancedPTTHotkeyListener:
         self._tail_timer.start()
 
     def _note_release(self) -> None:
-        """Tell the owner the key was released now (before tail capture). Never raises."""
+        """Tell the owner the key was released now (before tail capture). Never raises.
+
+        The callback runs on the ordered callback thread, not here: this is the keyboard hook /
+        poll thread under the listener lock, and looking up another process's window title can
+        block (VF-11: blocking the hook thread loses key events). The queue is FIFO, so the
+        sample still happens before on_stop, which is enqueued after the tail.
+        """
         self._release_noted = True
         cb = self.on_release
         if cb is None:
             return
         try:
-            cb()
+            self._dispatch("on_release", cb)
         except Exception as exc:  # focus sampling must never break a stop
-            print(f"[PTT] on_release callback error: {exc}")
+            print(f"[PTT] on_release dispatch error: {exc}")
 
     def _arm_release_timer(self) -> None:
         """Re-check the release once the confirm window has passed (caller holds the lock)."""

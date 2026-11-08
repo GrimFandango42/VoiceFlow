@@ -213,6 +213,29 @@ def test_forced_short_stop_still_samples_the_release_window(rig):
     assert notes == ["r"], "exactly one sample, taken before on_stop"
 
 
+def test_slow_release_callback_does_not_block_the_hook_thread_and_still_precedes_stop(rig):
+    order: list = []
+
+    def slow_release():
+        time.sleep(0.4)                     # e.g. GetWindowTextW on a hung window
+        order.append("release")
+
+    rig.listener.on_release = slow_release
+    rig.listener.on_stop = lambda: (order.append("stop"), rig.events.append("stop"))
+    rig.press("ctrl", True)
+    rig.press("shift", True)
+    time.sleep(0.05)
+    started = time.perf_counter()
+    rig.press("shift", False)
+    rig.press("ctrl", False)                # confirm + dispatch happen on this thread
+    time.sleep(0.2)
+    rig.listener._on_event(SimpleNamespace(name="a", event_type="down"))
+    blocked_ms = (time.perf_counter() - started) * 1000.0
+    assert blocked_ms < 450, f"hook thread blocked {blocked_ms:.0f} ms behind the release callback"
+    assert _wait(lambda: "stop" in rig.events, timeout=3.0)
+    assert order == ["release", "stop"], "the release sample must precede on_stop"
+
+
 def test_a_failing_release_callback_does_not_break_the_stop(rig):
     def boom():
         raise RuntimeError("focus lookup failed")
