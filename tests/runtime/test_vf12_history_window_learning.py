@@ -173,6 +173,7 @@ class _App:
     _disarm_cancel_key = EnhancedApp._disarm_cancel_key
     cancel_recording = EnhancedApp.cancel_recording
     stop_recording = EnhancedApp.stop_recording
+    note_release_target = EnhancedApp.note_release_target
 
     def __init__(self, tmp_path, *, inject_ok=True, **cfg):
         self.cfg = Config(audio_feedback_beeps=False, **cfg)
@@ -412,6 +413,31 @@ class TestWindowTargeting:
         start_app = _App(tmp_path, inject_target_policy="start")
         start_app.stop_recording()
         assert start_app.injector.retargeted == 0
+
+    def test_focus_change_during_the_tail_does_not_move_the_target(self, tmp_path, overlay, win):
+        # Review finding 2: focus A at release, focus B during the 0.35 s tail -> A stays the target.
+        app = _App(tmp_path)
+        app.injector = win.inj
+        win.user32.foreground = 300         # A
+        app.note_release_target()           # the listener calls this when the release is confirmed
+        win.user32.foreground = 400         # B: user alt-tabs while the tail is still recording
+        app.stop_recording()                # runs after the tail
+        assert win.inj._target_hwnd == 300, "stop_recording must not re-sample the foreground window"
+
+    def test_stop_without_a_release_report_samples_at_stop(self, tmp_path, overlay, win):
+        app = _App(tmp_path)                # a backend that never calls on_release
+        app.injector = win.inj
+        win.user32.foreground = 400
+        app.stop_recording()
+        assert win.inj._target_hwnd == 400
+
+    def test_start_policy_never_retargets_at_release(self, tmp_path, overlay, win):
+        app = _App(tmp_path, inject_target_policy="start")
+        app.injector = win.inj
+        win.user32.foreground = 300
+        app.note_release_target()
+        app.stop_recording()
+        assert win.inj._target_hwnd == 100
 
 
 # ============================================================ item 5: learning

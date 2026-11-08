@@ -112,6 +112,11 @@ class EnhancedPTTHotkeyListener:
         )
         self._tail_timer: Optional[threading.Timer] = None
         self._pending_stop = False
+        # VF-12: called the moment a release is confirmed, BEFORE the tail buffer, so the app
+        # can pin the window that had focus at release (inject_target_policy="release").
+        # Set by the owner after construction; optional.
+        self.on_release: Optional[Callable[[], None]] = None
+        self._release_noted = False
         # One-shot timer armed by the first key-up of a release. Without it the
         # hook path could only finish a release when ANOTHER key event arrived
         # after the confirm window; after the last key-up nothing else comes, so
@@ -150,6 +155,7 @@ class EnhancedPTTHotkeyListener:
                             if self._pending_stop:
                                 self._cancel_tail_timer()
                                 self._pending_stop = False
+                                self._release_noted = False
                         else:
                             self._confirm_release_locked(current_time)
             except Exception:
@@ -169,6 +175,7 @@ class EnhancedPTTHotkeyListener:
         if (now - self._release_candidate_since) < self._release_confirm_seconds:
             return
         recording_duration = now - self._recording_start_time
+        self._note_release()
         if (
             recording_duration >= self._max_recording_duration
             or recording_duration < self._min_recording_for_tail_buffer
@@ -181,6 +188,17 @@ class EnhancedPTTHotkeyListener:
             self._actual_stop_recording
         )
         self._tail_timer.start()
+
+    def _note_release(self) -> None:
+        """Tell the owner the key was released now (before tail capture). Never raises."""
+        self._release_noted = True
+        cb = self.on_release
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception as exc:  # focus sampling must never break a stop
+            print(f"[PTT] on_release callback error: {exc}")
 
     def _arm_release_timer(self) -> None:
         """Re-check the release once the confirm window has passed (caller holds the lock)."""
@@ -322,8 +340,12 @@ class EnhancedPTTHotkeyListener:
                 if not force and self._chord_active_physical():
                     self._sync_pressed_keys_from_physical()
                     self._pending_stop = False
+                    self._release_noted = False
                     return
 
+                if not self._release_noted:
+                    self._note_release()   # forced stop that never went through a release confirm
+                self._release_noted = False
                 self._recording = False
                 self._pending_stop = False
                 self._release_candidate_since = 0.0
@@ -412,6 +434,7 @@ class EnhancedPTTHotkeyListener:
                 self._pending_stop = False
 
                 self._recording = True
+                self._release_noted = False
                 self._recording_start_time = current_time
                 self._release_candidate_since = 0.0
 
@@ -431,6 +454,7 @@ class EnhancedPTTHotkeyListener:
             elif not chord_active and self._recording and not self._pending_stop:
                 # Check for maximum recording duration safety limit
                 recording_duration = current_time - self._recording_start_time
+                self._note_release()
                 if recording_duration >= self._max_recording_duration:
                     print(f"[PTT] Max recording duration reached ({self._max_recording_duration}s), stopping immediately")
                     self._actual_stop_recording(force=True)
@@ -461,6 +485,7 @@ class EnhancedPTTHotkeyListener:
                 print("[PTT] Key pressed again, canceling tail buffer")
                 self._cancel_tail_timer()
                 self._pending_stop = False
+                self._release_noted = False
                 self._release_candidate_since = 0.0
 
     def start(self):

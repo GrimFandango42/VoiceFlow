@@ -155,3 +155,72 @@ def test_virtual_key_mapping(name, vk):
 
 def test_unmapped_key_falls_back_to_the_library():
     assert hk._vk_for("left windows") is None
+
+
+# ---- VF-12 review finding 2: the "window at release" is sampled at release, not after the tail
+
+def test_release_target_is_sampled_at_release_not_after_the_tail(rig):
+    focus = {"hwnd": "A"}
+    sampled: list = []
+    rig.listener.on_release = lambda: sampled.append(focus["hwnd"])
+    rig.listener.on_stop = lambda: (rig.events.append("stop"), sampled.append("stop:" + focus["hwnd"]))
+    rig.listener._tail_buffer_duration = 0.25
+
+    rig.press("ctrl", True)
+    rig.press("shift", True)
+    assert _wait(lambda: "start" in rig.events)
+    time.sleep(0.3)
+
+    rig.press("shift", False)
+    rig.press("ctrl", False)
+    assert _wait(lambda: sampled[:1] == ["A"], timeout=1.0), "release was never reported"
+    focus["hwnd"] = "B"                     # user alt-tabs during the post-key-up tail
+    assert _wait(lambda: "stop" in rig.events, timeout=2.0)
+    assert sampled == ["A", "stop:B"], "target must be taken at release (A), before the tail"
+
+
+def test_release_is_reported_once_per_release_and_again_after_a_resume(rig):
+    notes: list = []
+    rig.listener.on_release = lambda: notes.append(time.time())
+    rig.listener._tail_buffer_duration = 0.4
+    rig.press("ctrl", True)
+    rig.press("shift", True)
+    assert _wait(lambda: "start" in rig.events)
+    time.sleep(0.3)
+
+    rig.press("shift", False)
+    rig.press("ctrl", False)
+    assert _wait(lambda: len(notes) == 1, timeout=1.0)
+    rig.press("ctrl", True)                 # pressed again during the tail: recording resumes
+    rig.press("shift", True)
+    time.sleep(0.6)
+    assert "stop" not in rig.events
+    rig.press("shift", False)
+    rig.press("ctrl", False)
+    assert _wait(lambda: "stop" in rig.events, timeout=2.0)
+    assert len(notes) == 2, "the second release must re-sample the window"
+
+
+def test_forced_short_stop_still_samples_the_release_window(rig):
+    notes: list = []
+    rig.listener.on_release = lambda: notes.append("r")
+    rig.press("ctrl", True)
+    rig.press("shift", True)
+    time.sleep(0.03)
+    rig.press("shift", False)
+    rig.press("ctrl", False)
+    assert _wait(lambda: "stop" in rig.events, timeout=1.0)
+    assert notes == ["r"], "exactly one sample, taken before on_stop"
+
+
+def test_a_failing_release_callback_does_not_break_the_stop(rig):
+    def boom():
+        raise RuntimeError("focus lookup failed")
+
+    rig.listener.on_release = boom
+    rig.press("ctrl", True)
+    rig.press("shift", True)
+    time.sleep(0.3)
+    rig.press("shift", False)
+    rig.press("ctrl", False)
+    assert _wait(lambda: "stop" in rig.events, timeout=2.0)

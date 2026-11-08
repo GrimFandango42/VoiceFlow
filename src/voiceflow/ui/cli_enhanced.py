@@ -2243,6 +2243,7 @@ class EnhancedApp:
                 self._log.info("recording_started")
                 self._reset_checkpoint_state()
                 self.injector.capture_target_window()
+                self._release_target_noted = False
 
                 # Mark state as recording for idle-aware monitoring
                 mark_recording()
@@ -2290,6 +2291,22 @@ class EnhancedApp:
                 if VISUAL_INDICATORS_AVAILABLE:
                     show_error(f"Audio error: {e}")
 
+    def note_release_target(self) -> None:
+        """Pin the window focused at key release as the paste target (policy "release").
+
+        Called by the hotkey listener as soon as a release is confirmed, i.e. before the
+        post-key-up audio tail, so a focus change during the tail cannot redirect the text.
+        """
+        self._release_target_noted = True
+        if str(getattr(self.cfg, "inject_target_policy", "release")).strip().lower() != "release":
+            return
+        retarget = getattr(self.injector, "retarget_to_foreground", None)
+        if callable(retarget):
+            try:
+                retarget()
+            except Exception as exc:
+                self._log.debug("retarget_to_foreground_failed error=%s", exc)
+
     def stop_recording(self):
         """Enhanced recording stop with improved transcription handling"""
         self._disarm_cancel_key()
@@ -2297,14 +2314,12 @@ class EnhancedApp:
             # Esc already discarded this recording; the key release that follows is a no-op.
             self._cancel_pending = False
             return
-        if str(getattr(self.cfg, "inject_target_policy", "release")).strip().lower() == "release":
-            # Paste into the window that has focus now rather than the one at key-down.
-            retarget = getattr(self.injector, "retarget_to_foreground", None)
-            if callable(retarget):
-                try:
-                    retarget()
-                except Exception as exc:
-                    self._log.debug("retarget_to_foreground_failed error=%s", exc)
+        # VF-12: the "release" target is sampled when the key release is confirmed (before the
+        # post-key-up tail), via note_release_target. Only backends that never report a release
+        # (no on_release hook) are sampled here, at stop time.
+        if not getattr(self, "_release_target_noted", False):
+            self.note_release_target()
+        self._release_target_noted = False
         try:
             # Stop streaming preview first
             self._stop_streaming_preview()
@@ -3499,6 +3514,8 @@ def main(argv=None):
         platform_name=current_platform,
     )
     app.ptt_listener = listener
+    if hasattr(listener, "on_release"):
+        listener.on_release = app.note_release_target
 
     # Final bootstrap guard: if this process spawned an identical child, yield to child.
     # This avoids dual hotkey listeners in parent+child launch environments.
