@@ -210,12 +210,11 @@ _B = r"(?:(?<=^)|(?<=[.!?,;:]\s)|(?<=[.!?,;:]))"           # boundary before
 _A = r"(?=\s*(?:$|[.!?,;:]))"                              # boundary after
 _NEW_LINE = re.compile(rf"\s*{_B}\s*\bnew line\b{_A}[.!?,;:]?\s*", re.IGNORECASE)
 _NEW_PARA = re.compile(rf"\s*{_B}\s*\bnew paragraph\b{_A}[.!?,;:]?\s*", re.IGNORECASE)
-_BULLET_NOT_FOLLOWED_BY = frozenset(
-    "is are was were list lists journal journals points point style format formatting "
-    "in on of for and or to that with the a an".split()
-)
+# "bullet" is a command only in the unambiguous form "bullet, <text>" / "bullet: <text>"
+# (Whisper punctuates a deliberately paused command that way). Without the comma/colon it
+# is an ordinary word: "bullet train", "bullet wound", "bullet points are useful".
 _BULLET = re.compile(
-    rf"\s*{_B}\s*\b(?:next )?bullet(?: point)?\b(?:\s*[,:]\s*|\s+)(?=\S)", re.IGNORECASE
+    rf"\s*{_B}\s*\b(?:next )?bullet(?: point)?\b\s*[,:]\s*(?=\S)", re.IGNORECASE
 )
 
 
@@ -240,21 +239,16 @@ def apply_spoken_commands(text: str) -> str:
     text = _swap(_NEW_PARA, "\n\n", text)
     text = _swap(_NEW_LINE, "\n", text)
 
-    # Bullets: only when followed by a comma/colon, or by a word that is not a plain
-    # continuation ("bullet points are useful" stays literal).
+    # Bullets: only the explicit "bullet, <text>" form (see _BULLET).
     out, last = [], 0
     for m in _BULLET.finditer(text):
         raw = m.group(0)
-        has_punct = bool(re.search(r"[,:]", raw))
-        nxt = re.match(r"\S+", text[m.end():])
-        word = _core(nxt.group(0)) if nxt else ""
-        if not has_punct and (word in _BULLET_NOT_FOLLOWED_BY or not word):
-            continue
         head = text[last:m.start()]
         out.append(head.rstrip(" ,;") if head.strip() else head)
         # A break the user already asked for ("new paragraph") stays: don't shrink it.
         lead = re.match(r"\s*", raw).group(0)
-        out.append(("\n" * min(2, lead.count("\n")) or "\n") + "- ")
+        at_start = not "".join(out).strip()
+        out.append(("" if at_start else ("\n" * min(2, lead.count("\n")) or "\n")) + "- ")
         last = m.end()
     if last:
         out.append(text[last:])
@@ -266,6 +260,7 @@ def apply_spoken_commands(text: str) -> str:
         lambda m: m.group(1) + m.group(2).upper(),
         text,
     )
+    text = re.sub(r"^(- )([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
     return text.strip(" ")
 
 

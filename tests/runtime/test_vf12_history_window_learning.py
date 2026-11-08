@@ -385,21 +385,33 @@ class TestWindowTargeting:
         assert win.inj._target_hwnd == 300
         assert win.inj.get_target_context()["hwnd"] == 300
 
+    def test_default_policy_pastes_into_the_window_at_release_even_if_the_start_window_closed(self, win):
+        # Review finding 4: default = window at release. The window dictation started in (100)
+        # was closed while talking; focus is now in 300, so that is where the text goes.
+        assert Config().inject_target_policy == "release"
+        win.user32.foreground = 300
+        win.inj.retarget_to_foreground()          # what stop_recording does for "release"
+        assert win.inj.inject("hello") is True
+        assert win.inj.last_failure_reason == ""
+        assert win.inj.cfg.paste_shortcut in win.sent
+
     def test_release_policy_ignores_voiceflows_own_windows(self, win):
         win.user32.foreground = 300
         win.user32.pid = os.getpid()
         assert win.inj.retarget_to_foreground() is False
         assert win.inj._target_hwnd == 100
 
-    def test_start_is_the_default_policy_and_the_release_hook_is_policy_gated(self, tmp_path, overlay, monkeypatch):
-        assert Config().inject_target_policy == "start"
+    def test_release_is_the_default_policy_and_the_release_hook_is_policy_gated(self, tmp_path, overlay, monkeypatch):
+        # The order requires "window at release" as the default (review finding 4).
+        assert Config().inject_target_policy == "release"
         monkeypatch.setattr(cli.keyboard, "unhook", lambda h: None, raising=False)
-        start_app = _App(tmp_path)
-        start_app.stop_recording()
-        assert start_app.injector.retargeted == 0
-        release_app = _App(tmp_path, inject_target_policy="release")
+        release_app = _App(tmp_path)
+        assert release_app.cfg.inject_target_policy == "release"
         release_app.stop_recording()
         assert release_app.injector.retargeted == 1
+        start_app = _App(tmp_path, inject_target_policy="start")
+        start_app.stop_recording()
+        assert start_app.injector.retargeted == 0
 
 
 # ============================================================ item 5: learning

@@ -138,8 +138,9 @@ def test_command_words_inside_a_sentence_stay_literal():
 
 
 def test_bullet_commands():
-    out = prepare_prompt_text("Plan: bullet buy milk. Bullet call mom.")
+    out = prepare_prompt_text("Plan: bullet, buy milk. Bullet, call mom.")
     assert out == "Plan:\n- Buy milk.\n- Call mom."
+    assert prepare_prompt_text("Bullet point: ship it.").startswith("- Ship it")
     assert "\n" not in prepare_prompt_text("Bullet points are useful for slides.")
     assert "\n" not in prepare_prompt_text("He took a bullet in the war.")
 
@@ -229,6 +230,22 @@ def test_chat_strips_breaks_unless_pasting():
     kept = format_transcript_preserving_breaks(text, CHAT, 9.0, keep_chat_newlines=True)
     assert "\n" not in stripped
     assert kept == "First thought.\n\nSecond thought."
+
+
+def test_bullet_without_comma_is_never_a_command():
+    """Review VF-12-review-codex-20261107-190306 finding 1: literal 'bullet' is not rewritten."""
+    for sentence in [
+        "Bullet train tickets are expensive.",
+        "Bullet wound care is covered in the first aid course.",
+        "Bullet journal ideas for the week.",
+        "Bullet points are useful for slides.",
+        "Plan: bullet buy milk. Bullet call mom.",
+        "I read about the bullet train in Japan. Bullet trains are fast.",
+        "He took a bullet in the war.",
+    ]:
+        out = prepare_prompt_text(sentence)
+        assert "\n" not in out and "- " not in out, (sentence, out)
+        assert out.lower().count("bullet") == sentence.lower().count("bullet"), (sentence, out)
 
 
 def test_bullets_keep_their_dash():

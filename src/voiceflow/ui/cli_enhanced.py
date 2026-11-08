@@ -2297,7 +2297,7 @@ class EnhancedApp:
             # Esc already discarded this recording; the key release that follows is a no-op.
             self._cancel_pending = False
             return
-        if str(getattr(self.cfg, "inject_target_policy", "start")).strip().lower() == "release":
+        if str(getattr(self.cfg, "inject_target_policy", "release")).strip().lower() == "release":
             # Paste into the window that has focus now rather than the one at key-down.
             retarget = getattr(self.injector, "retarget_to_foreground", None)
             if callable(retarget):

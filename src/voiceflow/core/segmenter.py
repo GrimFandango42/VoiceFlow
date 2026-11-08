@@ -325,7 +325,16 @@ def transcribe_segmented(
         reason = "no_speech_found" if not plans else "too_little_speech"
         log.info("segmentation_fallback reason=%s covered_s=%.1f total_s=%.1f", reason,
                  covered / float(sample_rate), len(audio) / float(sample_rate))
-        return SegmentedTranscript(text=decode_audio(engine, audio, cfg).strip(), fallback_reason=reason)
+        text = decode_audio(engine, audio, cfg).strip()
+        # The whole-recording decode must not bypass the silence-artifact guard: a recording
+        # that really is silence otherwise comes back as "Thank you." (review finding 3).
+        no_speech = float(getattr(engine, "last_no_speech_prob", 0.0) or 0.0)
+        suppress, why = classify(text, no_speech_prob=no_speech)
+        if suppress:
+            if why != "empty":
+                log.info("segmentation_fallback_suppressed reason=%s", why)
+            text = ""
+        return SegmentedTranscript(text=text, fallback_reason=reason)
 
     paragraph_gap = float(getattr(cfg, "paragraph_pause_seconds", 2.5))
     right_context = float(getattr(cfg, "decode_right_context_seconds", 0.4))

@@ -54,10 +54,10 @@ class Config:
     # the text is PASTED. Typed injection still strips them (Enter would send).
     chat_preserve_newlines: bool = True
 
-    # Which window receives the text. "start" = the window that had focus when the
-    # hotkey went down (what the code has always done: it is captured at press and
-    # re-focused before pasting); "release" = whatever has focus when the key comes up.
-    inject_target_policy: str = "start"
+    # Which window receives the text. "release" (default, as the VF-12 order requires) =
+    # whatever window has focus when the key comes up; "start" = the window that had focus
+    # when the hotkey went down (captured at press and re-focused before pasting).
+    inject_target_policy: str = "release"
 
     # Local transcript history (core/history.py): last N dictations, never uploaded.
     history_enabled: bool = True

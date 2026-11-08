@@ -311,3 +311,41 @@ def test_end_of_utterance_word_loss_vs_tail_window(capsys):
     assert grid[default_tail_seconds(Config())][0] == 0      # shipped defaults lose nothing
     assert grid[0.0][0] > 0                                  # and the fixture can see a clipped ending
     assert new_err == 0 and old_err == 0                     # no regression from compaction/padding changes
+
+
+# --- review VF-12-review-codex-20261107-190306, finding 3 ---------------------------------
+
+def test_pure_silence_fallback_does_not_emit_a_hallucinated_thank_you():
+    class _Hallucinating(syn.OracleEngine):
+        def transcribe(self, audio):
+            self.calls.append((len(audio) / SR, 1.0))
+            self.last_no_speech_prob = 0.93          # what Whisper reports for silence
+            return "Thank you."
+
+    silence = np.zeros(30 * SR, dtype=np.float32)
+    result = transcribe_segmented(_Hallucinating(), silence, Config())
+    assert result.fallback_reason == "no_speech_found"
+    assert result.text == ""
+    assert decode_for_duration(_Hallucinating(), silence, Config()) == ""
+
+
+def test_room_tone_only_fallback_does_not_emit_a_hallucinated_thank_you():
+    class _Hallucinating(syn.OracleEngine):
+        def transcribe(self, audio):
+            self.last_no_speech_prob = 0.9
+            return "Thank you."
+
+    tone = (syn.noise(30.0, 3) * 1e-4).astype(np.float32)
+    assert decode_for_duration(_Hallucinating(), tone, Config()) == ""
+
+
+def test_fallback_keeps_a_real_thank_you_when_the_decoder_heard_speech():
+    class _Says(syn.OracleEngine):
+        def transcribe(self, audio):
+            self.last_no_speech_prob = 0.05
+            return "Thank you."
+
+    built = syn.build([[1, 2]], [], lead_s=0.4, tail_s=40.0)
+    result = transcribe_segmented(_Says(), built.audio, Config(segment_min_speech_fraction=0.2))
+    assert result.fallback_reason == "too_little_speech"
+    assert result.text == "Thank you."
