@@ -9,7 +9,7 @@ Prevents issues like:
 
 import re
 import logging
-from typing import Optional, List, Tuple
+from typing import Optional, Tuple
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ class BufferOverflowProtection:
                     repeat_count += 1
 
             if repeat_count > 5:
-                return False, f"Audio buffer has repeating pattern (corruption detected)"
+                return False, "Audio buffer has repeating pattern (corruption detected)"
 
         return True, None
 

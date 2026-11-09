@@ -54,12 +54,12 @@ jobs:
       - name: Build portable bundle
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/build_windows_exe.ps1 -Clean
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/build_windows_exe.ps1 -Clean -AllowCpuOnly
 
       - name: Build one-file executable
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/build_windows_exe.ps1 -OneFile
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/build_windows_exe.ps1 -OneFile -AllowCpuOnly
 
       - name: Prepare stable release assets
         shell: pwsh

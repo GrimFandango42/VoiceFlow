@@ -177,6 +177,20 @@ def test_full_paste_text_preserves_image(monkeypatch):
     monkeypatch.setattr(inj_module, "_win32clipboard", fake_win32)
     monkeypatch.setattr(inj_module, "_HAS_WIN32CLIPBOARD", True)
 
+    # Keep pyperclip on the same fake clipboard: the real one must never be touched by
+    # a test (it would overwrite the user's clipboard, and fails without desktop access).
+    copied = []
+
+    def fake_copy(text):
+        copied.append(text)
+        clipboard.clear()  # like a real copy, the paste text replaces every format
+        clipboard[CF_UNICODETEXT] = text
+
+    monkeypatch.setattr(inj_module, "pyperclip", types.SimpleNamespace(
+        copy=fake_copy,
+        paste=lambda: clipboard.get(CF_UNICODETEXT, ""),
+    ))
+
     sent = []
     monkeypatch.setattr(inj_module, "keyboard", types.SimpleNamespace(
         send=sent.append,
@@ -193,4 +207,6 @@ def test_full_paste_text_preserves_image(monkeypatch):
     result = inj.paste_text("hello world")
 
     assert result is True
+    assert copied == ["hello world"]
     assert clipboard.get(CF_DIB) == original_img, "image must survive a paste injection"
+    assert clipboard.get(CF_UNICODETEXT) == "was here"
