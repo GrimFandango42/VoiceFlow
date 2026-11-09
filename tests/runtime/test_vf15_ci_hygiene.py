@@ -12,7 +12,14 @@ def _bytes(rel: str) -> bytes:
 
 def test_config_files_have_consistent_line_endings():
     # Mixed CRLF/LF made `git diff --check` fail (VF-15 review finding 2).
-    for rel in ("pyproject.toml", "scripts/setup/requirements_windows.txt"):
+    for rel in (
+        "pyproject.toml",
+        "scripts/setup/requirements_windows.txt",
+        "src/voiceflow/ui/enhanced_tray.py",
+        "src/voiceflow/utils/buffer_overflow_protection.py",
+        "src/voiceflow/utils/guardrails.py",
+        "src/voiceflow/utils/validation.py",
+    ):
         data = _bytes(rel)
         crlf = data.count(b"\r\n")
         lf = data.count(b"\n")
