@@ -6,11 +6,28 @@
 # it does NOT measure accuracy on a real microphone, accents or room noise.
 #
 # Writes 16 kHz mono 16-bit WAVs plus reference.json to -OutDir.
-param([Parameter(Mandatory = $true)][string]$OutDir)
+#
+# -Set mixed (default): the seven clips used for the item 5 model comparison.
+# -Set short: eight 1-5 s utterances for the item 7 fast-path (tiny.en) check.
+param(
+    [Parameter(Mandatory = $true)][string]$OutDir,
+    [ValidateSet("mixed", "short")][string]$Set = "mixed"
+)
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Speech
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+$shortClips = @(
+    @{ id = "s01"; text = "Yes, send it." },
+    @{ id = "s02"; text = "Open the settings panel." },
+    @{ id = "s03"; text = "Reply to Jennifer and say I will be late." },
+    @{ id = "s04"; text = "Add milk and eggs to the shopping list." },
+    @{ id = "s05"; text = "Run the unit tests again." },
+    @{ id = "s06"; text = "Please schedule the quarterly review for next Tuesday afternoon." },
+    @{ id = "s07"; text = "Commit the change and push it to the feature branch." },
+    @{ id = "s08"; text = "What time is the meeting with the Madison team tomorrow?" }
+)
 
 $clips = @(
     @{ id = "short01"; text = "Please schedule the quarterly review for next Tuesday afternoon." },
@@ -21,6 +38,8 @@ $clips = @(
     @{ id = "num01"; text = "The invoice total is one thousand two hundred and forty dollars, due on the fifteenth of March, and the purchase order number is four seven eight nine two." },
     @{ id = "long01"; text = "Here is a longer dictation to exercise the long form path. First, open the settings panel and confirm that the microphone is selected. Second, hold the hotkey, speak a full sentence, and release it. The transcription should appear in the active window within a second or so. If the text is missing, check the log file in the application data folder, and look for any line that mentions a fallback to the processor. Finally, restart the application and repeat the test twice to make sure the result is consistent every time." }
 )
+
+if ($Set -eq "short") { $clips = $shortClips }
 
 $voices = @("Microsoft David Desktop", "Microsoft Zira Desktop")
 $installed = (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }

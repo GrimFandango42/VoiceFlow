@@ -36,6 +36,10 @@ CANDIDATES = {
     "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
     "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
     "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+    # Item 7: the app's short-utterance fast-path model (latency_boost_model_tier=tiny).
+    "tiny.en": "Systran/faster-whisper-tiny.en",
+    # The CPU-compatible setup profile's main model.
+    "small.en": "Systran/faster-whisper-small.en",
 }
 BASELINE = "distil-large-v3"
 
@@ -114,7 +118,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--clips", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
-    ap.add_argument("--models", default=",".join(CANDIDATES))
+    ap.add_argument("--models", default="distil-large-v3,distil-large-v3.5,large-v3-turbo")
     ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--min-free-mb", type=int, default=2600)

@@ -238,6 +238,43 @@ def _apply_model_key_migration(cfg: Config) -> bool:
     return changed
 
 
+SINGLE_MODEL_MIGRATION_VERSION = 1
+
+
+def _apply_single_model_migration(cfg: Config) -> bool:
+    """Turn the tiny.en fast path off once on GPU setups (VF-18 item 7).
+
+    ``save_config`` persists every field, so a config written while
+    ``latency_boost_enabled`` defaulted to True carries it forever and flipping
+    the default alone would change nothing for an existing install. On a GPU the
+    main model is within ~65 ms of tiny.en on short clips, so the second model
+    is dropped (one preload thread, one warmup, one set of weights in VRAM).
+    CPU setups keep it: there it saves about a second per clip. The version
+    marker makes this run once, so a user who later turns the fast path back on
+    keeps it.
+    """
+    try:
+        seen = int(getattr(cfg, "single_model_migration_version", 0) or 0)
+    except Exception:
+        seen = 0
+    if seen >= SINGLE_MODEL_MIGRATION_VERSION:
+        return False
+    cfg.single_model_migration_version = SINGLE_MODEL_MIGRATION_VERSION
+    device = str(getattr(cfg, "device", "") or "").strip().lower()
+    gpu_setup = bool(getattr(cfg, "enable_gpu_acceleration", False)) and device in {"cuda", "auto"}
+    if gpu_setup and bool(getattr(cfg, "latency_boost_enabled", False)):
+        # Only where CUDA actually works here; a GPU-configured machine that
+        # runs on CPU keeps the fast path that makes short clips tolerable.
+        try:
+            from voiceflow.core.asr_engine import _cuda_runtime_ready
+
+            if _cuda_runtime_ready():
+                cfg.latency_boost_enabled = False
+        except Exception:
+            pass
+    return True
+
+
 CLOUD_LEARNING_CONSENT_VERSION = 1
 
 
@@ -306,6 +343,7 @@ def load_config(defaults: Config) -> Config:
         pass
 
     changed = _apply_performance_migrations(defaults)
+    changed = _apply_single_model_migration(defaults) or changed
     changed = _apply_cloud_learning_consent_migration(defaults) or changed
     try:
         changed = _apply_model_key_migration(defaults) or changed

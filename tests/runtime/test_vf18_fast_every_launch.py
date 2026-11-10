@@ -629,3 +629,95 @@ class TestPersistedModelKey:
 
         cfg, _ = self._load(monkeypatch, tmp_path, {"model_name": "distil-large-v3.5", "setup_completed": True})
         assert _apply_model_key_migration(cfg) is False
+
+
+class TestSingleModelOnGpu:
+    """Item 7: one model on a GPU; tiny.en is not loaded unless the CPU path needs it."""
+
+    def _load(self, monkeypatch, tmp_path, saved: dict, cuda_ready: bool = True):
+        from voiceflow.core.config import Config
+        from voiceflow.utils import settings
+
+        monkeypatch.setattr(ae, "_cuda_runtime_ready", lambda: cuda_ready)
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(saved), encoding="utf-8")
+        monkeypatch.setattr(settings, "config_path", lambda: path)
+        return settings.load_config(Config()), path
+
+    def test_fast_path_is_off_by_default(self):
+        from voiceflow.core.config import Config
+
+        assert Config().latency_boost_enabled is False
+
+    def test_wizard_gpu_profile_is_single_model_and_cpu_profile_keeps_the_fast_path(self):
+        from voiceflow.ui.setup_wizard import SetupCapabilities, profile_defaults
+
+        caps = SetupCapabilities(platform_name="win32", cpu_count=8, cuda_available=True)
+        assert profile_defaults("gpu-balanced", caps)["latency_boost_enabled"] is False
+        assert profile_defaults("cpu-compatible", caps)["latency_boost_enabled"] is True
+
+    def test_saved_gpu_config_is_switched_off_once_and_persisted(self, monkeypatch, tmp_path):
+        cfg, path = self._load(
+            monkeypatch,
+            tmp_path,
+            {"device": "cuda", "enable_gpu_acceleration": True, "latency_boost_enabled": True, "setup_completed": True},
+        )
+        assert cfg.latency_boost_enabled is False
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        assert saved["latency_boost_enabled"] is False
+        assert saved["single_model_migration_version"] == 1
+
+    def test_a_later_explicit_opt_in_is_never_overridden(self, monkeypatch, tmp_path):
+        cfg, _ = self._load(
+            monkeypatch,
+            tmp_path,
+            {
+                "device": "cuda",
+                "enable_gpu_acceleration": True,
+                "latency_boost_enabled": True,
+                "single_model_migration_version": 1,
+                "setup_completed": True,
+            },
+        )
+        assert cfg.latency_boost_enabled is True
+
+    def test_cpu_config_keeps_the_fast_path(self, monkeypatch, tmp_path):
+        cfg, path = self._load(
+            monkeypatch,
+            tmp_path,
+            {"device": "cpu", "enable_gpu_acceleration": False, "latency_boost_enabled": True, "setup_completed": True},
+            cuda_ready=False,
+        )
+        assert cfg.latency_boost_enabled is True
+        assert json.loads(path.read_text(encoding="utf-8"))["single_model_migration_version"] == 1
+
+    def test_gpu_config_without_a_working_runtime_keeps_the_fast_path(self, monkeypatch, tmp_path):
+        cfg, _ = self._load(
+            monkeypatch,
+            tmp_path,
+            {"device": "cuda", "enable_gpu_acceleration": True, "latency_boost_enabled": True, "setup_completed": True},
+            cuda_ready=False,
+        )
+        assert cfg.latency_boost_enabled is True
+
+    def test_no_second_model_or_preload_thread_when_the_fast_path_is_off(self, monkeypatch):
+        from voiceflow.ui import cli_enhanced
+        from voiceflow.ui.cli_enhanced import EnhancedApp
+
+        def boom(*_a, **_k):
+            raise AssertionError("fast path constructed while latency_boost_enabled is False")
+
+        monkeypatch.setattr(cli_enhanced, "WhisperASR", boom)
+        monkeypatch.setattr(cli_enhanced, "ModelPreloader", boom)
+        app = SimpleNamespace(
+            cfg=SimpleNamespace(latency_boost_enabled=False, latency_boost_model_tier="tiny", model_tier="quick"),
+            asr_fast=None,
+            _fast_preloader=None,
+            _fast_model_ready=False,
+        )
+        EnhancedApp._init_fast_asr_path(app)
+        assert app.asr_fast is None and app._fast_preloader is None
+        # Routing, checkpoint previews and streaming partials then all use the main model.
+        app.asr = object()
+        engine, label = EnhancedApp._pick_asr_engine(app, 1.5)
+        assert engine is app.asr and label == "primary"

@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Process-wide model construction (VF-18)
 #
-# Two preloader threads (main model and tiny.en) start in the same second and
-# both end up in huggingface_hub.snapshot_download. Its disabled_tqdm class
+# Two preloader threads (main model and, on CPU setups that opt in to the
+# fast path, tiny.en) start in the same second and both end up in
+# huggingface_hub.snapshot_download. Its disabled_tqdm class
 # keeps a class-level ``_lock`` that concurrent calls create and delete under
 # each other, so one of them dies with "type object 'disabled_tqdm' has no
 # attribute '_lock'". That was misread as a CUDA failure and silently demoted

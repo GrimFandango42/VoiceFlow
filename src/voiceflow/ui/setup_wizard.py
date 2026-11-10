@@ -319,7 +319,8 @@ def profile_defaults(profile_key: str, capabilities: SetupCapabilities) -> Dict[
             "device": "cuda",
             "compute_type": "float16",
             "enable_gpu_acceleration": True,
-            "latency_boost_enabled": True,
+            # One model on a GPU: the fast path saves ~65 ms (VF-18 item 7).
+            "latency_boost_enabled": False,
             "latency_boost_model_tier": "tiny",
             "fast_model_name": "tiny.en",
             "quality_model_name": "small.en",

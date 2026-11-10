@@ -14,6 +14,7 @@ launched, and no scheduled task was touched.
 | 4 | Label vs config vs loaded model | **Fixed.** `distil-large-v3.5` never loaded v3.5: no CTranslate2 export existed when the key was added, so it loaded the v3 weights. It is now a legacy alias of `distil-large-v3`; the balanced tier and GPU wizard profile say `distil-large-v3`; the wizard's repo map pointed at a repo that does not exist (`Systran/faster-distil-whisper-large-v3.5`) and now points at the real one. Startup logs `model_selection … agrees=…`. The real v3.5 export is opt-in as `distil-large-v3.5-ct2`. Review round 1: the saved value is now **migrated** on next launch (see "Config value" below), not only aliased. |
 | 5 | Model comparison | See below. **Default unchanged.** |
 | 6 | Nearly-full card | See below. Reported, not changed. |
+| 7 | One model inside VoiceFlow | **Done for GPU setups; CPU setups keep tiny.en on purpose.** The main model is ~65 ms slower than tiny.en on 2–4 s clips on this GPU (bar: 150 ms). `latency_boost_enabled` now defaults off, the GPU wizard profile sets it off, and a one-time migration clears it in already-saved GPU configs. See "Item 7" below. |
 
 ### Item 3: what is and is not known
 
@@ -128,6 +129,80 @@ practice and a few words better, but the evidence is seven synthetic clips; the
 order asks for "clearly more accurate", and that is not shown. `large-v3-turbo`
 is slower and not clearly better. `distil-large-v3.5-ct2` is selectable
 (`model_name`) if Nithin wants to try it on his own voice, ~200 MB less VRAM than v3.
+
+## Item 7: one model (is tiny.en still worth loading?)
+
+Measured offline from the local Hugging Face cache, app decode settings, median of
+7 runs (GPU) or 3 (CPU), eight synthesized 2.1–4.2 s utterances
+(`scripts/ops/vf18_make_test_clips.ps1 -Set short`, `scripts/ops/vf18_model_compare.py`).
+The GPU run was made while GLaDOS's models were resident on the same card, so these
+are not best-case numbers. Both models transcribed all eight clips with 0 % WER;
+the only differences are capitalisation ("Settings", lowercase first word).
+
+**GPU (RTX 4080, float16), main `distil-large-v3` vs `tiny.en`:**
+
+| Clip | Audio | Main | tiny.en | Main − tiny |
+|------|------:|-----:|--------:|------------:|
+| s01 "Yes, send it." | 2.17 s | 85 ms | 18 ms | 67 ms |
+| s02 | 2.11 s | 85 ms | 18 ms | 67 ms |
+| s03 | 3.06 s | 95 ms | 26 ms | 69 ms |
+| s04 | 2.78 s | 90 ms | 24 ms | 66 ms |
+| s05 | 2.25 s | 86 ms | 20 ms | 66 ms |
+| s06 | 4.21 s | 93 ms | 28 ms | 65 ms |
+| s07 | 3.42 s | 92 ms | 28 ms | 64 ms |
+| s08 | 3.48 s | 92 ms | 29 ms | 63 ms |
+
+**Verdict: the gap is 63–69 ms, well inside the 150 ms bar**, so on a GPU the second
+model buys almost nothing and costs a second preload thread, a second warmup, extra
+VRAM and a less accurate transcript. (The shortest clip in the order's 1–5 s range is
+2.1 s here; the TTS voices do not produce sub-2 s clips with natural padding.)
+
+**CPU (int8), the case that decides the CPU profile:** `tiny.en` 167–179 ms per clip,
+`small.en` (the CPU profile's main model) 1.08–1.15 s, `distil-large-v3` 4.7–4.9 s.
+tiny.en saves ~0.95 s per short clip there, so the fast path **stays on for the
+CPU-compatible profile** and in saved configs that are not on a working GPU.
+
+**What changed:**
+
+- `Config.latency_boost_enabled` defaults to `False` (was `True`). With it off,
+  `_init_fast_asr_path` returns before constructing `WhisperASR`/`ModelPreloader`, so
+  there is no second preload thread, no tiny.en load, no warmup call and
+  `asr_fast is None`. A test patches both constructors to fail and asserts neither runs.
+- The `gpu-balanced` wizard profile sets it `False`; `cpu-compatible` keeps `True`.
+- **Persisted configs:** `save_config` writes every field, so Nithin's `config.json`
+  almost certainly carries `latency_boost_enabled: true` and a default flip alone
+  would change nothing for him. `_apply_single_model_migration` (new field
+  `single_model_migration_version`) turns it off once when the saved config is a GPU
+  setup (`enable_gpu_acceleration` and `device` cuda/auto) **and the CUDA runtime is
+  actually usable here**, then records the version, so a later explicit opt-in is
+  never overridden. CPU configs and GPU configs without a working runtime are left
+  alone. Unit-tested against temp config files only; **not run against his real file.**
+- Dead settings found: `enable_dual_model_strategy` and `fast_model_name` are defined
+  in `Config` (and `fast_model_name` is rewritten by the model-label migration and the
+  wizard) but **nothing reads them**. Left in place: removing config fields is a
+  separate cleanup and changes the saved-config schema.
+
+**Every place tiny.en / `asr_fast` is used, and what happens with the fast path off:**
+
+| Use | Code | With fast path off |
+|-----|------|--------------------|
+| Short-utterance routing (≤3 s for tiny) | `EnhancedApp._pick_asr_engine` | `asr_fast` is `None` → always the main model (tested) |
+| Blank-result retry on the main model | `_should_retry_blank_fast_path` | never triggers; the main model already ran |
+| Warmup of the fast engine | `cli_enhanced.py` warmup block | skipped (`asr_fast` falsy) |
+| Live checkpoint preview ("live caption" partials during long holds) | `_run_checkpoint_preview` | already `asr_fast if ready else asr` → main model |
+| Streaming preview partials | `_start_streaming_preview` | already `asr_fast if asr_fast else asr` → main model |
+| Dev two-process model server | `model_server._load_models` | gated on the same flag; no fast model loaded |
+| CPU-fallback detection | `_fallen_back_engines` | skips `None` |
+
+**Known limitation:** if a GPU machine falls back to CPU at runtime (item 2), the
+fast path is not started at that moment, so short clips run on the main model on CPU
+until the idle CUDA restore succeeds. That fallback is announced and temporary; I did
+not add a lazy fast-path start for it.
+
+**Risk to watch on first real use:** streaming and checkpoint previews now decode on
+the main model instead of tiny.en. They are short windows on the GPU (~90 ms), but
+they share the one engine with the final transcription; I could not exercise that
+under a live hold without launching the app.
 
 ## Item 6: nearly full card
 
@@ -272,6 +347,12 @@ The decision for the conductor: either run the runbook above (build with
 permits launching a side-directory bundle, or accept items 1, 2, 4, 5, 6 as done
 and split item 3 plus the acceptance runs into their own order.
 
+## Review round 3 (Codex, on `e62427c`)
+
+Same single finding (item 3 plus the end-to-end gates). **Unchanged and launch-gated:**
+this dispatch still forbids launching apps and touching scheduled tasks. The only new
+work this round is item 7 (above), which needed no launch.
+
 ## Not tested
 
 - **20 consecutive cold starts of a built bundle** — no bundle was built or launched: the build script's mandatory `--self-check` launches the frozen exe, which this dispatch forbids (see "Why no bundle was built").
@@ -282,3 +363,4 @@ and split item 3 plus the acceptance runs into their own order.
   switch and cleanup is **on by default**, which kills the live app; pass it.
 - Item 6 with gemma actually unloaded / the card actually full.
 - Model accuracy on a real microphone.
+- Item 7: clips are synthesized (no real voice, no sub-2 s clips); the single-model migration was not run on Nithin's real `config.json`; streaming/checkpoint previews on the shared main engine were not exercised under a live hold; the dev model server was not started.
