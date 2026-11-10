@@ -155,7 +155,19 @@ def _check_native(internal: Path, report: Report) -> None:
     report.add("ctranslate2_native", bool(ct2), ", ".join(p.name for p in ct2) or "ctranslate2.dll missing")
 
 
-def _check_cuda(internal: Path, required: tuple[str, ...], allow_cpu_only: bool, report: Report) -> None:
+#: Upper bound for the throwaway interpreter that loads each CUDA DLL. A hung native load must fail the check, not the verifier.
+CUDA_LOAD_TIMEOUT_S = 120.0
+
+
+def _check_cuda(
+    internal: Path,
+    required: tuple[str, ...],
+    allow_cpu_only: bool,
+    report: Report,
+    timeout: float | None = None,
+) -> None:
+    if timeout is None:
+        timeout = CUDA_LOAD_TIMEOUT_S
     lib = internal / CUDA_RELATIVE
     wanted = list(required) + list(_literal_tuple(EXE_ENTRY, "CUDA_COMPANION_DLLS"))
     missing = [d for d in wanted if not (lib / d).is_file()]
@@ -178,12 +190,24 @@ def _check_cuda(internal: Path, required: tuple[str, ...], allow_cpu_only: bool,
         "    ctypes.WinDLL(os.path.join(lib, name))\n"
         "print('loaded', len(sys.argv) - 2)\n"
     )
-    proc = subprocess.run(
-        [sys.executable, "-I", "-c", code, str(lib), *wanted],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-I", "-c", code, str(lib), *wanted],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        report.add(
+            "cuda_runtime_dlls",
+            False,
+            f"DLL load check did not finish within {timeout:.0f}s (a DLL or its dependency hangs on load)",
+            warn_only=allow_cpu_only,
+        )
+        return
+    except OSError as exc:
+        report.add("cuda_runtime_dlls", False, f"cannot run DLL load check: {exc}", warn_only=allow_cpu_only)
+        return
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:] or ["no output"]
         report.add("cuda_runtime_dlls", False, f"present but failed to load: {tail[0]}", warn_only=allow_cpu_only)

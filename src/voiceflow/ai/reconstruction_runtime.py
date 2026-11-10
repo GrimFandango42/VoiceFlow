@@ -190,8 +190,14 @@ class ReconstructionCoordinator:
         utterance_id: str,
         pasted_text: str,
         on_done: Optional[Callable[[ReconstructionOutcome, bool], None]] = None,
+        replaceable: bool = True,
     ) -> None:
-        """When ``job`` finishes, publish a pending improvement (if it is still the latest paste)."""
+        """When ``job`` finishes, record the outcome and (if allowed) publish a pending improvement.
+
+        ``on_done`` always runs, so a rejection or timeout is logged whether or not the paste landed. ``replaceable=False``
+        (the paste fell back to the clipboard: there is nothing in the target window to swap) only withholds the
+        "replace last paste" offer.
+        """
 
         def _finish(fut: Future) -> None:
             try:
@@ -201,7 +207,7 @@ class ReconstructionCoordinator:
             usable = False
             with self._seq_lock:
                 latest = job.seq == self._seq
-            if outcome.accepted and latest and outcome.text.strip() != pasted_text.strip():
+            if replaceable and outcome.accepted and latest and outcome.text.strip() != pasted_text.strip():
                 with self._pending_lock:
                     self.pending = PendingImprovement(utterance_id, pasted_text, outcome.text, time.time())
                 usable = True

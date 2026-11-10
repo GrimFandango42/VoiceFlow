@@ -42,17 +42,23 @@ A candidate is accepted only if **all** of these hold, checked on the text the u
    that was not in the input or the vocabulary. A sentence-initial word is excused only when it was folded into
    a vocabulary term the candidate introduces ("Pie installer is slow" -> "PyInstaller is slow").
 3. Word count stays within 0.8x-1.4x.
-4. A word-level diff against the input only contains repairs of form: insert a small connecting word (never
-   `a`/`an`/`the`, and never beside a name, number, protected token or vocabulary term), delete a filler sound
-   or an immediate stutter, respell a word or phrase into a vocabulary term or a term the speaker already used in
-   the same dictation (`pie installer` -> `PyInstaller`, `cubernetes` -> `kubernetes` after `kubernetes`), or
-   contract/expand or swap a homophone (`that is` -> `that's`, `there` -> `their`). A close spelling alone is
-   never enough: `the cat is here` -> `the car is here` and `he` -> `she` are rejected
-   (`unsourced_replacement` / `rewritten`) because the new word is not a vocabulary term, not in the utterance,
-   and not the same spoken word. Deleting any other word (including `and`: "thanks everyone and see you
+4. A word-level diff against the input only contains repairs of form: insert one of exactly three neutral connectors
+   (`and`, `to`, `of`; never `a`/`an`/`the`, never beside a name, number, protected token or vocabulary term, and
+   never `not`, `maybe`, `always`, `because`, `should`, `never`, `but`, `so` or any other word that carries polarity,
+   certainty, frequency, causality, modality, contrast or consequence - a vocabulary entry does not license them
+   either: `I will ship today` -> `I will not ship today` is `meaning_word_inserted`/`novel_content`), delete a filler
+   sound or an immediate stutter, respell a word or phrase into a vocabulary term or a **name or identifier** the
+   speaker already used in the same dictation (a protected token, a capitalised proper noun or a sentence-initial
+   name: `pie installer` -> `PyInstaller`, `cubernetes` -> `Kubernetes` after `Kubernetes`), or contract/expand or
+   swap a homophone (`that is` -> `that's`, `there` -> `their`). A close spelling alone is never enough, and neither
+   is an ordinary word that merely occurs elsewhere: `the cat is here` -> `the car is here`, and `The cat and car are
+   here. The cat is red.` -> `... The car is red.`, and `he` -> `she` are rejected (`unsourced_replacement` /
+   `rewritten`) because the new word is not a vocabulary term, not a name the speaker used, and not the same spoken
+   word. Deleting any other word (including `and`: "thanks everyone and see you
    there" -> "thanks everyone, see you there"), inserting or swapping a content word, reordering, inflection
    changes (`note` -> `notes`), inserting a determiner (`over WebSocket` -> `over a WebSocket`) and swapping one
-   small word for another (`is good` -> `they're good`) are rejected. Each of those was seen in an evaluation run.
+   small word for another (`is good` -> `they're good`) are rejected. Each of those was seen in an evaluation run
+   or a review probe.
 5. The final word is never changed (unless it was a filler or was respelled into a vocabulary term):
    losing the tail is the defect this order exists to fix.
 6. Cap on the share of inserted small words (max(2, 15 % of the words)).

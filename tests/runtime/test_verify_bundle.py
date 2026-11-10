@@ -109,11 +109,53 @@ def test_missing_cuda_fails_unless_cpu_only_is_explicit(tmp_path):
     assert lenient.checks["cuda_runtime_dlls"]["warn_only"] is True
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="DLL loading is Windows-only")
-def test_cuda_dlls_that_do_not_load_fail(tmp_path):
+def _fake_dll_probe(monkeypatch, *, returncode: int = 1, stderr: str = "OSError: [WinError 193] not a valid Win32 application",
+                    hang: bool = False):
+    """Replace the throwaway DLL-loading interpreter so no test ever loads a malformed DLL natively (that can block)."""
+    seen: dict = {}
+    real_run = vb.subprocess.run
+
+    def fake_run(cmd, *args, **kwargs):
+        if "ctypes.WinDLL" not in " ".join(str(c) for c in cmd):
+            return real_run(cmd, *args, **kwargs)
+        seen["timeout"] = kwargs.get("timeout")
+        if hang:
+            raise vb.subprocess.TimeoutExpired(cmd, kwargs.get("timeout") or 0)
+        return vb.subprocess.CompletedProcess(cmd, returncode, stdout="", stderr=stderr)
+
+    monkeypatch.setattr(vb.subprocess, "run", fake_run)
+    return seen
+
+
+def test_cuda_dlls_that_do_not_load_fail(tmp_path, monkeypatch):
+    _fake_dll_probe(monkeypatch)
     report = _static(_fake_bundle(tmp_path, cuda=True), allow_cpu_only=False)
     assert report.checks["cuda_runtime_dlls"]["ok"] is False
     assert "failed to load" in report.checks["cuda_runtime_dlls"]["detail"]
+
+
+def test_cuda_dll_check_timeout_is_a_failed_check_not_an_exception(tmp_path, monkeypatch):
+    """VF-17 review round 4, finding 3: a hung DLL load used to propagate subprocess.TimeoutExpired out of verify()."""
+    seen = _fake_dll_probe(monkeypatch, hang=True)
+    report = _static(_fake_bundle(tmp_path, cuda=True), allow_cpu_only=False)
+    check = report.checks["cuda_runtime_dlls"]
+    assert check["ok"] is False and check["warn_only"] is False
+    assert "did not finish" in check["detail"]
+    assert seen["timeout"] == vb.CUDA_LOAD_TIMEOUT_S
+
+
+def test_cuda_dll_check_timeout_is_downgraded_only_with_cpu_only(tmp_path, monkeypatch):
+    _fake_dll_probe(monkeypatch, hang=True)
+    report = _static(_fake_bundle(tmp_path, cuda=True), allow_cpu_only=True)
+    assert report.checks["cuda_runtime_dlls"]["warn_only"] is True
+
+
+def test_cuda_dll_check_honours_an_explicit_timeout(tmp_path, monkeypatch):
+    seen = _fake_dll_probe(monkeypatch, hang=True)
+    bundle = _fake_bundle(tmp_path, cuda=True)
+    report = vb.Report()
+    vb._check_cuda(bundle / "_internal", ("cudnn_ops64_9.dll", "cublas64_12.dll"), False, report, timeout=7.0)
+    assert seen["timeout"] == 7.0 and report.checks["cuda_runtime_dlls"]["ok"] is False
 
 
 def test_unreadable_exe_fails_module_check(tmp_path):
@@ -231,6 +273,12 @@ class TestExeSelfCheckFlag:
         ok, detail = entry._check_bundled_cuda(("cublas64_12.dll",))
         assert not ok and "missing in bundle" in detail
         if sys.platform == "win32":
+            import ctypes
+
+            def _refuse(path):  # never hand a malformed DLL to the native loader: that can block the whole test run
+                raise OSError(f"[WinError 193] {path} is not a valid Win32 application")
+
+            monkeypatch.setattr(ctypes, "WinDLL", _refuse, raising=False)
             lib = tmp_path / "torch" / "lib"
             lib.mkdir(parents=True)
             for name in ("cublas64_12.dll", *entry.CUDA_COMPANION_DLLS):

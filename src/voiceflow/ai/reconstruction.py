@@ -3,8 +3,8 @@
 Whisper transcribes what it *heard*. This stage proposes the most plausible
 *legible* rendering of what was *said*: sentence casing and punctuation,
 run-ons and broken conjunctions, dropped function words, and words that are
-phonetically close to a known vocabulary term or a term used earlier in the
-same dictation.
+phonetically close to a known vocabulary term or a name/identifier used earlier in
+the same dictation.
 
     VF-12 item 4 said "never rewrite meaning". This stage relaxes that to
     "never CHANGE meaning, but DO repair form". The two orders do not
@@ -280,6 +280,12 @@ def _droppable(word: str, pre_n: Sequence[str], idx: int) -> bool:
     return (idx > 0 and pre_n[idx - 1] == word) or (idx + 1 < len(pre_n) and pre_n[idx + 1] == word)
 
 
+#: The only words a repair may INSERT. Each is a bare connector that carries no polarity, certainty, frequency, causality or
+#: modality of its own: "we tested it we shipped it" -> "... and we shipped it", "we need go" -> "we need to go", "a lot of". Every
+#: other function word ("not", "maybe", "always", "because", "should", "never", ...) changes what the speaker said, so it can
+#: never be added, whatever the model claims. "but"/"so" are excluded too: they assert a contrast or a consequence.
+INSERTABLE: frozenset[str] = frozenset({"and", "to", "of"})
+
 #: Determiners are the one kind of "dropped function word" the speaker's choice cannot be recovered for:
 #: "over WebSocket" -> "over a WebSocket" is grammatical and still not what was said. Never inserted.
 DETERMINERS: frozenset[str] = frozenset({"a", "an", "the"})
@@ -298,6 +304,21 @@ def _special_norms(pre: str, vocab_norms: Set[str]) -> Set[str]:
     for number in number_tokens(pre):
         special.add(_norm(number))
     return special
+
+
+def _term_norms(*texts: str) -> Set[str]:
+    """Normalised words of the names and identifiers the speaker used: protected tokens, proper nouns, sentence-initial names.
+
+    These are the only utterance words a content word may be respelled to. Ordinary words are deliberately absent.
+    """
+    out: Set[str] = set()
+    for text in texts:
+        for token in protected_tokens(text):
+            out.update(_norm(w) for w in words(token))
+        out.update(_norm(n) for n in proper_nouns(text))
+        out.update(initial_names(text))
+    out.discard("")
+    return out
 
 
 #: Contraction tails: "that is" <-> "thats". The only function-word swap that is a respelling rather than a new word.
@@ -345,12 +366,16 @@ def _structural_diff(
             continue
         removed, added = pre_n[i1:i2], cand_n[j1:j2]
         if tag == "insert":
-            bad = [w for w in added if w not in FUNCTION_NORMS and w not in vocab_norms]
-            if bad:
-                return GuardResult(False, "novel_content", ",".join(bad[:5]))
             determiners = [w for w in added if w in DETERMINERS]
             if determiners:
                 return GuardResult(False, "determiner_inserted", ",".join(determiners))
+            bad = [w for w in added if w not in INSERTABLE and w not in vocab_norms]
+            if bad:
+                return GuardResult(False, "novel_content", ",".join(bad[:5]))
+            # A vocabulary entry never licenses a meaning-bearing function word ("not" in a vocabulary list is still "not").
+            unsafe = [w for w in added if w in FUNCTION_NORMS and w not in INSERTABLE and w not in DETERMINERS]
+            if unsafe:
+                return GuardResult(False, "meaning_word_inserted", ",".join(unsafe[:5]))
             neighbours = [pre_n[k] for k in (i1 - 1, i1) if 0 <= k < len(pre_n)]
             if special_norms and any(n in special_norms for n in neighbours) and not all(w in vocab_norms for w in added):
                 return GuardResult(False, "inserted_beside_protected", " ".join(added) + " near " + " ".join(neighbours))
@@ -360,8 +385,8 @@ def _structural_diff(
             if bad:
                 return GuardResult(False, "content_deleted", ",".join(bad[:5]))
         else:  # replace
-            if all(w in FILLERS for w in removed) and all(w in FUNCTION_NORMS for w in added):
-                # a filler sound stood where a small word belongs
+            if all(w in FILLERS for w in removed) and all(w in INSERTABLE for w in added):
+                # a filler sound stood where a connector belongs ("um" -> "not" is a new meaning, not a repair)
                 inserted_fn += len(added)
                 continue
             if all(w in FUNCTION_NORMS or w in FILLERS for w in removed + added):
@@ -377,7 +402,9 @@ def _structural_diff(
             if not _spelling_close(a, b):
                 return GuardResult(False, "rewritten", f"{' '.join(removed)}->{' '.join(added)}")
             # Close spelling is necessary, not sufficient: cat -> car is two letters apart and a different thing. A content
-            # word may only become a vocabulary term or a term the speaker already used in this utterance.
+            # word may only become a genuine vocabulary term, or a name/identifier the speaker already used in this
+            # utterance (protected token, proper noun, sentence-initial name) - never an ordinary word that merely
+            # occurs elsewhere ("The cat and car are here. The cat is red." must not become "... The car is red.").
             sources = vocab_norms | (utterance_norms or set())
             unsourced = [w for w in added if w not in sources]
             if unsourced:
@@ -620,7 +647,7 @@ def check_candidate(
     # --- structural diff: only form repairs are allowed (the part that is hardest to fake with a prompt)
     vocab_norms = {_norm(w) for term in vocab_terms for w in words(term)}
     verdict = _structural_diff(pre_words, cand_words, vocab_norms=vocab_norms, special_norms=_special_norms(pre, vocab_norms),
-                               utterance_norms=known)
+                               utterance_norms=_term_norms(pre, raw_text or ""))
     if not verdict.ok:
         return verdict
 
@@ -634,8 +661,8 @@ def check_candidate(
 SYSTEM_PROMPT = (
     "You repair the FORM of dictated text. You never change its meaning and you never change the words the "
     "speaker chose.\n"
-    "Allowed: fix capitalisation and punctuation; split run-on sentences; add a missing connecting word (and, to, of, "
-    "but) ONLY where the sentence is broken without it - never add a, an or the, and never add a word next to a name, "
+    "Allowed: fix capitalisation and punctuation; split run-on sentences; add a missing connecting word (and, to, of) "
+    "ONLY where the sentence is broken without it - never add a, an or the, and never add a word next to a name, "
     "number or technical term; remove stutters, immediate repeats and filler sounds (um, uh), but never delete any other word, including and, so, but or to - join or split sentences with punctuation instead; replace a word that is clearly a "
     "mis-hearing of a term in the VOCABULARY list or of a term used earlier in the same text.\n"
     "Forbidden: replacing, reordering, paraphrasing or deleting any other word; changing singular/plural or verb "

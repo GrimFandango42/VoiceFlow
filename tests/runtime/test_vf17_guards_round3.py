@@ -45,9 +45,12 @@ def test_cat_to_car_is_reported_as_an_unsourced_replacement() -> None:
     bad("the cat is here and we should feed it soon", "The car is here and we should feed it soon.", "unsourced_replacement")
 
 
-def test_content_word_may_become_a_term_the_speaker_already_used_in_the_same_dictation() -> None:
-    ok("we run it on kubernetes tonight and then cubernetes restarts the pods by itself",
-       "We run it on kubernetes tonight, and then kubernetes restarts the pods by itself.")
+def test_content_word_may_become_a_name_the_speaker_already_used_in_the_same_dictation() -> None:
+    # Round 4 narrowed this: only a name / identifier used earlier is a source, never an ordinary word (see review_round4).
+    ok("we run it on Kubernetes tonight and then cubernetes restarts the pods by itself",
+       "We run it on Kubernetes tonight, and then Kubernetes restarts the pods by itself.")
+    bad("we run it on kubernetes tonight and then cubernetes restarts the pods by itself",
+        "We run it on kubernetes tonight, and then kubernetes restarts the pods by itself.", "unsourced_replacement")
 
 
 def test_content_word_may_become_a_vocabulary_term_but_only_that() -> None:

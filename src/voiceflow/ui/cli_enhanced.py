@@ -3088,11 +3088,12 @@ class EnhancedApp:
                 )
                 if self.reconstruction is not None:
                     self.reconstruction.remember(text)
-                    if recon_job is not None and recon_outcome is None and inject_ok:
+                    if recon_job is not None and recon_outcome is None:
                         self.reconstruction.attach_async(
                             recon_job,
                             utterance_id=uid,
                             pasted_text=text,
+                            replaceable=inject_ok,
                             on_done=lambda outcome, usable, _uid=uid, _raw=(raw_transcript or text), _pasted=text: (
                                 self._on_async_reconstruction(_uid, _raw, _pasted, outcome, usable)
                             ),
