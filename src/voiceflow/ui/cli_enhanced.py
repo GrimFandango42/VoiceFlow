@@ -30,7 +30,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Deque, Dict, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -544,7 +544,13 @@ class EnhancedApp:
 
         # Cold start elimination: Create ASR and start background preloading
         print("[STARTUP] Creating ASR engine...")
+        # Registered before any engine loads so a CPU fallback during preload is
+        # announced too (VF-18).
+        self._device_warning = ""
+        self._cuda_restore_thread: Optional[threading.Thread] = None
+        self._register_device_listener()
         self.asr = WhisperASR(cfg)
+        self._log_model_selection(cfg)
         self._preloader = ModelPreloader(self.asr, on_progress=self._on_preload_progress)
         self._model_ready = False
         self.asr_fast: Optional[WhisperASR] = None
@@ -688,6 +694,7 @@ class EnhancedApp:
         elif progress.state == PreloadState.READY:
             self._model_ready = True
             print(f"[MODEL] Ready! {progress.message}")
+            self._log_runtime_device("model_ready", self.asr)
         elif progress.state == PreloadState.FAILED:
             print(f"[MODEL] FAILED: {progress.message}")
 
@@ -695,6 +702,7 @@ class EnhancedApp:
         if progress.state == PreloadState.READY:
             self._fast_model_ready = True
             print(f"[MODEL] Fast path ready ({getattr(self.cfg, 'latency_boost_model_tier', 'tiny')})")
+            self._log_runtime_device("fast_model_ready", self.asr_fast)
         elif progress.state == PreloadState.FAILED:
             self._fast_model_ready = False
             self._fast_preloader = None
@@ -728,6 +736,138 @@ class EnhancedApp:
             self.asr_fast = None
             self._fast_preloader = None
             self._fast_model_ready = False
+
+    # ------------------------------------------------------------------
+    # Device visibility (VF-18): a fall back to CPU is never silent.
+    # ------------------------------------------------------------------
+    _CPU_WARNING = "Running on CPU - dictation will be slow. Retrying the GPU when idle."
+
+    def _register_device_listener(self) -> None:
+        try:
+            from voiceflow.core.asr_engine import add_device_listener
+
+            add_device_listener(self._on_asr_device_event)
+        except Exception:
+            logging.getLogger("voiceflow").exception("device_listener_register_failed")
+
+    def _log_model_selection(self, cfg: Config) -> None:
+        """One line saying what was asked for, what was resolved, and what loads."""
+        try:
+            engine = self.asr
+            key = str(getattr(engine, "model_key", "") or "")
+            model_cfg = getattr(engine, "model_config", None)
+            from voiceflow.core.asr_engine import canonical_model_key
+
+            configured = str(getattr(cfg, "model_name", "") or "")
+            tier = str(getattr(cfg, "model_tier", "") or "")
+            agrees = (not configured) or canonical_model_key(configured) == key
+            logging.getLogger("voiceflow").log(
+                logging.INFO if agrees else logging.WARNING,
+                "model_selection tier=%s config_model_name=%s loaded_key=%s weights=%s agrees=%s%s",
+                tier or "none",
+                configured or "none",
+                key or "unknown",
+                getattr(model_cfg, "model_id", "unknown"),
+                agrees,
+                "" if agrees else " (model_name is ignored while model_tier is set)",
+            )
+        except Exception:
+            logging.getLogger("voiceflow").debug("model_selection_log_failed", exc_info=True)
+
+    def _log_runtime_device(self, event: str, engine: Optional[Any]) -> None:
+        """Log where a model actually runs: the line to check for 'GPU every time'."""
+        try:
+            status_fn = getattr(engine, "device_status", None)
+            if not callable(status_fn):
+                return
+            status = status_fn()
+            logging.getLogger("voiceflow").info(
+                "%s key=%s weights=%s device=%s compute=%s fell_back_to_cpu=%s",
+                event,
+                status.get("model_key"),
+                status.get("model_id"),
+                status.get("device"),
+                status.get("compute_type"),
+                status.get("fell_back_to_cpu"),
+            )
+        except Exception:
+            logging.getLogger("voiceflow").debug("runtime_device_log_failed", exc_info=True)
+
+    def _fallen_back_engines(self) -> List[Any]:
+        engines = [getattr(self, "asr", None), getattr(self, "asr_fast", None)]
+        fallen = []
+        for engine in engines:
+            status_fn = getattr(engine, "device_status", None)
+            if callable(status_fn):
+                try:
+                    if status_fn().get("fell_back_to_cpu"):
+                        fallen.append(engine)
+                except Exception:
+                    continue
+        return fallen
+
+    def _on_asr_device_event(self, event: str, detail: str) -> None:
+        """Called from preload/transcribe threads when an engine changes device."""
+        log = logging.getLogger("voiceflow")
+        if event == "cpu_fallback":
+            # The engine is mid-load, so it may not report fell_back_to_cpu yet;
+            # trust the event.
+            self._device_warning = self._CPU_WARNING
+            log.warning("device_event event=cpu_fallback detail=%s", detail)
+            self._apply_device_warning(announce=True)
+        elif event == "cuda_restored":
+            log.warning("device_event event=cuda_restored detail=%s", detail)
+            self._device_warning = self._CPU_WARNING if self._fallen_back_engines() else ""
+            self._apply_device_warning(announce=False)
+
+    def _apply_device_warning(self, announce: bool = False) -> None:
+        """Show (or clear) the standing CPU warning in the tray and, once, the overlay."""
+        message = self._device_warning
+        tray = getattr(self, "tray_controller", None)
+        try:
+            if tray is not None:
+                if message and hasattr(tray, "show_warning"):
+                    tray.show_warning(message, notify=announce)
+                elif not message and hasattr(tray, "clear_warning"):
+                    tray.clear_warning()
+        except Exception:
+            logging.getLogger("voiceflow").debug("device_warning_tray_failed", exc_info=True)
+        if announce and message and VISUAL_INDICATORS_AVAILABLE and getattr(self, "visual_indicators_enabled", False):
+            try:
+                show_error(message)
+            except Exception:
+                logging.getLogger("voiceflow").debug("device_warning_overlay_failed", exc_info=True)
+
+    def _start_cuda_restore_thread(self) -> None:
+        if self._cuda_restore_thread and self._cuda_restore_thread.is_alive():
+            return
+        self._cuda_restore_thread = threading.Thread(
+            target=self._cuda_restore_loop, name="CudaRestore", daemon=True
+        )
+        self._cuda_restore_thread.start()
+
+    def _is_idle_for_restore(self) -> bool:
+        try:
+            if self.rec.is_recording():
+                return False
+            if self.transcription_manager.active_jobs:
+                return False
+            # Let a dictation that just finished clear before taking the GPU.
+            return (time.time() - float(self._last_transcription_completed_at or 0.0)) > 5.0
+        except Exception:
+            return False
+
+    def _cuda_restore_loop(self) -> None:
+        """While idle, try to move a CPU-fallback model back onto the GPU."""
+        while not self._housekeeping_stop.wait(30.0):
+            try:
+                fallen = self._fallen_back_engines()
+                if not fallen or not self._is_idle_for_restore():
+                    continue
+                for engine in fallen:
+                    engine.retry_cuda_if_fallen_back()
+            except Exception:
+                logging.getLogger("voiceflow").debug("cuda_restore_loop_error", exc_info=True)
 
     def swap_model_tier(self, new_tier: str, on_complete=None) -> None:
         """Hot-swap the primary ASR engine to a different model tier.
@@ -895,6 +1035,7 @@ class EnhancedApp:
         self._background_services_started = True
         self._start_daily_learning_guardrail()
         self._start_longrun_housekeeping_thread()
+        self._start_cuda_restore_thread()
         self._log.info(
             "background_services_started daily_learning=%s housekeeping=%s",
             bool(getattr(self.cfg, "daily_learning_autorun_enabled", True)),
@@ -3010,6 +3151,41 @@ class EnhancedApp:
         print("[EnhancedApp] Shutdown complete")
 
 
+def _run_launch_selfcheck(alog: Any, runtime_log: logging.Logger) -> Dict[str, Any]:
+    """Prove this launch can log and keep history, and record how it was launched.
+
+    Never raises: a broken self-check must not stop VoiceFlow from starting.
+    """
+    try:
+        from voiceflow.utils.launch_diagnostics import run_startup_selfcheck
+
+        streams: Dict[str, str] = {}
+        for part in str(os.environ.get("VOICEFLOW_LAUNCH_STREAMS", "")).split(";"):
+            if "=" in part:
+                key, value = part.split("=", 1)
+                streams[key.strip()] = value.strip()
+        report = run_startup_selfcheck(
+            log_write=runtime_log.info,
+            active_log_path=Path(alog.active_log_path),
+            marker_path=Path(alog.active_log_marker_path),
+            data_dir=config_dir(),
+            original_streams=streams or None,
+        )
+        if report.get("ok"):
+            runtime_log.info(
+                "startup_selfcheck_ok token=%s parent=%s",
+                report.get("token"),
+                report.get("context", {}).get("parent"),
+            )
+        return report
+    except Exception as exc:
+        try:
+            runtime_log.exception("startup_selfcheck_crashed")
+        except Exception:
+            pass
+        return {"ok": False, "problems": [f"self-check crashed: {type(exc).__name__}: {exc}"]}
+
+
 def main(argv=None):
     """Enhanced main with better error handling and monitoring"""
     if not _acquire_single_instance_mutex():
@@ -3073,6 +3249,7 @@ def main(argv=None):
     runtime_log = _alog.get()
     runtime_log.info("single_instance_ok pid=%d", os.getpid())
     runtime_log.info("single_instance_watchdog_started interval_s=2.0")
+    startup_selfcheck = _run_launch_selfcheck(_alog, runtime_log)
 
     # Start idle-aware monitoring for long-running operation
     print(
@@ -3171,6 +3348,32 @@ def main(argv=None):
                     runtime_log.exception("tray_start_failed controller=fallback platform=%s", current_platform)
     else:
         runtime_log.info("tray_disabled_by_config")
+
+    # A CPU fallback that happened while the tray was still starting, and a
+    # self-check that could not read its own records back, both need to be seen.
+    app._apply_device_warning(announce=False)
+    if not startup_selfcheck.get("ok", False):
+        problems = "; ".join(startup_selfcheck.get("problems", [])) or "self-check failed"
+        runtime_log.error("startup_selfcheck_failed problems=%s", problems)
+        try:
+            if tray is not None and hasattr(tray, "show_warning"):
+                tray.show_warning("Logging or history is not recording - see startup_selfcheck.json")
+        except Exception:
+            runtime_log.exception("startup_selfcheck_warning_failed")
+    try:
+        from voiceflow.ui.visual_indicators import set_history_failure_handler
+
+        def _on_history_failure(path: str, reason: str) -> None:
+            runtime_log.error("history_not_recorded path=%s reason=%s", path, reason)
+            try:
+                if tray is not None and hasattr(tray, "show_warning"):
+                    tray.show_warning("Dictation history is not being saved - see the log")
+            except Exception:
+                pass
+
+        set_history_failure_handler(_on_history_failure)
+    except Exception:
+        runtime_log.debug("history_failure_handler_unavailable", exc_info=True)
 
     # Keep dock feedback alive even if tray startup fails.
     if not tray and app.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:

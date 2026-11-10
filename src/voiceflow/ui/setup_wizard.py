@@ -314,7 +314,8 @@ def profile_defaults(profile_key: str, capabilities: SetupCapabilities) -> Dict[
     if selected == "gpu-balanced":
         return {
             "model_tier": "balanced",
-            "model_name": "distil-large-v3.5",
+            # The balanced tier loads the distil-large-v3 weights; name them.
+            "model_name": "distil-large-v3",
             "device": "cuda",
             "compute_type": "float16",
             "enable_gpu_acceleration": True,
@@ -364,7 +365,11 @@ def maybe_run_startup_setup(cfg: Config) -> Tuple[bool, bool]:
 
 
 _HF_REPO_MAP: Dict[str, str] = {
-    "distil-large-v3.5": "Systran/faster-distil-whisper-large-v3.5",
+    # "distil-large-v3.5" is a legacy label for the v3 weights (Systran never
+    # published a v3.5 repo, so the old value here 404ed). The real v3.5 export
+    # is opt-in under its own key.
+    "distil-large-v3.5": "Systran/faster-distil-whisper-large-v3",
+    "distil-large-v3.5-ct2": "distil-whisper/distil-large-v3.5-ct2",
     "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
     "distil-large-v2": "Systran/faster-distil-whisper-large-v2",
     "small.en": "Systran/faster-whisper-small.en",

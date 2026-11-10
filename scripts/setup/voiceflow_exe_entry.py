@@ -365,9 +365,72 @@ def _self_check_target(argv: list[str]) -> str | None:
     return None
 
 
+def _boot_breadcrumb(event: str, **fields) -> None:
+    """Append to logs/boot_breadcrumb.log with plain file I/O (VF-18).
+
+    Deliberately independent of the app's logging: it must work when the app
+    dies, stalls or mis-initialises before AsyncLogger exists. Never raises.
+    """
+    # Standard library only. Importing the voiceflow package here would pull in
+    # the tray and PIL before stdout/stderr are repaired.
+    try:
+        lad = os.environ.get("LOCALAPPDATA")
+        directory = Path(lad) / "VoiceFlow" / "logs" if lad else Path.home() / ".voiceflow" / "logs"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "boot_breadcrumb.log"
+        try:
+            if path.exists() and path.stat().st_size > 512 * 1024:
+                os.replace(path, path.with_name("boot_breadcrumb.log.1"))
+        except Exception:
+            pass
+        parts = [time.strftime("%Y-%m-%d %H:%M:%S"), f"pid={os.getpid()}", event]
+        for key, value in fields.items():
+            parts.append("{}={}".format(key, str(value).replace("\r", " ").replace("\n", " ")[:400]))
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(" ".join(parts) + "\n")
+    except Exception:
+        pass
+
+
+def _stream_states() -> dict:
+    states = {}
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is None:
+            states[name] = "none"
+            continue
+        try:
+            stream.write("")
+            stream.flush()
+            states[name] = "ok"
+        except Exception as exc:
+            states[name] = f"unusable:{type(exc).__name__}"
+    return states
+
+
 def main() -> int:
+    # Record how the process was launched before _ensure_std_streams repairs a
+    # missing stdout/stderr, so the breadcrumb shows the launcher's real state.
+    original_streams = _stream_states()
     _ensure_std_streams()
     _ensure_src_on_path()
+    # Handed to cli_enhanced so the startup self-check reports the original state.
+    os.environ["VOICEFLOW_LAUNCH_STREAMS"] = "stdout={};stderr={}".format(
+        original_streams.get("stdout", "unknown"),
+        original_streams.get("stderr", "unknown"),
+    )
+    try:
+        cwd_text = os.getcwd()
+    except Exception:
+        cwd_text = "unavailable"
+    _boot_breadcrumb(
+        "boot",
+        frozen=bool(getattr(sys, "frozen", False)),
+        stdout=original_streams.get("stdout", "unknown"),
+        stderr=original_streams.get("stderr", "unknown"),
+        cwd=cwd_text,
+        localappdata_set="LOCALAPPDATA" in os.environ,
+    )
     _configure_frozen_tk_runtime()
     self_check_out = _self_check_target(sys.argv)
     if self_check_out:
@@ -382,7 +445,18 @@ def main() -> int:
 
     from voiceflow.ui.cli_enhanced import main as cli_main
 
-    result = cli_main()
+    _boot_breadcrumb("entering_cli_main")
+    try:
+        result = cli_main()
+    except SystemExit as exc:
+        _boot_breadcrumb("cli_main_exit", code=exc.code)
+        raise
+    except BaseException as exc:
+        import traceback
+
+        _boot_breadcrumb("cli_main_crash", error=f"{type(exc).__name__}: {exc}", tb=traceback.format_exc()[-1500:])
+        raise
+    _boot_breadcrumb("cli_main_returned", result=result)
     return int(result) if isinstance(result, int) else 0
 
 

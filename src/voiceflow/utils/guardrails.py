@@ -228,7 +228,7 @@ def validate_config(cfg: Config) -> Config:
             'tiny', 'tiny.en', 'base', 'base.en', 'small', 'small.en',
             'medium', 'medium.en', 'large', 'large-v2', 'large-v3',
             # Distil-Whisper models (2025)
-            'distil-large-v3', 'distil-large-v3.5',
+            'distil-large-v3', 'distil-large-v3.5', 'distil-large-v3.5-ct2',
             'Systran/faster-distil-whisper-large-v3',
             'distil-whisper/distil-large-v3.5',
             # Voxtral models (Mistral AI)

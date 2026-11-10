@@ -4,11 +4,12 @@ Speech recognition engine built on faster-whisper (CTranslate2 backend).
 
 Model Tiers:
 - Quick: adaptive low-latency tier (small.en on CPU, distil-large-v3 on CUDA)
-- Balanced: distil-large-v3.5 (best speed/quality ratio)
+- Balanced: distil-large-v3 weights (best speed/quality ratio)
 - Quality: large-v3 (highest accuracy)
 - Tiny: tiny.en (fastest, lower accuracy — good for testing)
 """
 
+import dataclasses
 import logging
 import os
 import sys
@@ -18,11 +19,116 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Process-wide model construction (VF-18)
+#
+# Two preloader threads (main model and tiny.en) start in the same second and
+# both end up in huggingface_hub.snapshot_download. Its disabled_tqdm class
+# keeps a class-level ``_lock`` that concurrent calls create and delete under
+# each other, so one of them dies with "type object 'disabled_tqdm' has no
+# attribute '_lock'". That was misread as a CUDA failure and silently demoted
+# the main model to CPU for the life of the process (warmup 4.6s instead of
+# 0.1s). Each FasterWhisperBackend has its own RLock, which is why a per-backend
+# lock never helped: the lock has to be shared by every backend in the process.
+# ---------------------------------------------------------------------------
+_MODEL_INIT_LOCK = threading.Lock()
+
+# Seconds to wait before the one same-device retry of a non-CUDA init failure.
+_CUDA_INIT_RETRY_DELAY_S = 0.25
+# Minimum gap between attempts to move a CPU-fallback model back to the GPU.
+_CUDA_RESTORE_MIN_INTERVAL_S = 120.0
+
+# Failures that retrying on CUDA cannot fix: the card is full, or the runtime
+# libraries are not there. Anything else (a race in a download helper, a
+# transient driver hiccup) is not evidence that CUDA is unusable.
+_CUDA_OUT_OF_MEMORY_MARKERS = (
+    "out of memory",
+    "cudaerrormemoryallocation",
+    "memory allocation",
+    "failed to allocate",
+    "cuda_error_out_of_memory",
+)
+_CUDA_MISSING_RUNTIME_MARKERS = (
+    "cublas",
+    "cudnn",
+    "cudart",
+    "cannot load symbol",
+    "could not load library",
+    "cannot be loaded",
+    "library cu",
+    "no cuda-capable device",
+    "cuda driver version is insufficient",
+    "unsupported device cuda",
+    "cuda support",
+    "not compiled with cuda",
+    "dll load failed",
+)
+
+#: ``(event, detail)`` -> None. Events: ``cpu_fallback`` and ``cuda_restored``.
+DeviceEventListener = Callable[[str, str], None]
+_device_listeners: List[DeviceEventListener] = []
+_device_listeners_lock = threading.Lock()
+
+
+def add_device_listener(listener: DeviceEventListener) -> None:
+    """Register a callback told when an engine drops to CPU or gets CUDA back."""
+    with _device_listeners_lock:
+        if listener not in _device_listeners:
+            _device_listeners.append(listener)
+
+
+def remove_device_listener(listener: DeviceEventListener) -> None:
+    with _device_listeners_lock:
+        if listener in _device_listeners:
+            _device_listeners.remove(listener)
+
+
+def _notify_device_event(event: str, detail: str) -> None:
+    with _device_listeners_lock:
+        listeners = list(_device_listeners)
+    for listener in listeners:
+        try:
+            listener(event, detail)
+        except Exception:
+            logger.exception("device event listener failed")
+
+
+def classify_cuda_init_failure(exc: BaseException) -> str:
+    """Say whether a CUDA init failure is one retrying on CUDA can fix.
+
+    Returns ``"out_of_memory"`` or ``"missing_runtime"`` (both persistent: go
+    straight to CPU) or ``"transient"`` (anything else: try CUDA once more
+    before concluding CUDA is unusable).
+    """
+    message = f"{type(exc).__name__}: {exc}".lower()
+    if any(marker in message for marker in _CUDA_OUT_OF_MEMORY_MARKERS):
+        return "out_of_memory"
+    if any(marker in message for marker in _CUDA_MISSING_RUNTIME_MARKERS):
+        return "missing_runtime"
+    return "transient"
+
+
+def _is_missing_local_files(exc: BaseException) -> bool:
+    """True when a ``local_files_only`` load failed only because the model is not cached."""
+    for cls in type(exc).__mro__:
+        if cls.__name__ in {"LocalEntryNotFoundError", "OfflineModeIsEnabled"}:
+            return True
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "cannot find an appropriate cached snapshot",
+            "outgoing traffic has been disabled",
+            "couldn't find the requested files in the local cache",
+            "not found in the local cache",
+        )
+    )
 
 
 def _find_dll_in_path(dll_name: str) -> bool:
@@ -227,7 +333,7 @@ class ModelTier(Enum):
     """Model tiers for easy selection"""
     TINY = "tiny"           # Fastest, lowest accuracy
     QUICK = "quick"         # Fast with good accuracy (adaptive by hardware)
-    BALANCED = "balanced"   # Best ratio (distil-large-v3.5)
+    BALANCED = "balanced"   # Best ratio (distil-large-v3 weights)
     QUALITY = "quality"     # Highest accuracy (large-v3)
     VOXTRAL = "voxtral"     # Mistral's new model
 
@@ -282,11 +388,26 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
         size_mb=1500,
         languages=["en"],
     ),
+    # Legacy label. No CTranslate2 export of v3.5 was published when this key was
+    # added, so it has always loaded the distil-large-v3 weights. The name now
+    # says so; MODEL_KEY_ALIASES maps it to the key that matches what runs.
+    # VF-18 measured the real v3.5 export ("distil-large-v3.5-ct2" below) at the
+    # same speed as v3 but only a few words better on a small synthetic set, not
+    # enough to change what the default loads.
     "distil-large-v3.5": ModelConfig(
-        name="Distil Large v3.5",
+        name="Distil Large v3 (legacy 'v3.5' label)",
         model_id="Systran/faster-distil-whisper-large-v3",
         backend="faster-whisper",
-        description="Balanced distil profile on faster-whisper",
+        description="Legacy alias: loads the distil-large-v3 weights",
+        size_mb=1500,
+        languages=["en"],
+    ),
+    # Opt-in: the real v3.5 weights (CTranslate2 export from distil-whisper).
+    "distil-large-v3.5-ct2": ModelConfig(
+        name="Distil Large v3.5",
+        model_id="distil-whisper/distil-large-v3.5-ct2",
+        backend="faster-whisper",
+        description="Distil-Whisper large-v3.5, CTranslate2 export (opt-in)",
         size_mb=1500,
         languages=["en"],
     ),
@@ -344,10 +465,21 @@ TIER_MODELS: Dict[ModelTier, str] = {
     ModelTier.TINY: "tiny.en",
     # QUICK is resolved dynamically per hardware in resolve_tier_model_key().
     ModelTier.QUICK: "distil-large-v3",
-    ModelTier.BALANCED: "distil-large-v3.5",
+    ModelTier.BALANCED: "distil-large-v3",
     ModelTier.QUALITY: "large-v3",
     ModelTier.VOXTRAL: "voxtral-3b",
 }
+
+# Config keys that load the same weights as another key. The label in config,
+# the log line and the weights actually loaded must name the same model (VF-18).
+MODEL_KEY_ALIASES: Dict[str, str] = {
+    "distil-large-v3.5": "distil-large-v3",
+}
+
+
+def canonical_model_key(name: str) -> str:
+    """The key whose weights ``name`` actually loads."""
+    return MODEL_KEY_ALIASES.get(name, name)
 
 # Compatibility aliases for model IDs configured before runtime backend constraints changed.
 # faster-whisper requires a CTranslate2 model directory containing model.bin.
@@ -434,6 +566,12 @@ class FasterWhisperBackend(ASRBackend):
         self._model = None
         self._lock = threading.RLock()
         self._retried_cpu_fallback = False
+        # Set when this engine wanted CUDA and is running on CPU instead. The
+        # fallback is announced and retried; it is never silent or permanent.
+        self._cuda_wanted_compute: Optional[str] = None
+        self._cpu_fallback_reason = ""
+        self._next_cuda_restore_at = 0.0
+        self._restore_lock = threading.Lock()
 
     def load(self) -> None:
         with self._lock:
@@ -455,49 +593,166 @@ class FasterWhisperBackend(ASRBackend):
 
                 load_time = time.time() - start_time
                 logger.info(f"Model loaded in {load_time:.2f}s")
+                logging.getLogger("voiceflow").info(
+                    "asr_model_loaded model_id=%s ref=%s device=%s compute=%s load_s=%.2f",
+                    self.config.model_id,
+                    model_ref,
+                    self.config.device,
+                    self.config.compute_type,
+                    load_time,
+                )
 
             except Exception as e:
                 logger.error(f"Failed to load model: {e}")
                 self._model = None
                 raise
 
-    def _create_model(self, model_cls, model_ref: str):
-        """Create model and gracefully fallback to CPU when CUDA init fails."""
+    @property
+    def fell_back_to_cpu(self) -> bool:
+        """True while a model that was meant for CUDA is running on CPU."""
+        return self._cuda_wanted_compute is not None
+
+    @property
+    def cpu_fallback_reason(self) -> str:
+        return self._cpu_fallback_reason
+
+    def _cpu_thread_count(self) -> int:
         cpu_threads = int(self.config.cpu_threads or 0)
         if cpu_threads <= 0:
             # Keep one core free for UI/hotkeys; cap to avoid diminishing returns.
             cpu_threads = max(4, min(12, max(1, (os.cpu_count() or 4) - 1)))
-        num_workers = max(1, int(self.config.asr_num_workers or 1))
+        return cpu_threads
 
+    def _construct(self, model_cls, model_ref: str, device: str, compute_type: str):
+        """Build one WhisperModel under the process-wide lock, cache first.
+
+        A cached model is loaded with ``local_files_only=True`` so a normal
+        start never touches the network or huggingface_hub's download path. The
+        network is used only when the model is not on disk. A local directory
+        (prefetched model) needs neither.
+        """
+        kwargs = dict(
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=self._cpu_thread_count(),
+            num_workers=max(1, int(self.config.asr_num_workers or 1)),
+        )
+        with _MODEL_INIT_LOCK:
+            if Path(model_ref).is_dir():
+                return model_cls(model_ref, **kwargs)
+            try:
+                return model_cls(model_ref, local_files_only=True, **kwargs)
+            except Exception as exc:
+                if not _is_missing_local_files(exc):
+                    raise
+                logger.info("Model %s not in the local cache; downloading", model_ref)
+                return model_cls(model_ref, local_files_only=False, **kwargs)
+
+    def _create_model(self, model_cls, model_ref: str):
+        """Create the model on the configured device.
+
+        A CUDA init failure that is not a CUDA problem is retried on CUDA once.
+        Only a persistent failure (out of memory, missing runtime) or a second
+        failure drops to CPU, and that drop is announced and later retried.
+        """
+        device = str(self.config.device).lower()
+        compute = self.config.compute_type
+        if device != "cuda":
+            return self._construct(model_cls, model_ref, device, compute)
+
+        last_exc: Optional[BaseException] = None
+        for attempt in (1, 2):
+            try:
+                model = self._construct(model_cls, model_ref, "cuda", compute)
+                if attempt > 1:
+                    logger.warning("CUDA model init succeeded on retry (first failure: %s)", last_exc)
+                    logging.getLogger("voiceflow").warning(
+                        "asr_cuda_init_retry_ok model=%s first_error=%s", model_ref, last_exc
+                    )
+                return model
+            except Exception as exc:
+                last_exc = exc
+                kind = classify_cuda_init_failure(exc)
+                if kind == "transient" and attempt == 1:
+                    logger.warning(
+                        "Model init failed with a non-CUDA error (%s: %s); retrying on CUDA once",
+                        type(exc).__name__,
+                        exc,
+                    )
+                    time.sleep(_CUDA_INIT_RETRY_DELAY_S)
+                    continue
+                break
+
+        assert last_exc is not None
+        reason = f"{classify_cuda_init_failure(last_exc)}: {type(last_exc).__name__}: {last_exc}"
+        logger.warning("CUDA model init failed (%s). Falling back to CPU int8.", reason)
+        logging.getLogger("voiceflow").warning(
+            "asr_cuda_init_failed error=%s fallback=cpu_int8 model=%s", reason, model_ref
+        )
+        model = self._construct(model_cls, model_ref, "cpu", "int8")
+        self._enter_cpu_fallback(compute, reason)
+        return model
+
+    def _enter_cpu_fallback(self, wanted_compute: str, reason: str) -> None:
+        """Record and announce that this engine is now running on CPU."""
+        self.config.device = "cpu"
+        self.config.compute_type = "int8"
+        self._cuda_wanted_compute = wanted_compute or "float16"
+        self._cpu_fallback_reason = reason
+        self._next_cuda_restore_at = time.monotonic() + _CUDA_RESTORE_MIN_INTERVAL_S
+        logging.getLogger("voiceflow").warning(
+            "asr_cpu_fallback_active model=%s reason=%s restore_retry_s=%.0f",
+            self.config.model_id,
+            reason,
+            _CUDA_RESTORE_MIN_INTERVAL_S,
+        )
+        _notify_device_event("cpu_fallback", f"{self.config.model_id}: {reason}")
+
+    def retry_cuda_if_fallen_back(self, force: bool = False) -> bool:
+        """Try to move a CPU-fallback model back onto the GPU.
+
+        Meant to be called from an idle period. Builds the CUDA model first and
+        swaps it in only if that worked, so a failed attempt costs nothing and
+        dictation keeps running on the CPU model. Returns True when CUDA was
+        restored.
+        """
+        if not self.fell_back_to_cpu:
+            return False
+        if not force and time.monotonic() < self._next_cuda_restore_at:
+            return False
+        if not self._restore_lock.acquire(blocking=False):
+            return False
         try:
-            return model_cls(
-                model_ref,
-                device=self.config.device,
-                compute_type=self.config.compute_type,
-                cpu_threads=cpu_threads,
-                num_workers=num_workers,
-            )
-        except Exception as primary_exc:
-            if str(self.config.device).lower() != "cuda":
-                raise
-            logger.warning(
-                "CUDA model init failed (%s). Falling back to CPU int8.",
-                primary_exc,
-            )
+            wanted = self._cuda_wanted_compute or "float16"
+            model_ref = self._resolve_model_ref(self.config.model_id)
+            try:
+                from faster_whisper import WhisperModel
+
+                model = self._construct(WhisperModel, model_ref, "cuda", wanted)
+                list(model.transcribe(np.zeros(1600, dtype=np.float32), language="en"))
+            except Exception as exc:
+                self._next_cuda_restore_at = time.monotonic() + _CUDA_RESTORE_MIN_INTERVAL_S
+                logging.getLogger("voiceflow").info(
+                    "asr_cuda_restore_failed kind=%s error=%s next_try_s=%.0f",
+                    classify_cuda_init_failure(exc),
+                    exc,
+                    _CUDA_RESTORE_MIN_INTERVAL_S,
+                )
+                return False
+            with self._lock:
+                self._model = model
+                self.config.device = "cuda"
+                self.config.compute_type = wanted
+                self._cuda_wanted_compute = None
+                self._cpu_fallback_reason = ""
+                self._retried_cpu_fallback = False
             logging.getLogger("voiceflow").warning(
-                "asr_cuda_init_failed error=%s fallback=cpu_int8 model=%s",
-                primary_exc,
-                model_ref,
+                "asr_cuda_restored model=%s compute=%s", self.config.model_id, wanted
             )
-            self.config.device = "cpu"
-            self.config.compute_type = "int8"
-            return model_cls(
-                model_ref,
-                device="cpu",
-                compute_type="int8",
-                cpu_threads=cpu_threads,
-                num_workers=num_workers,
-            )
+            _notify_device_event("cuda_restored", self.config.model_id)
+            return True
+        finally:
+            self._restore_lock.release()
 
     @staticmethod
     def _resolve_model_ref(model_id: str) -> str:
@@ -574,7 +829,7 @@ class FasterWhisperBackend(ASRBackend):
         except Exception as exc:
             if self._should_fallback_to_cpu(exc):
                 logger.warning("CUDA runtime failure detected (%s). Falling back to CPU and retrying once.", exc)
-                self._fallback_to_cpu()
+                self._fallback_to_cpu(f"{classify_cuda_init_failure(exc)}: {type(exc).__name__}: {exc}")
                 return self.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
             raise
 
@@ -635,13 +890,13 @@ class FasterWhisperBackend(ASRBackend):
         ]
         return any(marker in message for marker in runtime_markers)
 
-    def _fallback_to_cpu(self) -> None:
+    def _fallback_to_cpu(self, reason: str = "runtime CUDA failure") -> None:
         with self._lock:
+            wanted = self.config.compute_type
             self._model = None
-            self.config.device = "cpu"
-            self.config.compute_type = "int8"
             self._retried_cpu_fallback = True
             logging.getLogger("voiceflow").warning("asr_runtime_fallback device=cpu compute=int8")
+            self._enter_cpu_fallback(wanted, reason)
         self.load()
 
 
@@ -976,10 +1231,14 @@ class ASREngine:
         device = requested_device
         compute_type = resolved_compute
 
-        # Determine model to use
+        # Determine model to use. Every engine gets its own copy of the config:
+        # MODEL_CONFIGS entries are module-level, and a CPU fallback (or any
+        # per-engine tweak) written into a shared entry used to leak into every
+        # later engine built from the same key.
         if model_name:
             if model_name not in MODEL_CONFIGS:
                 # Check if it's a valid faster-whisper model
+                self.model_key = model_name
                 self.model_config = ModelConfig(
                     name=model_name,
                     model_id=model_name,
@@ -988,13 +1247,18 @@ class ASREngine:
                     compute_type=compute_type,
                 )
             else:
-                self.model_config = MODEL_CONFIGS[model_name]
+                self.model_key = canonical_model_key(model_name)
+                self.model_config = dataclasses.replace(MODEL_CONFIGS[model_name])
         elif tier:
             model_key = resolve_tier_model_key(tier, device)
-            self.model_config = MODEL_CONFIGS[model_key]
+            self.model_key = canonical_model_key(model_key)
+            self.model_config = dataclasses.replace(MODEL_CONFIGS[model_key])
         else:
             # Default to QUICK tier
-            self.model_config = MODEL_CONFIGS[resolve_tier_model_key(ModelTier.QUICK, device)]
+            model_key = resolve_tier_model_key(ModelTier.QUICK, device)
+            self.model_key = canonical_model_key(model_key)
+            self.model_config = dataclasses.replace(MODEL_CONFIGS[model_key])
+        self.requested_label = str(model_name or (tier.value if tier else "quick"))
 
         # Update device and compute type
         self.model_config.device = device
@@ -1025,12 +1289,16 @@ class ASREngine:
             f"backend: {self.model_config.backend}, device: {device}"
         )
         logging.getLogger("voiceflow").info(
-            "asr_engine_initialized model=%s model_id=%s backend=%s device=%s compute=%s",
+            "asr_engine_initialized model=%s model_id=%s backend=%s device=%s compute=%s "
+            "key=%s requested=%s weights=%s",
             self.model_config.name,
             self.model_config.model_id,
             self.model_config.backend,
             self.model_config.device,
             self.model_config.compute_type,
+            self.model_key,
+            self.requested_label,
+            self.model_config.model_id,
         )
 
     def _create_backend(self) -> None:
@@ -1144,11 +1412,15 @@ class ASREngine:
         # Cleanup current backend
         self.cleanup()
 
+        previous = self.model_config
+
         # Update model config
         if model_name:
             if model_name in MODEL_CONFIGS:
-                self.model_config = MODEL_CONFIGS[model_name]
+                self.model_key = canonical_model_key(model_name)
+                self.model_config = dataclasses.replace(MODEL_CONFIGS[model_name])
             else:
+                self.model_key = model_name
                 self.model_config = ModelConfig(
                     name=model_name,
                     model_id=model_name,
@@ -1158,7 +1430,17 @@ class ASREngine:
                 )
         elif tier:
             model_key = resolve_tier_model_key(tier, self.model_config.device)
-            self.model_config = MODEL_CONFIGS[model_key]
+            self.model_key = canonical_model_key(model_key)
+            self.model_config = dataclasses.replace(MODEL_CONFIGS[model_key])
+
+        # The per-engine decode settings belong to the engine, not to the model
+        # entry; carry them over to the fresh copy.
+        if self.model_config is not previous:
+            for attr in (
+                "device", "compute_type", "vad_filter", "cpu_threads", "asr_num_workers",
+                "beam_size", "best_of", "temperature", "condition_on_previous_text",
+            ):
+                setattr(self.model_config, attr, getattr(previous, attr))
 
         # Create new backend
         self._create_backend()
@@ -1169,6 +1451,25 @@ class ASREngine:
         if self._backend:
             self._backend.cleanup()
             self._backend = None
+
+    def device_status(self) -> Dict[str, Any]:
+        """Where the model is running, and whether that is where it was meant to."""
+        backend = self._backend
+        fell_back = bool(getattr(backend, "fell_back_to_cpu", False))
+        return {
+            "model_key": self.model_key,
+            "model_id": self.model_config.model_id,
+            "device": self.model_config.device,
+            "compute_type": self.model_config.compute_type,
+            "fell_back_to_cpu": fell_back,
+            "fallback_reason": str(getattr(backend, "cpu_fallback_reason", "") or ""),
+        }
+
+    def retry_cuda_if_fallen_back(self, force: bool = False) -> bool:
+        """Move a CPU-fallback model back to the GPU if it now fits. See the backend."""
+        backend = self._backend
+        retry = getattr(backend, "retry_cuda_if_fallen_back", None)
+        return bool(retry(force=force)) if callable(retry) else False
 
     @staticmethod
     def list_models() -> Dict[str, Dict[str, Any]]:
@@ -1193,7 +1494,7 @@ class ASREngine:
         return {
             "tiny": "Fastest, lowest accuracy - good for testing",
             "quick": "Adaptive quick tier: small.en on CPU, distil-large-v3 on CUDA",
-            "balanced": "Distil-Large-v3.5: Best speed/quality (recommended)",
+            "balanced": "Distil-Large-v3: Best speed/quality (recommended)",
             "quality": "Large-v3: Highest accuracy, slower",
             "voxtral": "Voxtral-3B: Mistral's new model, beats Whisper",
         }
