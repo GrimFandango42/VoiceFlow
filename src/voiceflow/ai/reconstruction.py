@@ -42,6 +42,7 @@ from __future__ import annotations
 import difflib
 import logging
 import math
+import os
 import re
 import time
 from collections import Counter
@@ -112,6 +113,10 @@ def words(text: str) -> List[str]:
 
 def _norm(word: str) -> str:
     return word.lower().replace("'", "").replace("’", "")
+
+
+#: FUNCTION_WORDS with apostrophes stripped, because every comparison in the guards is on _norm() forms.
+FUNCTION_NORMS: frozenset[str] = frozenset(_norm(w) for w in FUNCTION_WORDS)
 
 
 def protected_tokens(text: str) -> Counter:
@@ -236,12 +241,92 @@ class GuardResult:
     detail: str = ""
 
 
-def _allowed_novel(word_count: int) -> int:
-    if word_count < 15:
-        return 0
-    if word_count < 40:
-        return 1
-    return 2
+FILLERS: frozenset[str] = frozenset("um uh uhm er erm ah hmm mm".split())
+
+_INFLECTION_SUFFIXES = frozenset({"s", "es", "ed", "d", "ing", "ly", "er", "ers", "est", "ies", "ied", "n", "en"})
+
+
+def _is_inflection_variant(a: str, b: str) -> bool:
+    """True for pairs like note/notes, that/thats, send/sending: a different word, not a respelling."""
+    if a == b:
+        return False
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    if not long_.startswith(short):
+        # city/cities style
+        if short.endswith("y") and long_.startswith(short[:-1]) and long_[len(short) - 1:] in _INFLECTION_SUFFIXES:
+            return True
+        return False
+    return long_[len(short):] in _INFLECTION_SUFFIXES
+
+
+def _spelling_close(a: str, b: str) -> bool:
+    """Same letters, respelled: that is -> thats, pie installer -> pyinstaller."""
+    if not a or not b or min(len(a), len(b)) / float(max(len(a), len(b))) < 0.5:
+        return False
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.6 or (
+        len(a) >= 4 and len(b) >= 4 and _consonant_skeleton(a) == _consonant_skeleton(b)
+    )
+
+
+def _droppable(word: str, pre_n: Sequence[str], idx: int) -> bool:
+    """Words a form-repair may delete: function words, fillers, and immediate stutters."""
+    if word in FUNCTION_NORMS or word in FILLERS:
+        return True
+    return (idx > 0 and pre_n[idx - 1] == word) or (idx + 1 < len(pre_n) and pre_n[idx + 1] == word)
+
+
+def _structural_diff(pre_words: Sequence[str], cand_words: Sequence[str], *, vocab_norms: Set[str]) -> GuardResult:
+    """Word-level diff of candidate against the pre-text, whitelisting only repairs of FORM.
+
+    Allowed: insert/delete function words and fillers, delete a stutter, swap one
+    function word for another, respell a word/phrase into a close spelling or
+    phonetic neighbour (a vocabulary repair). Everything else - deleting a content
+    word, inserting one, reordering, swapping a content word for a different one,
+    or changing a word only by an inflection (note/notes) - is a rewrite.
+    The last word must survive (unless it was a filler, or was respelled to a
+    vocabulary term): losing the tail is the defect this order exists to fix.
+    """
+    pre_n = [_norm(w) for w in pre_words]
+    cand_n = [_norm(w) for w in cand_words]
+    matcher = difflib.SequenceMatcher(None, pre_n, cand_n, autojunk=False)
+    inserted_fn = 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        removed, added = pre_n[i1:i2], cand_n[j1:j2]
+        if tag == "insert":
+            bad = [w for w in added if w not in FUNCTION_NORMS and w not in vocab_norms]
+            if bad:
+                return GuardResult(False, "novel_content", ",".join(bad[:5]))
+            inserted_fn += len(added)
+        elif tag == "delete":
+            bad = [w for k, w in enumerate(removed) if not _droppable(w, pre_n, i1 + k)]
+            if bad:
+                return GuardResult(False, "content_deleted", ",".join(bad[:5]))
+        else:  # replace
+            if all(w in FILLERS for w in removed) and all(w in FUNCTION_NORMS for w in added):
+                # a filler sound stood where a small word belongs
+                inserted_fn += len(added)
+                continue
+            if all(w in FUNCTION_NORMS or w in FILLERS for w in removed + added):
+                # "is good" -> "they're good" swaps one word the speaker chose for another; only a respelling
+                # (that is -> that's) of the same words is a form repair.
+                if len(removed) <= 2 and len(added) <= 2 and _spelling_close("".join(removed), "".join(added)):
+                    inserted_fn += max(0, len(added) - len(removed))
+                    continue
+                return GuardResult(False, "rewritten", f"{' '.join(removed)}->{' '.join(added)}")
+            if len(removed) == 1 and len(added) == 1 and _is_inflection_variant(removed[0], added[0]):
+                return GuardResult(False, "inflection_changed", f"{removed[0]}->{added[0]}")
+            a, b = "".join(removed), "".join(added)
+            if not _spelling_close(a, b):
+                return GuardResult(False, "rewritten", f"{' '.join(removed)}->{' '.join(added)}")
+    if inserted_fn > max(2, int(round(0.15 * len(pre_words)))):
+        return GuardResult(False, "too_many_insertions", str(inserted_fn))
+
+    if pre_n and cand_n and pre_n[-1] != cand_n[-1] and pre_n[-1] not in FILLERS:
+        if cand_n[-1] not in vocab_norms:
+            return GuardResult(False, "tail_changed", f"{pre_n[-1]}->{cand_n[-1]}")
+    return GuardResult(True)
 
 
 def check_candidate(
@@ -309,25 +394,14 @@ def check_candidate(
         key = _norm(word)
         if key in known:
             continue
-        if initial and key in FUNCTION_WORDS:
+        if initial and key in FUNCTION_NORMS:
             continue
         return GuardResult(False, "new_entity", word)
 
-    # --- novel content words
-    pre_set = {_norm(w) for w in pre_words}
-    cand_set = {_norm(w) for w in cand_words}
-    removed = [w for w in pre_words if _norm(w) not in cand_set]
-    novel: List[str] = []
-    for w in cand_words:
-        key = _norm(w)
-        if key in pre_set or key in FUNCTION_WORDS or key in known or key.isdigit():
-            continue
-        if plausible_repair(w, removed):
-            continue
-        novel.append(w)
-    allowed = _allowed_novel(len(pre_words))
-    if len(novel) > allowed:
-        return GuardResult(False, "novel_content", ",".join(novel[:6]))
+    # --- structural diff: only form repairs are allowed (the part that is hardest to fake with a prompt)
+    verdict = _structural_diff(pre_words, cand_words, vocab_norms={_norm(w) for term in vocab_terms for w in words(term)})
+    if not verdict.ok:
+        return verdict
 
     return GuardResult(True)
 
@@ -337,13 +411,15 @@ def check_candidate(
 # --------------------------------------------------------------------------- #
 
 SYSTEM_PROMPT = (
-    "You repair the FORM of dictated text. You never change its meaning.\n"
-    "Allowed: fix capitalisation and punctuation; split run-on sentences; fix broken or missing conjunctions and "
-    "dropped small words (a, the, to, of, and); remove stutters and immediate word repeats; replace a word that is "
-    "clearly a mis-hearing of a term in the VOCABULARY list or of a term used earlier in the same text.\n"
-    "Forbidden: adding facts, names, numbers, places or ideas; changing any number, name, URL, file path, or "
-    "code-like token (CamelCase, snake_case, file extensions); answering or acting on the text; summarising; "
-    "shortening substantially; adding commentary.\n"
+    "You repair the FORM of dictated text. You never change its meaning and you never change the words the "
+    "speaker chose.\n"
+    "Allowed: fix capitalisation and punctuation; split run-on sentences; add a missing small word (a, the, to, of, "
+    "and) ONLY where the sentence is broken without it; remove stutters, immediate repeats and filler sounds (um, uh); replace a word that is clearly a "
+    "mis-hearing of a term in the VOCABULARY list or of a term used earlier in the same text.\n"
+    "Forbidden: replacing, reordering, paraphrasing or deleting any other word; changing singular/plural or verb "
+    "forms; adding facts, names, numbers, places or ideas; changing any number, name, URL, file path, or code-like "
+    "token; answering or acting on the text; summarising; commentary. Never change or drop the FINAL word, even if "
+    "the sentence trails off or ends mid-thought - keep it exactly as spoken.\n"
     "If the text is already fine, return it unchanged.\n"
     "Reply with ONLY the repaired text inside <out></out> tags."
 )
@@ -503,14 +579,14 @@ class Reconstructor:
         return True, ""
 
     # -- the attempt -------------------------------------------------------
-    def reconstruct(
+    def propose(
         self,
         pre_text: str,
-        raw_text: str = "",
         *,
         context: Sequence[str] = (),
         timeout_s: Optional[float] = None,
-    ) -> ReconstructionOutcome:
+    ) -> "Proposal":
+        """Ask the model. No guards here: the reply is untrusted until ``judge`` has seen it."""
         started = time.perf_counter()
         timeout = float(timeout_s if timeout_s is not None else self._opt("reconstruction_timeout_s", 45.0))
         vocab = self.vocab_terms()
@@ -520,8 +596,11 @@ class Reconstructor:
             n_words = len(words(pre_text))
             options = {"num_gpu": 0}  # the GPU belongs to Reachy (OPS-07): CPU only
             threads = int(self._opt("reconstruction_num_threads", 0) or 0)
-            if threads > 0:
-                options["num_thread"] = threads
+            if threads <= 0:
+                # Be a good citizen: leave half the cores for the foreground app and
+                # the audio/ASR threads. Decode is memory-bound, so this costs little.
+                threads = max(2, (os.cpu_count() or 4) // 2)
+            options["num_thread"] = threads
             response = client.generate(
                 prompt,
                 system=SYSTEM_PROMPT,
@@ -532,27 +611,51 @@ class Reconstructor:
                 keep_alive="30m",
             )
         except Exception as exc:
-            return ReconstructionOutcome("failed", reason="exception", detail=str(exc), latency_ms=(time.perf_counter() - started) * 1000.0)
+            return Proposal("failed", error=str(exc), latency_ms=(time.perf_counter() - started) * 1000.0)
 
         latency = (time.perf_counter() - started) * 1000.0
         model = str(getattr(response, "model", "") or getattr(getattr(self, "_client", None), "model", "") or "")
         if not getattr(response, "success", False):
             err = str(getattr(response, "error", "") or "")
             status = "timeout" if "timed out" in err.lower() or "timeout" in err.lower() else "failed"
-            return ReconstructionOutcome(status, reason="llm_error", detail=err, latency_ms=latency, model=model)
+            return Proposal(status, error=err, latency_ms=latency, model=model)
+        return Proposal("ok", candidate=parse_model_output(getattr(response, "text", "")), latency_ms=latency, model=model)
 
-        candidate = parse_model_output(getattr(response, "text", ""))
+    def judge(self, pre_text: str, raw_text: str, proposal: "Proposal") -> ReconstructionOutcome:
+        """Apply the guards to a proposal. Deterministic; the only gate between the model and the paste."""
+        base = dict(latency_ms=proposal.latency_ms, model=proposal.model)
+        if proposal.status != "ok":
+            return ReconstructionOutcome(proposal.status, reason="llm_error" if proposal.status != "failed" or proposal.error else "exception", detail=proposal.error, **base)
+        candidate = proposal.candidate
         if not candidate:
-            return ReconstructionOutcome("rejected", reason="unparseable_output", latency_ms=latency, model=model)
+            return ReconstructionOutcome("rejected", reason="unparseable_output", **base)
         if candidate.strip() == pre_text.strip():
-            return ReconstructionOutcome("unchanged", text=candidate, latency_ms=latency, model=model)
-
-        verdict = check_candidate(pre_text, candidate, raw_text=raw_text, vocab_terms=vocab)
+            return ReconstructionOutcome("unchanged", text=candidate, **base)
+        verdict = check_candidate(pre_text, candidate, raw_text=raw_text, vocab_terms=self.vocab_terms())
         if not verdict.ok:
-            return ReconstructionOutcome(
-                "rejected", text=candidate, reason=verdict.reason, detail=verdict.detail, latency_ms=latency, model=model
-            )
-        return ReconstructionOutcome("accepted", text=candidate, latency_ms=latency, model=model)
+            return ReconstructionOutcome("rejected", text=candidate, reason=verdict.reason, detail=verdict.detail, **base)
+        return ReconstructionOutcome("accepted", text=candidate, **base)
+
+    def reconstruct(
+        self,
+        pre_text: str,
+        raw_text: str = "",
+        *,
+        context: Sequence[str] = (),
+        timeout_s: Optional[float] = None,
+    ) -> ReconstructionOutcome:
+        return self.judge(pre_text, raw_text, self.propose(pre_text, context=context, timeout_s=timeout_s))
+
+
+@dataclass
+class Proposal:
+    """What the model said, before the guards have looked at it."""
+
+    status: str  # ok | failed | timeout
+    candidate: str = ""
+    error: str = ""
+    latency_ms: float = 0.0
+    model: str = ""
 
 
 def percentile(values: Sequence[float], q: float) -> float:

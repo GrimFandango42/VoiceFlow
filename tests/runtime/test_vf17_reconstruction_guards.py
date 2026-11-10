@@ -157,11 +157,72 @@ def test_invented_clause_without_numbers_or_names_is_rejected() -> None:
         "word_ratio")
     bad("we should ship the release on schedule and tell everyone about it later today",
         "We should ship the release on schedule and tell everyone about the pricing later today.",
-        "novel_content")
+        "rewritten")
 
 
 def test_empty_candidate_is_rejected() -> None:
     bad("send the notes to the team", "", "empty_output")
+
+
+# --- rewrites observed from a real model (llama3.1:8b) in scripts/vf_eval.py ------------
+# Each of these was ACCEPTED by the first version of the guards and made WER worse.
+
+def test_trailing_off_word_must_not_be_altered() -> None:
+    bad("Everything is on track for the launch next week, and that.",
+        "Everything is on track for the launch next week, and that's.", "tail_changed")
+
+
+def test_dangling_tail_words_must_not_be_dropped() -> None:
+    bad("We should wrap up the review by the end of the.",
+        "We should wrap up the review by the end.", "tail_changed")
+    bad("We should wrap up the review by the end of the.",
+        "We should wrap up the review by the end of.", "tail_changed")
+
+
+def test_content_substitution_is_a_rewrite() -> None:
+    bad("The numbers look fine to me. Is good.", "The numbers look fine to me. They look good.", "rewritten")
+
+
+def test_inflection_change_is_not_a_repair() -> None:
+    bad("I will send a notes tomorrow morning, and then.", "I will send a note tomorrow morning, and then.", "inflection_changed")
+
+
+def test_dropping_a_content_word_and_reordering_is_rejected() -> None:
+    bad("First, thing tomorrow I will send the draft to Maya and the rest of the team.",
+        "First, I will send the draft to Maya and the rest of the team tomorrow.", "content_deleted")
+
+
+def test_adding_a_missing_article_is_still_allowed() -> None:
+    ok("The TypeScript client talks to the FastAPI server over WebSocket.",
+       "The TypeScript client talks to the FastAPI server over a WebSocket.")
+
+
+def test_stutter_and_filler_removal_is_allowed() -> None:
+    ok("so um we should should send the notes to the team today", "So, we should send the notes to the team today.")
+
+
+def test_vocabulary_respell_at_the_very_end_is_allowed() -> None:
+    ok("we ship it with pie installer", "We ship it with PyInstaller.")
+
+
+def test_function_word_swap_mid_sentence_is_allowed_but_not_at_the_tail() -> None:
+    ok("i think that is what we should do about the budget soon", "I think that's what we should do about the budget soon.")
+
+
+def test_swapping_one_small_word_for_another_is_a_rewrite() -> None:
+    # Seen in the VF-17 eval: "Is good." -> "They're good." changed what was said (and the tail word).
+    bad("The numbers look fine to me. Is good.", "The numbers look fine to me. They're good.", "rewritten")
+    bad("we can ship it on friday and then we wait", "We can ship it on Friday, so then we wait.", "rewritten")
+
+
+def test_filler_standing_where_a_small_word_belongs_is_repaired() -> None:
+    ok("send the draft um maya after lunch", "Send the draft to Maya after lunch.")
+
+
+def test_reordering_is_rejected() -> None:
+    result = check_candidate("we will ship the release on friday after the review",
+                             "After the review we will ship the release on Friday.", vocab_terms=VOCAB)
+    assert not result.ok
 
 
 # --- end to end: a hallucinating model never reaches the paste --------------
