@@ -199,10 +199,20 @@ fast path is not started at that moment, so short clips run on the main model on
 until the idle CUDA restore succeeds. That fallback is announced and temporary; I did
 not add a lazy fast-path start for it.
 
-**Risk to watch on first real use:** streaming and checkpoint previews now decode on
-the main model instead of tiny.en. They are short windows on the GPU (~90 ms), but
-they share the one engine with the final transcription; I could not exercise that
-under a live hold without launching the app.
+**Risk to watch on first real use:** streaming (`enable_streaming`) and live-caption
+previews are on by default, so with the fast path off they decode on the main model
+every ~0.85 s while the key is held, windows up to 8 s, beam 2, VAD on. What the code
+shows: `FasterWhisperBackend.transcribe` holds its `RLock` only while it prepares the
+call; the decode itself is consumed outside the lock, so Python does not queue a
+release behind a preview. CTranslate2's single worker (`asr_num_workers=1`) does
+serialize the GPU work, so a release that lands mid-preview should wait for at most
+that one in-flight preview decode. For scale, the main model took 85–95 ms for a
+2–4 s clip (beam 1); an 8 s window at beam 2 is larger and **was not measured**. So
+the ~65 ms gain on short final decodes is offset by an unmeasured worst-case wait of
+roughly one preview decode on release. If dictation feels slower after this lands,
+set `latency_boost_enabled` back to true in `config.json` (the migration will not
+override it) or turn off `enable_streaming` / `live_caption_enabled`. I could not
+exercise this under a live hold without launching the app.
 
 ## Item 6: nearly full card
 
