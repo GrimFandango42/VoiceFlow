@@ -88,6 +88,46 @@ def _pyz_module_names(exe: Path) -> set[str]:
     return names
 
 
+def _top_level_stamp(exe: Path) -> tuple[list[str], dict[str, str]]:
+    """Names in the executable's own archive that contain ``_build_stamp``, and the constants of the first one.
+
+    The order's rebuild gate reads exactly this table (``CArchiveReader(exe).toc``). The stamp module inside the PYZ
+    is invisible to it, so the build also ships the stamp as a runtime hook, which PyInstaller lists by file name.
+    """
+    import marshal
+
+    from PyInstaller.archive.readers import CArchiveReader
+
+    pkg = CArchiveReader(str(exe))
+    names = [n for n in pkg.toc if "_build_stamp" in n]
+    constants: dict[str, str] = {}
+    if names:
+        # Constants only: no builtins, so nothing but `NAME = literal` assignments can run.
+        namespace: dict[str, object] = {"__builtins__": {}}
+        exec(marshal.loads(pkg.extract(names[0])), namespace)  # noqa: S102
+        constants = {k: str(v) for k, v in namespace.items() if k.isupper()}
+    return names, constants
+
+
+def _check_stamp_entry(exe: Path, expected_commit: str | None, report: Report) -> None:
+    try:
+        names, constants = _top_level_stamp(exe)
+    except Exception as exc:  # noqa: BLE001
+        report.add("build_stamp_entry", False, f"cannot read the executable's archive: {type(exc).__name__}: {exc}")
+        return
+    if not names:
+        report.add("build_stamp_entry", False, "no _build_stamp entry in the executable's top-level archive")
+        return
+    commit = constants.get("COMMIT", "")
+    if not commit or commit == "unknown":
+        report.add("build_stamp_entry", False, f"{names[0]} carries no commit ({constants})")
+        return
+    if expected_commit and not (expected_commit.startswith(commit) or commit.startswith(expected_commit)):
+        report.add("build_stamp_entry", False, f"stamp commit {commit} != expected {expected_commit}")
+        return
+    report.add("build_stamp_entry", True, f"{names[0]} commit={commit} built={constants.get('BUILT_AT', '?')}")
+
+
 def _check_vad(internal: Path, report: Report) -> None:
     vad = internal / VAD_RELATIVE
     if not vad.is_file() or vad.stat().st_size == 0:
@@ -315,6 +355,7 @@ def verify(
     _check_native(internal, report)
     _check_cuda(internal, required, allow_cpu_only, report)
     _check_modules(exe, internal, modules, report)
+    _check_stamp_entry(exe, os.environ.get("VOICEFLOW_EXPECT_COMMIT") or None, report)
     if run_frozen:
         report.frozen_report = run_frozen_self_check(exe, work_dir, allow_cpu_only, report)
     return report

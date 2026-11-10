@@ -173,10 +173,22 @@ def test_trailing_off_word_must_not_be_altered() -> None:
 
 
 def test_dangling_tail_words_must_not_be_dropped() -> None:
+    # Dropped words are caught by the deletion rule before the tail rule; either way they must not get through.
     bad("We should wrap up the review by the end of the.",
-        "We should wrap up the review by the end.", "tail_changed")
+        "We should wrap up the review by the end.", "content_deleted")
     bad("We should wrap up the review by the end of the.",
-        "We should wrap up the review by the end of.", "tail_changed")
+        "We should wrap up the review by the end of.", "content_deleted")
+    assert not check_candidate("We should wrap up the review by the end of the.",
+                               "We should wrap up the review by the end of a.", vocab_terms=VOCAB).ok
+
+
+def test_a_conjunction_may_not_be_deleted_when_splitting_a_run_on() -> None:
+    # Seen in the VF-17 eval (pauses[2]): "thanks everyone and see you there" -> "Thanks everyone, see you there."
+    bad("Please confirm your dietary needs by the end of the week, thanks everyone and see you there.",
+        "Please confirm your dietary needs by the end of the week. Thanks everyone, see you there.", "content_deleted")
+    # ...while splitting it with punctuation and casing alone is exactly the repair we want.
+    ok("Please confirm your dietary needs by the end of the week, thanks everyone and see you there.",
+       "Please confirm your dietary needs by the end of the week. Thanks everyone, and see you there.")
 
 
 def test_content_substitution_is_a_rewrite() -> None:
@@ -192,9 +204,22 @@ def test_dropping_a_content_word_and_reordering_is_rejected() -> None:
         "First, I will send the draft to Maya and the rest of the team tomorrow.", "content_deleted")
 
 
-def test_adding_a_missing_article_is_still_allowed() -> None:
-    ok("The TypeScript client talks to the FastAPI server over WebSocket.",
-       "The TypeScript client talks to the FastAPI server over a WebSocket.")
+def test_inserting_an_article_is_rejected() -> None:
+    # Review finding 2: the eval caught "over WebSocket" -> "over a WebSocket" (WER 0.0% -> 2.0%). a/an/the can't be
+    # recovered from the audio, so a determiner is never inserted, anywhere.
+    bad("The TypeScript client talks to the FastAPI server over WebSocket.",
+        "The TypeScript client talks to the FastAPI server over a WebSocket.", "determiner_inserted")
+    bad("we should send notes to the team today", "We should send the notes to the team today.", "determiner_inserted")
+
+
+def test_no_word_is_inserted_beside_a_protected_term_number_or_name() -> None:
+    bad("deploy it to Kubernetes tonight", "Deploy it to and Kubernetes tonight.", "inserted_beside_protected")
+    bad("send the draft to Maya after lunch", "Send the draft to and Maya after lunch.", "inserted_beside_protected")
+    bad("we have five people on the call today", "We have of five people on the call today.", "inserted_beside_protected")
+
+
+def test_a_conjunction_between_ordinary_words_may_still_be_added() -> None:
+    ok("we finished the review then sent the notes to everyone", "We finished the review, and then sent the notes to everyone.")
 
 
 def test_stutter_and_filler_removal_is_allowed() -> None:
@@ -322,3 +347,36 @@ def test_should_run_policy() -> None:
     assert rec.should_run(PRE, code_mode=True) == (False, "destination_excluded")
     assert rec.should_run(PRE, destination_profile="terminal") == (False, "destination_excluded")
     assert rec.should_run("x " * 1500) == (False, "too_long")
+
+
+# --- review finding 3: the RAW ASR text is the reference, not only the pre-text ---------------------------------
+
+def test_a_token_already_missing_from_pre_text_cannot_stay_missing_from_the_candidate() -> None:
+    raw = "tell Alice that the total was 42 and the file is C:\\work\\secret.txt"
+    pre = "tell that the total was and the file is"  # text processing lost all three
+    cand = "Tell that the total was, and the file is."
+    result = check_candidate(pre, cand, raw_text=raw, vocab_terms=VOCAB)
+    assert not result.ok
+    assert result.reason == "raw_token_lost", result
+    for lost in ("Alice", "42", "C:\\work\\secret.txt"):
+        assert lost in result.detail, (lost, result.detail)
+
+
+@pytest.mark.parametrize("lost_from_candidate", ["Alice", "42", "C:\\work\\secret.txt"])
+def test_each_raw_token_class_is_enforced_on_its_own(lost_from_candidate: str) -> None:
+    raw = "tell Alice that the total was 42 in C:\\work\\secret.txt today"
+    pre = raw.replace(lost_from_candidate, "").replace("  ", " ")
+    cand = pre.strip()[0].upper() + pre.strip()[1:] + "."
+    result = check_candidate(pre, cand, raw_text=raw, vocab_terms=VOCAB)
+    assert not result.ok and result.reason == "raw_token_lost", result
+
+
+def test_normalised_spelled_numbers_are_not_mistaken_for_lost_tokens() -> None:
+    raw = "the shuttle leaves at nine and the lunch is catered on site"
+    pre = "the shuttle leaves at 9 and the lunch is catered on site"
+    ok(pre, "The shuttle leaves at 9, and the lunch is catered on site.", raw_text=raw)
+
+
+def test_raw_tokens_that_survive_pass() -> None:
+    raw = "tell Alice that the total was 42 in C:\\work\\secret.txt today"
+    ok(raw, "Tell Alice that the total was 42 in C:\\work\\secret.txt today.", raw_text=raw)

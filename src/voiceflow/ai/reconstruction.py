@@ -269,16 +269,43 @@ def _spelling_close(a: str, b: str) -> bool:
 
 
 def _droppable(word: str, pre_n: Sequence[str], idx: int) -> bool:
-    """Words a form-repair may delete: function words, fillers, and immediate stutters."""
-    if word in FUNCTION_NORMS or word in FILLERS:
+    """Words a form-repair may delete: filler sounds and immediate stutters ("should should", "the the").
+
+    A real function word is NOT deletable: "thanks everyone and see you there" -> "thanks everyone, see you there"
+    reads fine and is still not what was said (the evaluator scored it as a WER regression). Splitting a run-on is
+    done with punctuation and casing, which the word-level diff does not see.
+    """
+    if word in FILLERS:
         return True
     return (idx > 0 and pre_n[idx - 1] == word) or (idx + 1 < len(pre_n) and pre_n[idx + 1] == word)
 
 
-def _structural_diff(pre_words: Sequence[str], cand_words: Sequence[str], *, vocab_norms: Set[str]) -> GuardResult:
+#: Determiners are the one kind of "dropped function word" the speaker's choice cannot be recovered for:
+#: "over WebSocket" -> "over a WebSocket" is grammatical and still not what was said. Never inserted.
+DETERMINERS: frozenset[str] = frozenset({"a", "an", "the"})
+
+
+def _special_norms(pre: str, vocab_norms: Set[str]) -> Set[str]:
+    """Normalised words that make up a protected token, proper noun, number or vocabulary term in ``pre``.
+
+    A small word wedged next to one of these changes what was said about it, so no word may be inserted beside them.
+    """
+    special: Set[str] = set(vocab_norms)
+    for token in protected_tokens(pre):
+        special.update(_norm(w) for w in words(token))
+    for noun in proper_nouns(pre):
+        special.add(_norm(noun))
+    for number in number_tokens(pre):
+        special.add(_norm(number))
+    return special
+
+
+def _structural_diff(
+    pre_words: Sequence[str], cand_words: Sequence[str], *, vocab_norms: Set[str], special_norms: Optional[Set[str]] = None
+) -> GuardResult:
     """Word-level diff of candidate against the pre-text, whitelisting only repairs of FORM.
 
-    Allowed: insert/delete function words and fillers, delete a stutter, swap one
+    Allowed: insert (not determiners, not beside a protected term) a small function word, delete a filler or a stutter, swap one
     function word for another, respell a word/phrase into a close spelling or
     phonetic neighbour (a vocabulary repair). Everything else - deleting a content
     word, inserting one, reordering, swapping a content word for a different one,
@@ -298,6 +325,12 @@ def _structural_diff(pre_words: Sequence[str], cand_words: Sequence[str], *, voc
             bad = [w for w in added if w not in FUNCTION_NORMS and w not in vocab_norms]
             if bad:
                 return GuardResult(False, "novel_content", ",".join(bad[:5]))
+            determiners = [w for w in added if w in DETERMINERS]
+            if determiners:
+                return GuardResult(False, "determiner_inserted", ",".join(determiners))
+            neighbours = [pre_n[k] for k in (i1 - 1, i1) if 0 <= k < len(pre_n)]
+            if special_norms and any(n in special_norms for n in neighbours) and not all(w in vocab_norms for w in added):
+                return GuardResult(False, "inserted_beside_protected", " ".join(added) + " near " + " ".join(neighbours))
             inserted_fn += len(added)
         elif tag == "delete":
             bad = [w for k, w in enumerate(removed) if not _droppable(w, pre_n, i1 + k)]
@@ -327,6 +360,34 @@ def _structural_diff(pre_words: Sequence[str], cand_words: Sequence[str], *, voc
         if cand_n[-1] not in vocab_norms:
             return GuardResult(False, "tail_changed", f"{pre_n[-1]}->{cand_n[-1]}")
     return GuardResult(True)
+
+
+def _raw_tokens_lost(raw: str, candidate: str) -> List[str]:
+    """Raw-text digits, protected tokens and proper nouns that the candidate no longer contains.
+
+    Spelled-out numbers are deliberately not checked here: text processing normalises them (nine -> 9) before the
+    reconstruction stage, and the pre-text number guard already pins the candidate to that.
+    """
+    if not raw.strip():
+        return []
+    cand_lower = candidate.lower()
+    cand_words_norm = {_norm(w) for w in words(candidate)}
+    cand_digits = {n.replace(",", "").rstrip("%") for n in _DIGIT_NUMBER.findall(candidate)}
+    protected = list(protected_tokens(raw))
+    lost: List[str] = []
+    for token in protected:
+        if token.lower() not in cand_lower:
+            lost.append(token)
+    for m in _DIGIT_NUMBER.finditer(raw):
+        if any(m.group(0).rstrip(",") in tok for tok in protected):
+            continue  # a digit run inside v3.2.1 / a file name is covered by the protected-token check
+        number = m.group(0).replace(",", "").rstrip("%")
+        if number not in cand_digits:
+            lost.append(m.group(0))
+    for noun in proper_nouns(raw):
+        if _norm(noun) not in cand_words_norm and noun.lower() not in cand_lower:
+            lost.append(noun)
+    return lost
 
 
 def check_candidate(
@@ -377,6 +438,13 @@ def check_candidate(
     if invented:
         return GuardResult(False, "protected_token_invented", ",".join(invented[:5]))
 
+    # --- the RAW ASR text is the reference for what was actually said. The pre-text may already have lost a token
+    # (a text-processing bug must not let the model "agree" with it), so digits, protected tokens and proper nouns
+    # that were in the raw have to be in the candidate too.
+    raw_lost = _raw_tokens_lost(raw_text or "", cand)
+    if raw_lost:
+        return GuardResult(False, "raw_token_lost", ",".join(raw_lost[:5]))
+
     # --- proper nouns: none dropped or respelled
     lost_nouns = sorted((proper_nouns(pre) - proper_nouns(cand)).elements())
     if lost_nouns:
@@ -399,7 +467,8 @@ def check_candidate(
         return GuardResult(False, "new_entity", word)
 
     # --- structural diff: only form repairs are allowed (the part that is hardest to fake with a prompt)
-    verdict = _structural_diff(pre_words, cand_words, vocab_norms={_norm(w) for term in vocab_terms for w in words(term)})
+    vocab_norms = {_norm(w) for term in vocab_terms for w in words(term)}
+    verdict = _structural_diff(pre_words, cand_words, vocab_norms=vocab_norms, special_norms=_special_norms(pre, vocab_norms))
     if not verdict.ok:
         return verdict
 
@@ -413,8 +482,9 @@ def check_candidate(
 SYSTEM_PROMPT = (
     "You repair the FORM of dictated text. You never change its meaning and you never change the words the "
     "speaker chose.\n"
-    "Allowed: fix capitalisation and punctuation; split run-on sentences; add a missing small word (a, the, to, of, "
-    "and) ONLY where the sentence is broken without it; remove stutters, immediate repeats and filler sounds (um, uh); replace a word that is clearly a "
+    "Allowed: fix capitalisation and punctuation; split run-on sentences; add a missing connecting word (and, to, of, "
+    "but) ONLY where the sentence is broken without it - never add a, an or the, and never add a word next to a name, "
+    "number or technical term; remove stutters, immediate repeats and filler sounds (um, uh), but never delete any other word, including and, so, but or to - join or split sentences with punctuation instead; replace a word that is clearly a "
     "mis-hearing of a term in the VOCABULARY list or of a term used earlier in the same text.\n"
     "Forbidden: replacing, reordering, paraphrasing or deleting any other word; changing singular/plural or verb "
     "forms; adding facts, names, numbers, places or ideas; changing any number, name, URL, file path, or code-like "

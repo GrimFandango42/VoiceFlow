@@ -310,12 +310,13 @@ def build_audio(utt: Utterance, tts: Tts, seed: int) -> np.ndarray:
 # Pipeline stages (the same functions the app calls)
 # --------------------------------------------------------------------------- #
 
-def make_cfg(tail_protect_ms: int, tail_pad_ms: int = 0):
+def make_cfg(tail_protect_ms: int, tail_pad_ms: int = 0, tail_lift_db: float = 0.0):
     from voiceflow.core.config import Config
 
     cfg = Config()
     cfg.pause_compaction_tail_protect_ms = tail_protect_ms
     cfg.asr_tail_pad_ms = tail_pad_ms
+    cfg.asr_tail_lift_db = tail_lift_db
     return cfg
 
 
@@ -323,9 +324,14 @@ def prepare_audio(audio: np.ndarray, cfg) -> Tuple[np.ndarray, float]:
     from voiceflow.core.audio_preprocessing import AudioPreprocessor
     from voiceflow.ui.cli_enhanced import EnhancedApp
 
+    from voiceflow.core.asr_engine import lift_quiet_tail
+
     processed = AudioPreprocessor(cfg).process(audio)
     compacted = EnhancedApp._compact_pauses(types.SimpleNamespace(cfg=cfg), processed)
-    return compacted, 100.0 * (1.0 - len(compacted) / max(1, len(processed)))
+    reduction = 100.0 * (1.0 - len(compacted) / max(1, len(processed)))
+    # ASREngine.transcribe applies the same leveler to whatever it is handed; the harness calls the model
+    # directly, so it mirrors that step here (0 dB = off = base behaviour).
+    return lift_quiet_tail(compacted, SR, max_gain_db=float(cfg.asr_tail_lift_db)), reduction
 
 
 class Asr:
@@ -422,7 +428,7 @@ class Recon:
 
 def run_scenario(key: str, tts: Tts, asr: Asr, recon: Optional[Recon]) -> Dict[str, Any]:
     title, utterances = SCENARIOS[key]
-    before_cfg, after_cfg = make_cfg(0), make_cfg(1500)
+    before_cfg, after_cfg, protect_cfg = make_cfg(0), make_cfg(1500, tail_lift_db=9.0), make_cfg(1500)
     rows: List[Dict[str, Any]] = []
     for n, utt in enumerate(utterances):
         audio = build_audio(utt, tts, seed=1000 + n)
@@ -443,7 +449,10 @@ def run_scenario(key: str, tts: Tts, asr: Asr, recon: Optional[Recon]) -> Dict[s
             "legible_before": legibility(pre_b),
             "legible_after_audio": legibility(pre_a),
         }
-        if key == "tail":  # pad=N column: the knob that did not help
+        if key == "tail":  # ablations: protection without the lift; the pad=N knob that did not help
+            a_p, _ = prepare_audio(audio, protect_cfg)
+            prot = text_pipeline(asr.transcribe(a_p), len(a_p) / SR)
+            row["wer_protect"], row["tail_protect"] = wer(utt.reference, prot), tail_kept(utt.reference, prot)
             padded = text_pipeline(asr.transcribe(a_b, pad_ms=400), len(a_b) / SR)
             row["wer_pad400"], row["tail_pad400"] = wer(utt.reference, padded), tail_kept(utt.reference, padded)
             both = text_pipeline(asr.transcribe(a_a, pad_ms=400), len(a_a) / SR)
@@ -463,7 +472,7 @@ def run_scenario(key: str, tts: Tts, asr: Asr, recon: Optional[Recon]) -> Dict[s
 
     return {"key": key, "title": title, "n": len(rows), "rows": rows, **{
         k: mean(k) for k in (
-            "wer_before", "wer_after_audio", "wer_after", "wer_pad400", "tail_before", "tail_after_audio", "tail_after",
+            "wer_before", "wer_after_audio", "wer_after", "wer_protect", "tail_protect", "wer_pad400", "tail_before", "tail_after_audio", "tail_after",
             "tail_pad400", "wer_both", "tail_both", "legible_before", "legible_after_audio", "legible_after",
         )}}
 
@@ -637,6 +646,41 @@ def print_table(results: List[Dict[str, Any]], have_llm: bool) -> str:
     return "\n".join(lines)
 
 
+def acceptance_failures(results: List[Dict[str, Any]], have_llm: bool) -> List[str]:
+    """VF-17 acceptance gates over the per-fixture rows. Empty list = pass.
+
+    - no fixture may get a worse WER, lose a tail word it used to keep, or become less legible;
+    - the "utterance ends in a short word" scenario must retain 100 % of its tail words;
+    - no scenario's mean WER may rise.
+    "After" is the full pipeline when the reconstruction columns were measured, else the audio side only.
+    """
+    fails: List[str] = []
+    eps = 1e-9
+    for r in results:
+        full = bool(have_llm and r["rows"] and "wer_after" in r["rows"][0])
+        if full:
+            wer_f, tail_f, leg_f = "wer_after", "tail_after", "legible_after"
+        else:
+            wer_f, tail_f, leg_f = "wer_after_audio", "tail_after_audio", "legible_after_audio"
+
+        def mean(field_name: str) -> float:
+            return float(np.mean([row[field_name] for row in r["rows"]])) if r["rows"] else 0.0
+
+        for i, row in enumerate(r["rows"]):
+            tag = f"{r['key']}[{i}]"
+            if row[wer_f] > row["wer_before"] + eps:
+                fails.append(f"{tag}: WER regressed {pct(row['wer_before'])} -> {pct(row[wer_f])}")
+            if row["tail_before"] and not row[tail_f]:
+                fails.append(f"{tag}: tail word lost that the base kept")
+            if r["key"] != "tail" and row[leg_f] < row["legible_before"] - eps:
+                fails.append(f"{tag}: legibility regressed {pct(row['legible_before'])} -> {pct(row[leg_f])}")
+        if r["key"] == "tail" and mean(tail_f) < 1.0 - eps:
+            fails.append(f"tail: retention {pct(mean(tail_f))} < 100.0%")
+        if mean(wer_f) > mean("wer_before") + eps:
+            fails.append(f"{r['key']}: mean WER rose {pct(mean('wer_before'))} -> {pct(mean(wer_f))}")
+    return fails
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scenarios", default="pauses,fast,noise,technical,tail", help="comma list of: " + ",".join(SCENARIOS))
@@ -644,6 +688,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--no-llm", action="store_true", help="skip the reconstruction columns (no Ollama needed)")
     ap.add_argument("--llm-model", default="", help="Ollama model (default: auto-pick a small instruct model)")
     ap.add_argument("--corpus-limit", type=int, default=12, help="real-history utterances to run reconstruction on")
+    ap.add_argument("--no-gate", action="store_true", help="print the acceptance verdict but always exit 0")
     ap.add_argument("--no-corpus", action="store_true", help="skip the real-corpus replay")
     ap.add_argument("--cache-dir", default=str(Path(tempfile.gettempdir()) / "voiceflow_vf_eval"))
     ap.add_argument("--out", default="", help="write the full JSON result here")
@@ -698,9 +743,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("| config | WER | tail retention |\n|---|---|---|")
         for label, w, t in (
             ("base (no protection, no pad)", "wer_before", "tail_before"),
-            ("tail protection (this branch)", "wer_after_audio", "tail_after_audio"),
+            ("tail protection only (compaction keeps the last 1.5 s)", "wer_protect", "tail_protect"),
+            ("tail protection + quiet-tail lift (this branch)", "wer_after_audio", "tail_after_audio"),
             ("pad 400 ms only", "wer_pad400", "tail_pad400"),
-            ("tail protection + pad 400 ms", "wer_both", "tail_both"),
+            ("protection + lift + pad 400 ms", "wer_both", "tail_both"),
         ):
             print(f"| {label} | {fmt(tail.get(w))} | {fmt(tail.get(t))} |")
     print("\nwindow switch:", json.dumps(window))
@@ -709,11 +755,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if paths:
         print("\nadded latency, reconstruction paths:", json.dumps(paths, indent=2))
     print(f"\n(elapsed {time.time() - started:.0f}s)")
+    failures = acceptance_failures(results, have_llm)
+    if failures:
+        print("\nACCEPTANCE: FAIL")
+        for f in failures:
+            print(f"  - {f}")
+    else:
+        print("\nACCEPTANCE: PASS (no fixture regressed; tail retention 100% where measured)")
 
     if args.out:
         Path(args.out).write_text(json.dumps({"results": results, "window": window, "corpus": corpus, "paths": paths,
-                                              "table": table}, indent=2, default=str), encoding="utf-8")
-    return 0
+                                              "table": table, "acceptance_failures": failures}, indent=2, default=str), encoding="utf-8")
+    return 0 if (args.no_gate or not failures) else 1
 
 
 if __name__ == "__main__":

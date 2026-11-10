@@ -170,34 +170,83 @@ def test_latency_tracker_percentiles() -> None:
 # replace-last-paste: the injector must refuse whenever deleting could hit the wrong text
 # ---------------------------------------------------------------------------
 
+FOCUS = {"active": 77, "focus": 88, "caret_hwnd": 88, "caret": (10, 20, 11, 36)}
+
+
 @pytest.fixture
 def injector(monkeypatch):
     from voiceflow.integrations import inject as inject_mod
 
     sent: list[str] = []
-    pasted: list[str] = []
     clipboard: list[str] = []
     monkeypatch.setattr(inject_mod.keyboard, "send", lambda seq: sent.append(seq), raising=False)
     monkeypatch.setattr(inject_mod.keyboard, "is_pressed", lambda k: False, raising=False)
     monkeypatch.setattr(inject_mod.pyperclip, "copy", lambda s: clipboard.append(s))
     monkeypatch.setattr(inject_mod.pyperclip, "paste", lambda: "")
 
-    cfg = Config(paste_injection=True, restore_clipboard=False, press_enter_after_paste=False, min_inject_interval_ms=0)
+    cfg = Config(paste_injection=True, restore_clipboard=False, press_enter_after_paste=False, min_inject_interval_ms=0,
+                 clipboard_restore_delay_ms=0)
     inj = inject_mod.ClipboardInjector(cfg)
     inj._key_counter_live = True
+    inj._mouse.live = True  # no OS hook in tests: the counter is driven by hand
+    inj._settle_s = 0.0
     inj._foreground_window = lambda: 4242  # type: ignore[method-assign]
     inj._target_hwnd = None
-    monkeypatch.setattr(inj, "paste_text", lambda text: (pasted.append(text) or True))
-    inj._last_paste = {"text": PRE, "hwnd": 4242, "ts": time.time(), "keys": 0}
-    inj.sent, inj.pasted, inj.clipboard = sent, pasted, clipboard
+    inj.focus_now = dict(FOCUS)
+    inj._focus_snapshot = lambda: dict(inj.focus_now) if inj.focus_now is not None else None  # type: ignore[method-assign]
+    inj._last_paste = {"text": PRE, "hwnd": 4242, "ts": time.time(), "keys": 0, "clicks": 0, "focus": dict(FOCUS)}
+    inj.sent, inj.clipboard = sent, clipboard
     return inj
 
 
 def test_replace_swaps_text_with_exact_backspace_count(injector) -> None:
     assert injector.replace_last_paste(PRE, GOOD) == "replaced"
     assert injector.sent.count("backspace") == len(PRE)
-    assert injector.pasted == [GOOD]
+    assert injector.clipboard[-1] == GOOD  # staged on the clipboard...
+    assert injector.sent[-1] == injector.cfg.paste_shortcut  # ...then pasted after the deletions
     assert injector.last_paste_text() == GOOD
+
+
+def test_replacement_is_staged_before_anything_is_deleted(injector, monkeypatch) -> None:
+    from voiceflow.integrations import inject as inject_mod
+
+    order: list[str] = []
+    monkeypatch.setattr(inject_mod, "_clipboard_copy_with_retry", lambda text, *a, **k: order.append("stage"))
+    monkeypatch.setattr(inject_mod.keyboard, "send", lambda seq: order.append(seq), raising=False)
+    assert injector.replace_last_paste(PRE, GOOD) == "replaced"
+    assert order[0] == "stage"
+    assert order[1:] == ["backspace"] * len(PRE) + [injector.cfg.paste_shortcut]
+
+
+def test_nothing_is_deleted_when_the_replacement_cannot_be_staged(injector, monkeypatch) -> None:
+    from voiceflow.integrations import inject as inject_mod
+
+    def boom(text, *a, **k):
+        raise RuntimeError("clipboard is locked")
+
+    monkeypatch.setattr(inject_mod, "_clipboard_copy_with_retry", boom)
+    monkeypatch.setattr(inject_mod.time, "sleep", lambda s: None)
+    assert injector.replace_last_paste(PRE, GOOD).startswith("failed:")
+    assert injector.sent == []  # not a single backspace
+
+
+def test_state_that_changes_while_the_replacement_is_staged_aborts_before_deleting(injector, monkeypatch) -> None:
+    from voiceflow.integrations import inject as inject_mod
+
+    def stage_then_user_clicks(text, *a, **k):
+        injector.clipboard.append(text)
+        injector._mouse.count += 1  # the user clicked during the staging delay
+
+    monkeypatch.setattr(inject_mod, "_clipboard_copy_with_retry", stage_then_user_clicks)
+    assert injector.replace_last_paste(PRE, GOOD) == "clipboard:clicked_since_paste"
+    assert "backspace" not in injector.sent
+    assert injector.clipboard[-1] == GOOD
+
+
+def test_typing_mode_never_replaces_in_place(injector) -> None:
+    injector.cfg.paste_injection = False
+    assert injector.replace_last_paste(PRE, GOOD) == "clipboard:typing_mode"
+    assert "backspace" not in injector.sent
 
 
 @pytest.mark.parametrize(
@@ -210,6 +259,15 @@ def test_replace_swaps_text_with_exact_backspace_count(injector) -> None:
         (lambda i: setattr(i, "_key_counter_live", False), "keystroke_tracking_unavailable"),
         (lambda i: setattr(i.cfg, "press_enter_after_paste", True), "enter_was_sent"),
         (lambda i: i._last_paste.update(text="something else"), "text_mismatch"),
+        # review finding 4: same window, same keystroke count -- the mouse or focus moved
+        (lambda i: setattr(i._mouse, "count", 1), "clicked_since_paste"),
+        (lambda i: setattr(i._mouse, "live", False), "mouse_tracking_unavailable"),
+        (lambda i: i.focus_now.update(focus=99, caret_hwnd=99), "focus_changed"),
+        (lambda i: i.focus_now.update(active=5), "focus_changed"),
+        (lambda i: i.focus_now.update(caret=(300, 400, 301, 416)), "caret_moved"),
+        (lambda i: i.focus_now.update(caret=None), "caret_moved"),
+        (lambda i: setattr(i, "focus_now", None), "focus_unverifiable"),
+        (lambda i: i._last_paste.update(focus=None), "paste_not_settled"),
     ],
 )
 def test_replace_refuses_and_falls_back_to_clipboard(injector, mutate, reason) -> None:
@@ -217,8 +275,44 @@ def test_replace_refuses_and_falls_back_to_clipboard(injector, mutate, reason) -
     result = injector.replace_last_paste(PRE, GOOD)
     assert result == f"clipboard:{reason}"
     assert "backspace" not in injector.sent  # nothing was deleted
-    assert injector.pasted == []
     assert GOOD in injector.clipboard[-1]  # but the improved text is on the clipboard
+
+
+def test_apps_without_a_system_caret_are_still_protected_by_focus_and_click_tracking(injector) -> None:
+    injector._last_paste["focus"] = {"active": 77, "focus": 88, "caret_hwnd": 0, "caret": None}
+    injector.focus_now = {"active": 77, "focus": 88, "caret_hwnd": 0, "caret": None}
+    assert injector.replace_last_paste(PRE, GOOD) == "replaced"
+    injector._last_paste = {"text": GOOD, "hwnd": 4242, "ts": time.time(), "keys": 0, "clicks": 0,
+                            "focus": {"active": 77, "focus": 88, "caret_hwnd": 0, "caret": None}}
+    injector._mouse.note(0x0201)  # a left click lands in the document
+    injector.sent.clear()
+    assert injector.replace_last_paste(GOOD, PRE) == "clipboard:clicked_since_paste"
+    assert "backspace" not in injector.sent
+
+
+def test_mouse_tracker_counts_button_presses_only() -> None:
+    from voiceflow.integrations.inject import _MouseClickTracker
+
+    t = _MouseClickTracker()
+    for message in (0x0200, 0x0202, 0x0205, 0x020A):  # move, left up, right up, wheel
+        t.note(message)
+    assert t.count == 0
+    for message in (0x0201, 0x0204, 0x0207, 0x020B):  # left, right, middle, x-button down
+        t.note(message)
+    assert t.count == 4
+
+
+def test_settle_snapshot_is_recorded_only_if_the_user_did_nothing(injector) -> None:
+    injector._record_last_paste("hello world")
+    record = injector._last_paste
+    injector._settle_last_paste(record)
+    assert record["focus"] == FOCUS
+
+    injector._record_last_paste("hello again")
+    record = injector._last_paste
+    injector._mouse.count += 1
+    injector._settle_last_paste(record)
+    assert record["focus"] is None  # clicked before it settled: a replace will be refused
 
 
 def test_replace_refuses_multiline(injector) -> None:

@@ -19,7 +19,7 @@ the two orders do not contradict each other: anything VF-12 would call a rewrite
 
 | Item | Change | Where |
 |---|---|---|
-| 1 Tail loss | Pause compaction's "blip" filter (runs < 120 ms are zeroed) deleted a soft last word that followed a pause. The last 1500 ms now bypass it (`pause_compaction_tail_protect_ms`; `0` = old behaviour). A trailing-silence pad (`asr_tail_pad_ms`) was measured and did **not** help, so it ships off. | `core/asr_engine.py`, `core/config.py` |
+| 1 Tail loss | (a) Pause compaction's "blip" filter (runs < 120 ms are zeroed) deleted a soft last word that followed a pause: the last 1500 ms now bypass it (`pause_compaction_tail_protect_ms`; `0` = old behaviour). (b) A speaker who lets the last word fade ("...of the", "...for now") is levelled before ASR: speech that trails the last full-level speech and is > 6 dB under the clip's speech level is lifted toward it by at most 9 dB (`asr_tail_lift_db`; `0` = off), never touching a sample outside the lifted frames. A trailing-silence pad (`asr_tail_pad_ms`) was measured and did **not** help, so it ships off. | `core/asr_engine.py`, `core/config.py` |
 | 2 Tuning log | `tuning_log.jsonl` in `%LOCALAPPDATA%\VoiceFlow`: untruncated (cap 8000 chars) raw / pasted / reconstructed / user-edited text plus metadata. Local only, never uploaded (VF-03). Rotates at 2000 entries or 30 days into one previous generation. | `ai/tuning_log.py` |
 | 3 Reconstruction | A local Ollama model (CPU only: `num_gpu=0`, half the cores; the GPU belongs to Reachy, OPS-07) proposes a repaired version after the normal text pipeline. | `ai/reconstruction.py`, `ai/reconstruction_runtime.py` |
 | 4 Guards | `check_candidate` is the only gate between the model and the paste. Any failure, timeout or Ollama error pastes the pre-reconstruction text unchanged and is logged. | `ai/reconstruction.py` |
@@ -32,15 +32,19 @@ the two orders do not contradict each other: anything VF-12 would call a rewrite
 A candidate is accepted only if **all** of these hold, checked on the text the user would otherwise get:
 
 1. Every number, URL, file path and code-ish token (CamelCase, snake_case, extensions, dotted names)
-   in the input is still there, verbatim, the same number of times.
+   in the input is still there, verbatim, the same number of times. **The raw ASR text is checked too**: digits,
+   protected tokens and proper nouns that were in the raw must be in the candidate even if text processing had
+   already lost them (spelled-out numbers are exempt there because text processing normalises them, `nine` -> `9`).
 2. Every capitalised proper noun in the input is still there; none appears that was not in the input
    or the vocabulary (sentence-initial function words excepted).
 3. Word count stays within 0.8x-1.4x.
-4. A word-level diff against the input only contains repairs of form: insert/delete function words and
-   fillers, delete an immediate stutter, respell a word or phrase into a close spelling or a vocabulary
-   term (`pie installer` -> `PyInstaller`, `that is` -> `that's`). Deleting, inserting or swapping a
-   content word, reordering, inflection changes (`note` -> `notes`) and swapping one small word for
-   another (`is good` -> `they're good`, found in the first evaluation run) are rejected.
+4. A word-level diff against the input only contains repairs of form: insert a small connecting word (never
+   `a`/`an`/`the`, and never beside a name, number, protected token or vocabulary term), delete a filler sound
+   or an immediate stutter, respell a word or phrase into a close spelling or a vocabulary term (`pie installer`
+   -> `PyInstaller`, `that is` -> `that's`). Deleting any other word (including `and`: "thanks everyone and see you
+   there" -> "thanks everyone, see you there"), inserting or swapping a content word, reordering, inflection
+   changes (`note` -> `notes`), inserting a determiner (`over WebSocket` -> `over a WebSocket`) and swapping one
+   small word for another (`is good` -> `they're good`) are rejected. Each of those was seen in an evaluation run.
 5. The final word is never changed (unless it was a filler or was respelled into a vocabulary term):
    losing the tail is the defect this order exists to fix.
 6. Cap on the share of inserted small words (max(2, 15 % of the words)).
@@ -54,9 +58,23 @@ end-to-end fake-Ollama test proving the raw text is what gets pasted.
 `reconstruction_mode: auto` (default) pastes the pre-reconstruction text immediately and goes
 synchronous only after at least 5 timed runs have p95 <= `reconstruction_budget_ms` (800). Otherwise an
 accepted result becomes a *pending improvement*: overlay note, tray entry **Replace last paste with
-improved version**, and `Ctrl+Alt+R` (`replace_last_paste_hotkey`). The swap is refused, and the improved
-text goes to the clipboard instead, unless the same window is still focused, nothing was typed since,
-and the paste is recent (`replace_last_paste_max_age_s`), single-line and unchanged.
+improved version**, and `Ctrl+Alt+R` (`replace_last_paste_hotkey`).
+
+The in-place swap deletes characters, so it happens only when the app can *prove* the caret is where the paste left
+it, and otherwise copies the improved text to the clipboard instead (`clipboard:<reason>`):
+
+- same foreground window, **same focused control and same caret position** (`GetGUIThreadInfo`, snapshotted ~0.4 s
+  after the paste once the target has handled it; apps with no system caret, such as Chromium or Electron, fall back
+  to the focus handle plus the two counters below);
+- no key press since the paste (global key counter) and **no mouse click since the paste** (system-wide low-level
+  mouse hook, `_MouseClickTracker`; if the hook is unavailable the swap is refused);
+- the paste is recent, single-line, unchanged, was not followed by Enter, and the app is in paste mode (typing mode
+  cannot stage a replacement, so it never swaps in place);
+- **the replacement is staged on the clipboard first and every condition is re-checked before the first backspace**:
+  a click during the staging delay, or a clipboard that cannot be written, deletes nothing.
+
+The tray entry is a mouse click away from the document, so in practice it takes the clipboard path; the hotkey is the
+in-place path. Not exercised against real applications here: see the report's "Not tested" list.
 
 On this machine a CPU-only 8B model is ~6 s per call, far over 800 ms, so in practice **this is the async
 path**: the paste is never slower than before. A small model (<= 3B) may make the sync path eligible; the
@@ -87,32 +105,53 @@ scores only, never dictation text).
 
 ### Measured results (2026-11-10, `small.en` CPU + `llama3.1:8b` on CPU, TTS speech)
 
+`python scripts/vf_eval.py` exits non-zero when any fixture regresses (WER up, a tail word the base kept is lost, or
+legibility down), when a scenario's mean WER rises, or when the tail scenario is below 100 % retention. The run below
+printed `ACCEPTANCE: PASS`.
+
 | scenario | n | WER before | WER after | tail before | tail after | legible before | legible after |
 |---|---|---|---|---|---|---|---|
 | long dictation, 5-20 s pauses | 3 | 2.9% | 2.9% | 100.0% | 100.0% | 55.6% | 66.7% |
 | fast speech | 5 | 4.6% | 4.6% | 100.0% | 100.0% | 100.0% | 100.0% |
 | background noise (SNR 6 dB) | 5 | 0.0% | 0.0% | 100.0% | 100.0% | 100.0% | 100.0% |
-| dense technical vocabulary | 5 | 0.0% | 2.0% | 100.0% | 100.0% | 100.0% | 100.0% |
-| utterance ends in a short word | 18 | 4.1% | 2.7% | 77.8% | 88.9% | n/a | n/a |
+| dense technical vocabulary | 5 | 0.0% | 0.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| utterance ends in a short word | 18 | 4.1% | 0.6% | 77.8% | 100.0% | n/a | n/a |
+
+Tail scenario, audio side only (no reconstruction):
+
+| config | WER | tail retention |
+|---|---|---|
+| base (no protection, no pad) | 4.1% | 77.8% |
+| compaction keeps the last 1.5 s | 2.7% | 88.9% |
+| + quiet-tail lift, 9 dB (this branch) | 0.6% | 100.0% |
+| pad 400 ms only | 3.9% | 83.3% |
+| protection + lift + pad 400 ms | 1.2% | 100.0% |
 
 Read it honestly:
 
-- **Tail words** are the clear win (77.8 % -> 88.9 %; WER 4.1 % -> 2.7 %). The remaining misses are the
-  -20 dB-below-the-sentence fixtures, which small.en cannot decode with or without this change.
-- **Legibility** improves where there are run-ons (55.6 % -> 66.7 %: one of three long dictations had its comma
-  splices fixed; the other was returned unchanged by the model). It saturates at 100 % elsewhere because
-  Whisper already punctuates clean TTS speech.
-- **WER does not improve** from reconstruction, as expected, and **one fixture regresses**: the model inserted
-  "a" in "over WebSocket" -> "over a WebSocket" (1 word of 10). Inserting a missing small word is an explicitly
-  allowed repair and it is grammatical, but it is not what was said. The earlier `Is good.` -> `They're good.`
-  regression was caught by this table and is now rejected by the guard.
+- **Tail words**: 77.8 % -> 100 % on 18 fixtures (the last word "and that", "of the", "is good", "and then", "if you
+  can", "for now", with the tail spoken 9, 15 and 20 dB below the sentence after a 5 s pause). The compaction fix alone
+  reached 88.9 %; the remaining fixtures were the 20 dB ones, where small.en either dropped the word or hallucinated a
+  continuation ("of the video"). **The 9 dB figure was chosen on this same fixture set**, so 100 % here is a fit to the
+  set, not a forecast: a gain sweep gave 3 dB -> 16/18, 6-12 dB -> 18/18 with no regression, 15-18 dB -> 18/18 but one
+  unrelated clip's head decoded differently ("the notes" -> "a notes", WER 0 % -> 11 %). 9 dB sits in the middle of the
+  plateau. Real accents and microphones are not in this set.
+- **Legibility** improves where there are run-ons (55.6 % -> 66.7 %: one of three long dictations had its comma splices
+  fixed, the others were returned unchanged or rejected). It saturates at 100 % elsewhere because Whisper already
+  punctuates clean TTS speech.
+- **WER does not rise anywhere.** Two earlier fixture regressions were caught by this table and are now rejected in
+  code: `over WebSocket` -> `over a WebSocket` (determiner insertion) and `thanks everyone and see you there` ->
+  `thanks everyone, see you there` (conjunction deleted). Reconstruction itself cannot lower WER (the guards forbid
+  content changes); its job is legibility.
+- **Reconstruction outcomes** over the 36 model calls: 9 accepted, 22 unchanged, 5 rejected `rewritten`, 2
+  `determiner_inserted`, 2 `inflection_changed`, 2 `novel_content`, 1 `content_deleted`, 4 `proper_noun_lost`, 1
+  `protected_token_lost`. Every rejection pasted the pre-reconstruction text.
 - **Real captured corpus replay** (12 utterances sampled from `recent_history_events.jsonl`, counts only): 1
-  accepted, 2 unchanged by the model, 9 rejected by the guards (`rewritten` 4, `proper_noun_lost` 3,
-  `protected_token_lost` 1, `inflection_changed` 1). Mean legibility did not move (59.7 % -> 59.7 %). The
-  guards are conservative: on real, messier text the pass currently changes little, and that is the safe failure.
-- **Added latency** (6 timed runs, `llama3.1:8b`, CPU): sync path p50 5.4 s / p95 6.0 s, i.e. far over the
-  800 ms budget, so `auto` mode stays async. Async path: p50 0.05 ms / p95 0.39 ms added to the paste. With
-  6 samples the p95 is the slowest run, not a stable estimate.
+  accepted, 1 unchanged, 10 rejected by the guards. Mean legibility did not move (59.7 % -> 59.7 %). The guards are
+  conservative: on real, messier text the pass currently changes little, and that is the safe failure.
+- **Added latency** (6 timed runs, `llama3.1:8b`, CPU): sync path p50 5.7 s / p95 7.0 s, far over the 800 ms budget,
+  so `auto` mode stays async. Async path: p50 0.06 ms / p95 0.45 ms added to the paste. With 6 samples the p95 is the
+  slowest run, not a stable estimate.
 - **Hotwords from the real corpus: 0.** The audit log has 36 rows, 16 with raw != final, but none has an accepted
   reconstruction or a user edit and `learned_pairs` is empty in every row; the only raw/final differences are
   casing/punctuation, which are not learnable word pairs (2 candidate word pairs, below the 3-utterance
@@ -124,7 +163,10 @@ Read it honestly:
 - TTS speech is cleaner and more regular than a real voice and accent; it does not reproduce the accent,
   noise and fast-speech failures that motivated the order. Treat the numbers as a regression gate, not as
   a forecast of real-world accuracy.
-- The evaluation ASR is `small.en` on CPU; the app uses `distil-large-v3` on CUDA.
+- The evaluation ASR is `small.en` on CPU; the app uses `distil-large-v3` on CUDA. The quiet-tail lift was tuned
+  against `small.en` decodes; it has not been measured with the app's model.
+- The evaluator's `before` is the base behaviour reproduced by config (`pause_compaction_tail_protect_ms=0`, no lift,
+  no reconstruction), not a second checkout of the base commit.
 - WER cannot improve through reconstruction by construction (guards forbid content changes); the pass is
   expected to move *legibility*, and to move WER only through vocabulary repairs.
 - The app's "retry on raw audio after heavy compaction" step is not replayed.
@@ -132,23 +174,32 @@ Read it honestly:
 ## Live preview (item 7): findings only, no behaviour change
 
 Reading of the brief: "the live preview on the display is really no good anymore, it only fills in at the end."
-**Needs Nithin's confirmation before anything user-visible changes.** What the code does today:
+**Needs Nithin's confirmation before anything user-visible changes.** `core/streaming.py` is unchanged by this order.
+What the code does today (re-checked against source and the live `config.json`; an earlier draft of this section
+had the numbers below wrong):
 
-- Two separate mechanisms exist. (a) `core/streaming.py` `StreamingTranscriber`: every 0.85 s it
-  re-transcribes the *trailing 8 s* (`streaming_partial_max_audio_seconds`) of the recording with the fast ASR
-  engine, and the overlay then shows only the **last 6 words** (`live_caption_words`, `ui/cli_enhanced.py`
-  `_on_streaming_preview`). It does not start until 1.8 s into the recording (`live_caption_start_delay_seconds`),
-  so short utterances never show one. (b) "Live checkpoints" (`live_checkpoint_*`): every ~10 s of audio, a chunk
-  is transcribed and (with `live_checkpoint_inject`) injected as it is spoken.
-- Consequences that match the symptom: a long dictation shows a rolling 6-word window of the last 8 s, never the
-  sentence so far; partials are re-decoded from scratch with no stability marking, so text flickers; on a loaded
-  machine each decode takes longer than the 0.85 s cadence, so the display lags and only catches up when
-  speech stops.
-- `recent_history_events.jsonl` `preview` is the *tail of `full_text`* (taken from the final result), not a log
-  of streamed partials, which is consistent with the reading but is not proof either way.
-- Until VF-10 the packaged build did not bundle the Silero VAD asset, so every preview pass raised and fell
-  back to VAD-less decoding (fixed; see CHANGELOG). Not re-verified in a packaged run here (the app was not
-  launched).
-- Options for the follow-up, once confirmed: (1) show a growing, committed transcript (commit words that
-  have been stable across two passes, grey the unstable tail); (2) keep the 6-word caption but start at 0.8 s;
-  (3) remove the preview. Option 1 is the one that matches "fully faithful reproduction of a conversation".
+- **Streaming partials.** `StreamingTranscriber` (`core/streaming.py`) is started with `chunk_duration=0.85` s and
+  `partial_max_audio_seconds=8.0` (`ui/cli_enhanced.py` `_start_streaming_preview`): roughly every 0.85 s it
+  re-transcribes the *trailing 8 s* of the recording with the fast ASR engine and emits that as the "partial". Each
+  partial is an independent decode of the window; `streaming.py` has no stability marking or word commit.
+- **What reaches the display.** `_on_streaming_preview` console-prints the last `live_caption_words` words
+  (source default 8, `core/config.py`) capped at `live_caption_max_chars` (150), but that truncation is for the
+  `[PREVIEW]` console line only. The **overlay receives the full partial** (`visual_show_preview(preview_text)`) and
+  applies its own trim in `ui/visual_indicators.py` `_update_preview`: last `live_caption_words` words, capped at
+  `live_caption_max_chars`. The overlay reads its own settings, with defaults 20 words / 380 chars. The live
+  `config.json` has `live_caption_words = 20`, `live_caption_start_delay_seconds = 0.6`. So the overlay shows at most the
+  last ~20 words of the **trailing 8 s window**: for a long dictation it can never show "the sentence so far".
+- **Start delay.** `live_caption_start_delay_seconds` is 0.6 s (source default and live config), not 1.8 s.
+- **Interim checkpoints are dormant.** `live_checkpoint_enabled` is true and `live_checkpoint_seconds` is 10, but
+  `_queue_checkpoint_preview` returns immediately unless `live_flush_during_hold` is true, and that is false in the
+  source default and in the live config. `live_checkpoint_inject` is false as well. So the "growing transcript every
+  ~10 s" mechanism is not running; nothing beyond the 8 s partials is shown while the key is held.
+- `recent_history_events.jsonl` `preview` is the tail of `full_text` from the final result, not a log of streamed
+  partials: consistent with the reading, not proof of it.
+- Not established, and not measured here (the app was not launched): whether partials are slow enough on this machine
+  to lag behind speech, and whether the packaged build's Silero VAD asset (bundled since VF-09/VF-10) now makes the
+  partials appear where they previously fell back to VAD-less decoding.
+- Options once confirmed: (1) show a growing, committed transcript (commit words that were stable across two
+  passes, grey the unstable tail), which needs `streaming.py` changes; (2) turn the dormant checkpoints on
+  (`live_flush_during_hold`), which is a behaviour and stability trade-off the config comment calls out; (3) remove the
+  preview. Option 1 best matches "fully faithful reproduction of a conversation".

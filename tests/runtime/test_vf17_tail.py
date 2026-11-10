@@ -198,3 +198,116 @@ def test_final_segment_is_consumed_not_left_in_the_generator() -> None:
     result = backend.transcribe(np.zeros(SR * 2, dtype=np.float32))
     assert result.text.endswith("the end of the")
     assert len(result.segments) == 2
+
+
+# --- VF-17 review round: a faded trailing word is levelled before ASR ---------------------------------
+
+def _fading_dictation(tail_amp: float, floor: float = 0.0004):
+    """Loud phrase, short pause, then a short word spoken ~20 dB down (the evaluator's 0.10x tail)."""
+    rng = np.random.default_rng(5)
+    head = _voiced(3.0, 0.25) + _noise(3.0, floor, rng)
+    tail = _voiced(0.5, tail_amp, f0=190.0) + _noise(0.5, floor, rng)
+    parts = [_noise(0.4, floor, rng), head, _noise(0.08, floor, rng), tail, _noise(0.35, floor, rng)]
+    audio = np.concatenate(parts).astype(np.float32)
+    tail_start = sum(len(p) for p in parts[:3])
+    return audio, tail_start, tail_start + len(tail)
+
+
+def _rms(x: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(x.astype(np.float64) ** 2)))
+
+
+def test_quiet_tail_is_lifted_and_the_head_is_untouched() -> None:
+    from voiceflow.core.asr_engine import lift_quiet_tail
+
+    audio, a, b = _fading_dictation(tail_amp=0.02)
+    lifted = lift_quiet_tail(audio, SR, max_gain_db=18.0)
+    assert _rms(lifted[a + 800 : b - 800]) > 3.0 * _rms(audio[a + 800 : b - 800])
+    assert np.array_equal(lifted[: a - 2000], audio[: a - 2000])  # nothing before the tail window moves
+    assert float(np.max(np.abs(lifted))) <= 0.98 + 1e-6
+    assert lifted.dtype == audio.dtype and lifted.shape == audio.shape
+
+
+def test_tail_lift_is_capped_by_max_gain() -> None:
+    from voiceflow.core.asr_engine import lift_quiet_tail
+
+    audio, a, b = _fading_dictation(tail_amp=0.004)
+    lifted = lift_quiet_tail(audio, SR, max_gain_db=6.0)
+    ratio = _rms(lifted[a + 800 : b - 800]) / _rms(audio[a + 800 : b - 800])
+    assert ratio <= 10 ** (6.0 / 20.0) * 1.05
+
+
+def test_tail_lift_off_and_noise_only_audio_are_left_alone() -> None:
+    from voiceflow.core.asr_engine import lift_quiet_tail
+
+    audio, _, _ = _fading_dictation(tail_amp=0.02)
+    assert lift_quiet_tail(audio, SR, max_gain_db=0.0) is audio
+    noise = _noise(5.0, 0.01, np.random.default_rng(1))
+    assert lift_quiet_tail(noise, SR, max_gain_db=18.0) is noise  # nothing clears the speech gate: no amplified noise
+
+
+def test_a_noisy_tail_that_is_barely_above_the_floor_is_not_amplified() -> None:
+    from voiceflow.core.asr_engine import lift_quiet_tail
+
+    rng = np.random.default_rng(2)
+    floor = 0.004  # steady background noise
+    audio = np.concatenate([_noise(0.4, floor, rng), _voiced(3.0, 0.25) + _noise(3.0, floor, rng), _noise(1.0, floor, rng)])
+    lifted = lift_quiet_tail(audio.astype(np.float32), SR, max_gain_db=18.0)
+    assert np.array_equal(lifted[-int(0.8 * SR) :], audio[-int(0.8 * SR) :].astype(np.float32))
+
+
+def test_engine_hands_the_lifted_tail_to_the_backend_only_when_configured() -> None:
+    audio, a, b = _fading_dictation(tail_amp=0.02)
+    seen = {}
+
+    class _Spy(_RecordingBackend):
+        def transcribe(self, audio, **kwargs):
+            seen["rms"] = _rms(audio[a + 800 : b - 800])
+            return super().transcribe(audio, **kwargs)
+
+    engine = ASREngine(device="cpu", compute_type="int8")
+    engine._backend = _Spy()
+    engine.transcribe(audio)
+    base_rms = seen["rms"]
+    engine.tail_lift_db = 18.0
+    engine.transcribe(audio)
+    assert seen["rms"] > 3.0 * base_rms
+
+
+def test_config_default_enables_the_tail_lift() -> None:
+    assert Config().asr_tail_lift_db == 9.0
+
+
+def test_a_full_scale_head_is_never_rescaled_by_the_tail_lift() -> None:
+    """Regression from the evaluator: a global peak limiter scaled the whole clip by 2% and flipped a decode."""
+    from voiceflow.core.asr_engine import lift_quiet_tail
+
+    audio, a, b = _fading_dictation(tail_amp=0.02)
+    audio = audio.copy()
+    audio[1000] = 1.0  # TTS clips at full scale
+    lifted = lift_quiet_tail(audio, SR, max_gain_db=18.0)
+    assert np.array_equal(lifted[: a - 2000], audio[: a - 2000])
+    assert float(np.max(np.abs(lifted))) == 1.0
+    assert _rms(lifted[a + 800 : b - 800]) > 2.0 * _rms(audio[a + 800 : b - 800])
+
+
+def test_a_lifted_frame_never_clips() -> None:
+    from voiceflow.core.asr_engine import lift_quiet_tail
+
+    audio, a, b = _fading_dictation(tail_amp=0.2)  # tail already fairly hot: headroom, not the gain cap, limits it
+    audio[a + 2000] = 0.5
+    lifted = lift_quiet_tail(audio, SR, max_gain_db=18.0)
+    assert float(np.max(np.abs(lifted[a:b]))) <= 0.98 + 1e-6
+
+
+def test_soft_syllables_inside_the_head_are_not_levelled() -> None:
+    """Only speech that trails the last full-level speech is a 'faded tail'; a quiet syllable mid-sentence is not."""
+    from voiceflow.core.asr_engine import lift_quiet_tail
+
+    rng = np.random.default_rng(9)
+    floor = 0.0004
+    soft = _voiced(0.3, 0.02, f0=150.0) + _noise(0.3, floor, rng)
+    loud_a = _voiced(1.0, 0.25) + _noise(1.0, floor, rng)
+    loud_b = _voiced(1.0, 0.25, f0=170.0) + _noise(1.0, floor, rng)
+    audio = np.concatenate([_noise(0.4, floor, rng), loud_a, soft, loud_b, _noise(0.35, floor, rng)]).astype(np.float32)
+    assert np.array_equal(lift_quiet_tail(audio, SR, max_gain_db=18.0), audio)

@@ -64,6 +64,7 @@ class Config:
     pause_compaction_max_reduction_pct: float = 82.0  # allow stronger dead-air removal in long conversations
     pause_compaction_tail_protect_ms: int = 1500  # VF-17: never blip-filter/cut soft speech in the last N ms (0 = legacy behaviour)
     asr_tail_pad_ms: int = 0  # VF-17: trailing silence appended before ASR (0 = off; see docs/FAITHFUL_DICTATION.md for measurements)
+    asr_tail_lift_db: float = 9.0  # VF-17: max gain (dB) applied to a clearly-spoken but faded trailing word before ASR (0 = off)
     pause_compaction_retry_on_short_output: bool = True  # Retry raw audio when compaction result looks clipped
     pause_compaction_retry_min_reduction_pct: float = 38.0  # Trigger raw retry only after heavy compaction
     pause_compaction_retry_max_words: int = 8  # Treat very short result as likely clipped output

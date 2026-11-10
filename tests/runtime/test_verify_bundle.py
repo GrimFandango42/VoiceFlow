@@ -348,3 +348,57 @@ def test_build_script_verifies_every_mode():
     assert "unverified" not in text
     assert 'throw "[build_windows_exe] Bundle self-check FAILED' in text
     assert "--static-only" not in text
+
+
+# --- VF-17 review round: the exe's TOP-LEVEL archive must expose the build stamp --------------------------------
+
+def test_stamp_entry_missing_from_the_top_level_archive_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(vb, "_top_level_stamp", lambda exe: ([], {}))
+    report = vb.Report()
+    vb._check_stamp_entry(tmp_path / "VoiceFlow.exe", None, report)
+    assert report.checks["build_stamp_entry"]["ok"] is False
+    assert "no _build_stamp entry" in report.checks["build_stamp_entry"]["detail"]
+
+
+def test_stamp_entry_with_the_expected_commit_passes(tmp_path, monkeypatch):
+    monkeypatch.setattr(vb, "_top_level_stamp", lambda exe: (["_build_stamp"], {"COMMIT": "abc1234", "BUILT_AT": "11-10 02:00"}))
+    report = vb.Report()
+    vb._check_stamp_entry(tmp_path / "VoiceFlow.exe", "abc1234def5678", report)
+    assert report.checks["build_stamp_entry"]["ok"] is True
+
+
+@pytest.mark.parametrize("constants", [{}, {"COMMIT": "unknown"}, {"COMMIT": "1111111"}])
+def test_stamp_entry_without_the_right_commit_fails(tmp_path, monkeypatch, constants):
+    monkeypatch.setattr(vb, "_top_level_stamp", lambda exe: (["_build_stamp"], constants))
+    report = vb.Report()
+    vb._check_stamp_entry(tmp_path / "VoiceFlow.exe", "abc1234", report)
+    assert report.checks["build_stamp_entry"]["ok"] is False
+
+
+def test_unreadable_exe_fails_the_stamp_check(tmp_path):
+    exe = tmp_path / "VoiceFlow.exe"
+    exe.write_bytes(b"MZ not a real exe")
+    report = vb.Report()
+    vb._check_stamp_entry(exe, None, report)
+    assert report.checks["build_stamp_entry"]["ok"] is False
+
+
+def test_real_pyinstaller_archive_lists_a_runtime_hook_stamp(tmp_path):
+    """End to end against the real reader: a hook named _build_stamp.py is what the mandated command matches."""
+    pytest.importorskip("PyInstaller")
+    import subprocess
+
+    (tmp_path / "hello.py").write_text("print('hi')\n", encoding="utf-8")
+    (tmp_path / "_build_stamp.py").write_text(
+        'VERSION = "t"\nCOMMIT = "abc1234"\nBUILT_AT = "now"\nDIRTY = False\n', encoding="utf-8"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir", "--name", "hello",
+         "--distpath", str(tmp_path / "dist"), "--workpath", str(tmp_path / "work"), "--specpath", str(tmp_path),
+         "--runtime-hook", str(tmp_path / "_build_stamp.py"), str(tmp_path / "hello.py")],
+        capture_output=True, text=True, timeout=240,
+    )
+    assert proc.returncode == 0, proc.stderr[-500:]
+    names, constants = vb._top_level_stamp(tmp_path / "dist" / "hello" / "hello.exe")
+    assert names == ["_build_stamp"]
+    assert constants["COMMIT"] == "abc1234"

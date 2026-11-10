@@ -81,6 +81,125 @@ class _RECT(ctypes.Structure):
     ]
 
 
+class _GUITHREADINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("hwndActive", ctypes.c_void_p),
+        ("hwndFocus", ctypes.c_void_p),
+        ("hwndCapture", ctypes.c_void_p),
+        ("hwndMenuOwner", ctypes.c_void_p),
+        ("hwndMoveSize", ctypes.c_void_p),
+        ("hwndCaret", ctypes.c_void_p),
+        ("rcCaret", _RECT),
+    ]
+
+
+def _gui_focus_snapshot() -> Optional[Dict[str, Any]]:
+    """Which control has keyboard focus, and where its caret is, in the foreground thread (VF-17).
+
+    ``caret`` is ``None`` for apps that do not expose a system caret (Chromium, Electron, UWP): for those the
+    focus handle, the keystroke counter and the mouse-click counter are the only evidence there is.
+    """
+    if not _HAS_WIN32_API:
+        return None
+    try:
+        info = _GUITHREADINFO()
+        info.cbSize = ctypes.sizeof(_GUITHREADINFO)
+        if not ctypes.windll.user32.GetGUIThreadInfo(0, ctypes.byref(info)):
+            return None
+        rect = info.rcCaret
+        caret = (rect.left, rect.top, rect.right, rect.bottom)
+        return {
+            "active": int(info.hwndActive or 0),
+            "focus": int(info.hwndFocus or 0),
+            "caret_hwnd": int(info.hwndCaret or 0),
+            "caret": caret if any(caret) else None,
+        }
+    except Exception:
+        return None
+
+
+class _MouseClickTracker:
+    """Counts mouse button presses system-wide (low-level hook on its own message-pump thread).
+
+    A click can move the caret or change the focused field without a single keystroke, which the keyboard counter
+    cannot see. The hook never swallows or alters an event.
+    """
+
+    _DOWN = frozenset({0x0201, 0x0204, 0x0207, 0x020B, 0x0206})  # L/R/M/X button down, L double-click
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.live = False
+        self._thread: Optional[threading.Thread] = None
+        self._ready = threading.Event()
+        self._thread_id = 0
+        self._proc: Any = None
+
+    def note(self, message: int) -> None:
+        if message in self._DOWN:
+            self.count += 1
+
+    def start(self, timeout_s: float = 2.0) -> bool:
+        if self.live:
+            return True
+        if not _HAS_WIN32_API:
+            return False
+        self._ready.clear()
+        self._thread = threading.Thread(target=self._pump, daemon=True, name="VFMouseClickTracker")
+        self._thread.start()
+        self._ready.wait(timeout_s)
+        return self.live
+
+    def stop(self) -> None:
+        if self.live and self._thread_id:
+            try:
+                ctypes.windll.user32.PostThreadMessageW(self._thread_id, 0x0012, 0, 0)  # WM_QUIT
+            except Exception:
+                pass
+        self.live = False
+
+    def _pump(self) -> None:
+        from ctypes import wintypes
+
+        user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+        hook_proc_type = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t)
+        user32.SetWindowsHookExW.argtypes = [ctypes.c_int, hook_proc_type, ctypes.c_void_p, ctypes.c_uint32]
+        user32.SetWindowsHookExW.restype = ctypes.c_void_p
+        user32.CallNextHookEx.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t]
+        user32.CallNextHookEx.restype = ctypes.c_ssize_t
+        user32.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
+        kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+        kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+
+        def _proc(n_code: int, w_param: int, l_param: int) -> int:
+            try:
+                if n_code >= 0:
+                    self.note(int(w_param))
+            except Exception:
+                pass
+            return user32.CallNextHookEx(None, n_code, w_param, l_param)
+
+        self._proc = hook_proc_type(_proc)  # keep a reference or the callback is collected
+        try:
+            hook = user32.SetWindowsHookExW(14, self._proc, kernel32.GetModuleHandleW(None), 0)  # WH_MOUSE_LL
+            if not hook:
+                return
+            self._thread_id = int(kernel32.GetCurrentThreadId())
+            self.live = True
+        finally:
+            self._ready.set()
+        if not self.live:
+            return
+        msg = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+        user32.UnhookWindowsHookEx(hook)
+        self.live = False
+
+
 def _snapshot_clipboard_all_formats() -> Optional[dict]:
     """Capture all serializable clipboard formats via win32clipboard.
 
@@ -287,6 +406,8 @@ class ClipboardInjector:
         self._injecting = False
         self._ignore_until = 0.0
         self._key_counter_ready = False
+        self._mouse = _MouseClickTracker()
+        self._settle_s = 0.4
 
     # ------------------------------------------------------------------ #
     # VF-17: replace-last-paste support
@@ -297,9 +418,16 @@ class ClipboardInjector:
     })
 
     def enable_replace_tracking(self) -> bool:
-        """Opt in to 'replace last paste' (installs a key-press counter hook). Returns True when live."""
+        """Opt in to 'replace last paste': key-press counter + mouse-click counter. True only when both are live."""
         self._ensure_key_counter()
-        return self._key_counter_live
+        try:
+            self._mouse.start()
+        except Exception as exc:
+            self._log.warning("mouse_tracker_unavailable error=%s", exc)
+        return bool(self._key_counter_live and self._mouse.live)
+
+    def _focus_snapshot(self) -> Optional[Dict[str, Any]]:
+        return _gui_focus_snapshot()
 
     def _ensure_key_counter(self) -> None:
         """Count real (non-modifier, non-hotkey) key presses so a replace can be refused after typing."""
@@ -334,12 +462,41 @@ class ClipboardInjector:
 
     def _record_last_paste(self, text: str) -> None:
         hwnd = self._target_hwnd or self._foreground_window()
-        self._last_paste = {
+        record = {
             "text": text,
             "hwnd": int(hwnd) if hwnd else None,
             "ts": time.time(),
             "keys": self._keys_typed,
+            "clicks": self._mouse.count,
+            "focus": None,  # the focused control / caret once the target app has finished handling the paste
         }
+        self._last_paste = record
+        if self._settle_s > 0:
+            # Off the paste's critical path: the target processes Ctrl+V asynchronously, so the caret only reaches
+            # its final position a moment later. A snapshot taken any earlier would make every replace look "moved".
+            timer = threading.Timer(self._settle_s, self._settle_last_paste, args=(record,))
+            timer.daemon = True
+            timer.start()
+
+    def _settle_last_paste(self, record: Dict[str, Any]) -> None:
+        if self._last_paste is not record:
+            return
+        if record["keys"] != self._keys_typed or record["clicks"] != self._mouse.count:
+            return  # the user already did something; leave "focus" unset so a replace is refused
+        record["focus"] = self._focus_snapshot()
+
+    @staticmethod
+    def _focus_drift(before: Optional[Dict[str, Any]], now: Optional[Dict[str, Any]]) -> str:
+        """"" when the same control still has focus with the caret where the paste left it."""
+        if before is None or now is None:
+            return "focus_unverifiable"
+        if before.get("active") != now.get("active") or before.get("focus") != now.get("focus"):
+            return "focus_changed"
+        if before.get("caret_hwnd") != now.get("caret_hwnd"):
+            return "focus_changed"
+        if before.get("caret") != now.get("caret"):
+            return "caret_moved"
+        return ""
 
     def last_paste_text(self) -> str:
         return str((self._last_paste or {}).get("text", ""))
@@ -367,7 +524,15 @@ class ClipboardInjector:
         fg = self._foreground_window()
         if last["hwnd"] is None or fg is None or int(fg) != int(last["hwnd"]):
             return "window_changed"
-        return ""
+        # Same window is not proof of the same spot: a click or a focus change between fields leaves the
+        # key counter at zero and the window handle unchanged, and a backspace run there deletes someone else's text.
+        if not self._mouse.live:
+            return "mouse_tracking_unavailable"
+        if self._mouse.count != last.get("clicks"):
+            return "clicked_since_paste"
+        if last.get("focus") is None:
+            return "paste_not_settled" if time.time() - float(last["ts"]) < self._settle_s + 0.5 else "focus_unverifiable"
+        return self._focus_drift(last["focus"], self._focus_snapshot())
 
     @staticmethod
     def _wait_for_hotkey_release(timeout_s: float = 1.5) -> bool:
@@ -382,6 +547,11 @@ class ClipboardInjector:
             time.sleep(0.02)
         return False
 
+    def _refuse_replace(self, reason: str, new_text: str) -> str:
+        copied = bool(self._sanitize(new_text).strip()) and self.copy_text_to_clipboard(new_text)
+        self._log.info("replace_last_paste refused reason=%s clipboard=%s", reason, copied)
+        return f"clipboard:{reason}" if copied else f"failed:{reason}"
+
     def replace_last_paste(self, old_text: str, new_text: str, *, max_age_s: float = 120.0) -> str:
         """Swap ``old_text`` (what we pasted) for ``new_text`` in place.
 
@@ -394,17 +564,50 @@ class ClipboardInjector:
         if not refusal and not self._wait_for_hotkey_release():
             refusal = "modifiers_held"
         if refusal:
-            copied = bool(new.strip()) and self.copy_text_to_clipboard(new_text)
-            self._log.info("replace_last_paste refused reason=%s clipboard=%s", refusal, copied)
-            return f"clipboard:{refusal}" if copied else f"failed:{refusal}"
+            return self._refuse_replace(refusal, new_text)
         old = self._sanitize(old_text)
+        if not bool(getattr(self.cfg, "paste_injection", True)):
+            # Typing mode has no way to stage the replacement before the old text is deleted.
+            return self._refuse_replace("typing_mode", new_text)
         self._injecting = True
+        deleted = False
+        ok = False
         try:
-            for _ in range(len(old)):
-                keyboard.send("backspace")
-            ok = self.paste_text(new) if self.cfg.paste_injection else self.type_text(new)
-            if not ok:
-                ok = self.type_text(new)
+            with _preserve_clipboard(
+                self.cfg.restore_clipboard,
+                restore_attempts=max(1, int(getattr(self.cfg, "clipboard_restore_retry_attempts", 10))),
+                restore_base_delay=max(0.005, int(getattr(self.cfg, "clipboard_restore_retry_base_delay_ms", 30)) / 1000.0),
+                restore_async_retry_seconds=max(0.5, float(getattr(self.cfg, "clipboard_restore_async_retry_seconds", 8.0))),
+                log=self._log,
+            ):
+                # 1. Prepare: the replacement must already be on the clipboard before anything is deleted.
+                try:
+                    _clipboard_copy_with_retry(new)
+                except Exception as exc:
+                    self._log.warning("replace_last_paste clipboard_prepare_failed error=%s", exc)
+                    return "failed:clipboard"
+                time.sleep(0.03)
+                # 2. Re-verify after the staging delay: the user may have clicked or typed while we waited.
+                late = self._replace_refusal(old_text, max_age_s)
+                if late:
+                    refused_late = late
+                else:
+                    refused_late = ""
+                    # 3. Only now delete, then paste what is already staged.
+                    deleted = True
+                    for _ in range(len(old)):
+                        keyboard.send("backspace")
+                    keyboard.send(self.cfg.paste_shortcut)
+                    ok = True
+                    time.sleep(max(0, int(getattr(self.cfg, "clipboard_restore_delay_ms", 150))) / 1000.0)
+            if refused_late:
+                return self._refuse_replace(refused_late, new_text)
+        except Exception as exc:
+            self._log.warning("replace_last_paste failed deleted=%s error=%s", deleted, exc)
+            if deleted:
+                # The old text is gone and the paste did not complete: leave the replacement on the clipboard.
+                self.copy_text_to_clipboard(new_text)
+            return "failed:paste"
         finally:
             self._ignore_until = time.time() + 0.02
             self._injecting = False
