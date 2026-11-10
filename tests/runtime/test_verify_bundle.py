@@ -170,58 +170,121 @@ class TestBuildCommitMatchesHead:
     while HEAD was fbda8f0, and every bundle check still passed. A bundle must
     now prove it is a build of the checkout's HEAD."""
 
-    def _check(self, frozen_report=None):
+    def _frozen(self, frozen_report):
         report = vb.Report()
-        vb._check_build_commit(report, frozen_report)
+        vb._check_build_commit(report, frozen_report)  # frozen_required defaults to True
         return report, report.checks["build_commit_matches_head"]
 
-    def test_matching_clean_stamp_passes(self):
-        report, check = self._check()
+    def _static_check(self):
+        report = vb.Report()
+        vb._check_build_commit(report, None, frozen_required=False)
+        return report, report.checks["build_commit_matches_head"]
+
+    # --- frozen (acceptance) mode: only the EXE's own identity counts, fail closed
+
+    def test_frozen_clean_matching_build_passes(self):
+        report, check = self._frozen({"build": {"commit": _FAKE_HEAD[:9], "dirty": False}})
         assert check["ok"] is True and report.ok
-        assert "0123456" in check["detail"]
+        assert "frozen EXE" in check["detail"]
 
-    def test_stale_stamp_fails_hard(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(vb, "BUILD_STAMP", _write_stamp(tmp_path / "s.py", "6a1ef05"))
-        report, check = self._check()
-        assert check["ok"] is False and check["warn_only"] is False
-        assert not report.ok
-        assert "stale bundle" in check["detail"] and "6a1ef05" in check["detail"]
-
-    def test_missing_stamp_fails(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(vb, "BUILD_STAMP", tmp_path / "never_built.py")
-        report, check = self._check()
-        assert check["ok"] is False and not report.ok
-
-    def test_frozen_exe_commit_is_authoritative(self):
+    def test_frozen_stale_build_fails_even_if_source_stamp_matches(self):
         # Source stamp agrees with HEAD (fixture), but the EXE itself says it is
         # an older build: that is still a stale bundle.
-        report, check = self._check({"build": {"commit": "6a1ef05", "dirty": False}})
-        assert check["ok"] is False and not report.ok
-        assert "frozen EXE" in check["detail"]
-        report, check = self._check({"build": {"commit": _FAKE_HEAD[:9], "dirty": False}})
-        assert check["ok"] is True and "frozen EXE" in check["detail"]
+        report, check = self._frozen({"build": {"commit": "6a1ef05", "dirty": False}})
+        assert check["ok"] is False and check["warn_only"] is False and not report.ok
+        assert "stale bundle" in check["detail"] and "frozen EXE" in check["detail"]
 
-    def test_dirty_or_unknown_only_warns(self, tmp_path, monkeypatch):
+    def test_frozen_report_without_build_block_fails_despite_matching_source_stamp(self):
+        """Review VF-11b-review-codex-20261110-005438 finding 2, exact repro: a
+        frozen report with no build block fell back to the (matching) source
+        stamp and passed. It proves nothing about the EXE, so it must fail."""
+        report, check = self._frozen({"frozen": True, "ok": True, "checks": {}})
+        assert check["ok"] is False and check["warn_only"] is False and not report.ok
+        assert "no build identity" in check["detail"]
+
+    @pytest.mark.parametrize(
+        "frozen_report",
+        [
+            None,  # self-check produced no readable report
+            "not a dict",
+            {"build": None},
+            {"build": "0123456"},
+            {"build": {}},
+            {"build": {"error": "ModuleNotFoundError: voiceflow._build_stamp"}},
+            {"build": {"commit": None, "dirty": False}},
+            {"build": {"commit": "unknown", "dirty": False}},
+            {"build": {"commit": "0123", "dirty": False}},
+            {"build": {"commit": "zzzzzzz", "dirty": False}},
+            {"build": {"commit": 1234567, "dirty": False}},
+        ],
+    )
+    def test_frozen_absent_malformed_or_unknown_identity_fails(self, frozen_report):
+        report, check = self._frozen(frozen_report)
+        assert check["ok"] is False and check["warn_only"] is False and not report.ok
+
+    @pytest.mark.parametrize("dirty", [True, None, "False", 0, "missing"])
+    def test_frozen_dirty_or_unproven_clean_build_fails(self, dirty):
+        build = {"commit": _FAKE_HEAD[:7]}
+        if dirty != "missing":
+            build["dirty"] = dirty
+        report, check = self._frozen({"build": build})
+        assert check["ok"] is False and check["warn_only"] is False and not report.ok
+        assert "dirty" in check["detail"]
+
+    def test_frozen_without_git_head_fails(self, monkeypatch):
+        monkeypatch.setattr(vb, "_git_head", lambda repo: None)
+        report, check = self._frozen({"build": {"commit": _FAKE_HEAD[:7], "dirty": False}})
+        assert check["ok"] is False and check["warn_only"] is False and not report.ok
+        assert "git HEAD unavailable" in check["detail"]
+
+    def test_frozen_never_reads_the_source_stamp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(vb, "_read_source_stamp", lambda p: pytest.fail("source stamp consulted"))
+        self._frozen({"build": {"commit": _FAKE_HEAD[:7], "dirty": False}})
+        self._frozen({})
+
+    # --- static-only debugging: source-stamp fallback, labelled non-acceptance
+
+    def test_static_matching_clean_stamp_passes_but_is_labelled(self):
+        report, check = self._static_check()
+        assert check["ok"] is True and report.ok
+        assert "0123456" in check["detail"] and "NOT acceptance evidence" in check["detail"]
+
+    def test_static_stale_stamp_fails_hard(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(vb, "BUILD_STAMP", _write_stamp(tmp_path / "s.py", "6a1ef05"))
+        report, check = self._static_check()
+        assert check["ok"] is False and check["warn_only"] is False and not report.ok
+        assert "stale bundle" in check["detail"] and "6a1ef05" in check["detail"]
+
+    def test_static_missing_stamp_fails(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(vb, "BUILD_STAMP", tmp_path / "never_built.py")
+        report, check = self._static_check()
+        assert check["ok"] is False and not report.ok
+
+    def test_static_inconclusive_only_warns_and_says_so(self, tmp_path, monkeypatch):
         monkeypatch.setattr(vb, "BUILD_STAMP", _write_stamp(tmp_path / "d.py", _FAKE_HEAD[:7], dirty=True))
-        report, check = self._check()
+        report, check = self._static_check()
         assert check["ok"] is False and check["warn_only"] is True and report.ok
+        assert "NOT acceptance evidence" in check["detail"]
         monkeypatch.setattr(vb, "BUILD_STAMP", _write_stamp(tmp_path / "u.py", "unknown"))
-        report, check = self._check()
+        report, check = self._static_check()
         assert check["warn_only"] is True and report.ok
         monkeypatch.setattr(vb, "BUILD_STAMP", _write_stamp(tmp_path / "g.py", _FAKE_HEAD[:7]))
         monkeypatch.setattr(vb, "_git_head", lambda repo: None)
-        report, check = self._check()
+        report, check = self._static_check()
         assert check["warn_only"] is True and "git unavailable" in check["detail"]
 
-    def test_too_short_commit_never_matches(self, tmp_path, monkeypatch):
+    def test_static_too_short_commit_never_matches(self, tmp_path, monkeypatch):
         monkeypatch.setattr(vb, "BUILD_STAMP", _write_stamp(tmp_path / "s.py", "0123"))
-        _, check = self._check()
+        _, check = self._static_check()
         assert check["ok"] is False and check["warn_only"] is False
 
-    def test_static_verify_includes_the_commit_check(self, tmp_path, monkeypatch):
+    def test_static_verify_includes_the_commit_check_and_flags_non_acceptance(self, tmp_path, monkeypatch):
         monkeypatch.setattr(vb, "BUILD_STAMP", _write_stamp(tmp_path / "s.py", "6a1ef05"))
         report = _static(_fake_bundle(tmp_path), allow_cpu_only=True)
         assert report.checks["build_commit_matches_head"]["ok"] is False
+        skipped = report.checks["frozen_self_check"]
+        assert skipped["ok"] is False and skipped["warn_only"] is True
+        assert "NOT acceptance evidence" in skipped["detail"]
 
     def test_real_git_head_is_a_full_sha(self):
         # The fixture patches vb._git_head; exercise the real one on a fresh copy.
@@ -364,6 +427,12 @@ if mode in ("fail", "exit0_but_failed"):
     report["checks"]["vad_asset"] = {"ok": False, "detail": "missing silero", "warn_only": False}
 if mode == "cpu":
     report["checks"]["cuda_runtime_dlls"] = {"ok": False, "detail": "missing", "warn_only": True}
+# The real EXE reports its bundled build stamp; "nobuild"/"dirtybuild" are
+# self-checks that pass on their own but cannot prove a clean build of HEAD.
+build = os.environ.get("VF_STUB_BUILD_COMMIT")
+if build and os.environ.get("VF_STUB_BUILD") != "nobuild":
+    report["build"] = {"version": "3.2.1", "commit": build, "built_at": "11-10 01:00",
+                       "dirty": os.environ.get("VF_STUB_BUILD") == "dirty"}
 with open(out, "w", encoding="utf-8") as fh:
     json.dump(report, fh)
 sys.exit(0 if mode in ("ok", "unfrozen", "cpu", "exit0_but_failed") else 1)
@@ -380,6 +449,8 @@ class TestFrozenSelfCheckRunner:
         script.write_text(_STUB, encoding="utf-8")
         monkeypatch.setattr(vb, "_frozen_command", lambda exe: [sys.executable, "-I", str(script)])
         monkeypatch.setenv("VOICEFLOW_TORCH_LIB_DIR", r"C:\somewhere\torch\lib")
+        monkeypatch.setenv("VF_STUB_BUILD_COMMIT", _FAKE_HEAD[:7])
+        monkeypatch.delenv("VF_STUB_BUILD", raising=False)
         return tmp_path
 
     def _run(self, stub, monkeypatch, mode, *, allow_cpu_only=False, timeout=60.0):
@@ -438,6 +509,34 @@ class TestFrozenSelfCheckRunner:
         # --static-only cannot verify a one-file EXE at all.
         assert vb.main([str(exe), "--static-only", "--json-out", str(out)]) == 1
 
+    @pytest.mark.parametrize("build_mode", ["nobuild", "dirty"])
+    def test_passing_self_check_without_clean_identity_fails_end_to_end(self, stub, monkeypatch, build_mode):
+        """Review VF-11b-review-codex-20261110-005438 finding 2: the self-check
+        itself passes, the source stamp matches HEAD (fixture), yet verification
+        must fail because the EXE does not prove it is a clean build of HEAD."""
+        exe = stub / "VoiceFlow.exe"
+        exe.write_bytes(b"MZ")
+        out = stub / "work" / "verify.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("VF_STUB_MODE", "ok")
+        monkeypatch.setenv("VF_STUB_BUILD", build_mode)
+        assert vb.main([str(exe), "--json-out", str(out)]) == 1
+        import json
+
+        result = json.loads(out.read_text(encoding="utf-8"))
+        assert result["checks"]["frozen_self_check"]["ok"] is True
+        commit_check = result["checks"]["build_commit_matches_head"]
+        assert commit_check["ok"] is False and commit_check["warn_only"] is False
+
+    def test_one_dir_frozen_verification_requires_the_exe_identity(self, stub, monkeypatch):
+        bundle = _fake_bundle(stub / "dist", cuda=False)
+        monkeypatch.setenv("VF_STUB_MODE", "ok")
+        monkeypatch.setenv("VF_STUB_BUILD", "nobuild")
+        report = vb.verify(bundle, allow_cpu_only=True, work_dir=stub / "work")
+        assert report.checks["frozen_self_check"]["ok"] is True
+        assert report.checks["build_commit_matches_head"]["ok"] is False
+        assert report.checks["build_commit_matches_head"]["warn_only"] is False
+
     def test_one_dir_runs_the_frozen_check_after_static_checks(self, stub, monkeypatch):
         bundle = _fake_bundle(stub / "dist", cuda=False)
         monkeypatch.setenv("VF_STUB_MODE", "fail")
@@ -454,3 +553,11 @@ def test_build_script_verifies_every_mode():
     assert "unverified" not in text
     assert 'throw "[build_windows_exe] Bundle self-check FAILED' in text
     assert "--static-only" not in text
+
+
+def test_build_script_refuses_a_dirty_or_unidentified_tree_before_packaging():
+    text = (REPO / "scripts" / "setup" / "build_windows_exe.ps1").read_text(encoding="utf-8")
+    guard = text.index("Refusing to build: tracked changes are uncommitted")
+    assert 'if ($dirty -or $commit -eq "unknown")' in text
+    assert guard < text.index("Set-Content -Path $stampPath")
+    assert guard < text.index("Invoke-BundleVerification -Target $bundleRoot")
