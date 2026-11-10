@@ -11,7 +11,7 @@ launched, and no scheduled task was touched.
 | 1 | Startup race | **Fixed in code, unit-tested.** One module-level `_MODEL_INIT_LOCK` wraps every `WhisperModel` construction; cached models load with `local_files_only=True`, the network is used only when the model is absent. Per-backend `RLock`s never protected this (each backend has its own). A test shows peak concurrent constructions is 1 with the lock and 2 without. |
 | 2 | Silent, permanent CPU fallback | **Fixed in code, unit-tested.** Non-CUDA init errors are retried on CUDA once; out-of-memory / missing-runtime go straight to CPU. A fallback logs `asr_cpu_fallback_active` (WARNING), sets a standing tray tooltip, a balloon and an overlay message, and a `CudaRestore` thread retries the GPU while idle (every ≥120 s, builds the CUDA model first and swaps only if it worked). Also found and fixed: `MODEL_CONFIGS` entries were shared between engines, so a fallback wrote `device=cpu` into the module-level entry. |
 | 3 | No log / no history when started by watchdog, Task Scheduler or Explorer | **Root cause NOT found.** Instrumentation added so the next occurrence is diagnosable (below). |
-| 4 | Label vs config vs loaded model | **Fixed.** `distil-large-v3.5` never loaded v3.5: no CTranslate2 export existed when the key was added, so it loaded the v3 weights. It is now a legacy alias of `distil-large-v3`; the balanced tier and GPU wizard profile say `distil-large-v3`; the wizard's repo map pointed at a repo that does not exist (`Systran/faster-distil-whisper-large-v3.5`) and now points at the real one. Startup logs `model_selection … agrees=…`. Nithin's `model_name: distil-large-v3.5` now resolves to the weights he is actually running. The real v3.5 export is opt-in as `distil-large-v3.5-ct2`. |
+| 4 | Label vs config vs loaded model | **Fixed.** `distil-large-v3.5` never loaded v3.5: no CTranslate2 export existed when the key was added, so it loaded the v3 weights. It is now a legacy alias of `distil-large-v3`; the balanced tier and GPU wizard profile say `distil-large-v3`; the wizard's repo map pointed at a repo that does not exist (`Systran/faster-distil-whisper-large-v3.5`) and now points at the real one. Startup logs `model_selection … agrees=…`. The real v3.5 export is opt-in as `distil-large-v3.5-ct2`. Review round 1: the saved value is now **migrated** on next launch (see "Config value" below), not only aliased. |
 | 5 | Model comparison | See below. **Default unchanged.** |
 | 6 | Nearly-full card | See below. Reported, not changed. |
 
@@ -76,12 +76,20 @@ Fail: any `asr_cpu_fallback_active`, `asr_cuda_init_failed`, or
 `startup_selfcheck_failed`. `asr_cuda_init_retry_ok` means the old race fired and
 the retry absorbed it (should not happen now that construction is serialized).
 
-## Config value: reconciled, not migrated
+## Config value: migrated (review round 1)
 
-Nithin's `config.json` still says `model_name: distil-large-v3.5`. It now
-resolves by alias (`canonical_model_key`) to the weights that load, and startup
-logs `model_selection … agrees=True`. I did not add a one-time rewrite of the
-file to `distil-large-v3`; the wizard writes the new value for new setups.
+Codex was right that an alias alone masks the disagreement. `load_config` now runs
+`_apply_model_key_migration` (`utils/settings.py`): `model_name`, `fast_model_name`
+and `quality_model_name` are rewritten through `canonical_model_key`, and the file
+is saved when anything changed. So Nithin's `distil-large-v3.5` becomes
+`distil-large-v3` the first time the new build starts, and the saved value, the
+tray/overlay label, the `model_selection … loaded_key=` log field and the weights
+(`Systran/faster-distil-whisper-large-v3`) then name one model. The real export,
+`distil-large-v3.5-ct2`, is never touched. The `distil-large-v3.5` entry stays in
+`MODEL_CONFIGS` and the guardrail list so an un-migrated config still loads.
+Tested against a temp config file (`TestPersistedModelKey`); **I did not run it
+against Nithin's real `config.json`**, so the on-disk rewrite on his machine is
+unverified until the new build launches.
 
 ## Item 5: speed and accuracy (offline, RTX 4080, float16)
 
@@ -143,9 +151,21 @@ What that means:
   `out_of_memory` → no CUDA retry → CPU int8 fallback, now announced (log, tray,
   overlay) and retried every ≥120 s while idle. Before this change it was silent
   and permanent.
-- **Card fills mid-session:** an OOM during a decode is caught by the existing
-  runtime fallback (message matches "cuda") and re-run on CPU, now announced the
-  same way.
+- **Card fills mid-session:** *corrected in review round 1.* The first version of
+  this report said the existing runtime fallback already covered this. It did
+  not: faster-whisper decodes lazily, `transcribe()` returns a generator, and the
+  CUDA work (and any OOM) happens while the segments are iterated, which was
+  outside the `try`. An iteration-time OOM escaped as an exception with the engine
+  still marked CUDA and no event. The segment loop now runs inside the guard
+  (`FasterWhisperBackend.transcribe`), `"out of memory"` joined the runtime
+  markers, and a decode-time OOM falls back to CPU, re-runs that clip there, and
+  is announced like any other fallback. Covered by unit tests with a fake
+  generator that raises; **not** reproduced with a genuinely full card.
+- **CUDA runtime libraries missing at startup (explicit `device=cuda`):** also
+  corrected. This used to rewrite the request to plain CPU before the backend was
+  built, so there was no warning and no idle retry. It now enters the same
+  announced, retried fallback state (`missing_runtime: …` reason). `device=auto`
+  with no CUDA is still plain CPU, not a fallback.
 - **gemma unloaded:** ~14 GB free; no pressure.
 
 *Not measured:* the real behaviour with gemma toggled. I did not unload it
@@ -155,17 +175,61 @@ covered by unit tests with fake models, not by a real OOM.
 
 ## Verification
 
-- `pytest tests` (test venv): 423 passed (30 new in `tests/runtime/test_vf18_fast_every_launch.py`).
+- `pytest tests` (test venv, `--timeout=120`): **435 passed, 0 failed** after review round 1
+  (42 in `tests/runtime/test_vf18_fast_every_launch.py`, 9 of them new this round:
+  missing-runtime fallback x4, decode-time OOM x2, persisted model key x3).
+  The earlier "423" and "426" figures were counts from before this round.
+  Codex could not run five model-loading tests offline (no `tiny.en` cache in its
+  sandbox); they passed here, where the cache exists.
   One existing test needed a stub for the new startup hook (`test_startup_background_services.py`).
 - Race test checked by mutation: without the lock, peak concurrent constructions is 2.
 - Merged `origin/main` (7 commits); the only conflict was `scripts/setup/build_windows_exe.ps1`.
   Kept both sides: the DLL-staging from main plus this branch's `-KeepPackages`,
   `Assert-CudaRuntimeComplete` and `Assert-BundleBehaves`; the script parses clean.
 
+## Item 3 after review round 1: still open, and why
+
+Codex asked for the cause to be found and fixed, then proven with a side-directory
+bundle, the real scheduled task, Explorer and 20 cold starts. This run's dispatch
+forbids launching any app and touching scheduled tasks (and the standing rule is
+never to disturb Nithin's running `VoiceFlow.exe`), so none of that could be done
+here. What static reading did establish:
+
+- The repo's watchdog (`scripts/ops/voiceflow-watchdog.ps1`) already launches with
+  `Start-Process`; its comment documents the earlier `Win32_Process::Create`
+  launch as the one that produced a GPU-less, log-less, history-less process.
+  Nothing else under `scripts/` uses `Win32_Process::Create`/`Invoke-CimMethod`.
+- Source env/cwd dependencies are few: `LOCALAPPDATA` (data dir; absent means
+  `~\.voiceflow\logs`), `Path.cwd()` as one CUDA DLL probe root, and
+  `VOICEFLOW_*` switches. None of those explains "no log, no history, no GPU" by
+  itself, and no fallback log location held any file.
+- Unchecked, and the first thing to check: whether the registered scheduled task
+  actually runs this script copy, and whether the live `dist\VoiceFlow\VoiceFlow.exe`
+  (built 2026-11-07 17:29) is the stale-module build `b460a24` describes.
+
+**Runbook for whoever is cleared to launch** (all in a side directory; do not stop
+the live app):
+
+1. Cold build from this branch to a side output directory (e.g.
+   `C:\AI_Projects\_wt\VoiceFlow-vf18\dist-side`) with `-SkipProcessCleanup`
+   (cleanup is on by default and kills the live app), and check that nothing
+   copies over `C:\AI_Projects\VoiceFlow\dist`. `Assert-BundleBehaves` launches the
+   app: run it only with its own `LOCALAPPDATA`-equivalent data dir and a different
+   hotkey.
+2. Launch that bundle (a) from Explorer, (b) via a *copy* of the watchdog pointed
+   at the side exe, (c) via a one-off scheduled task for the side exe. After each,
+   compare the last two lines of `launch_contexts.jsonl` and `boot_breadcrumb.log`,
+   confirm `voiceflow.log` grows, and dictate one test clip into the history store.
+3. 20 cold starts: after each, require
+   `model_ready key=distil-large-v3 … device=cuda compute=float16 fell_back_to_cpu=False`.
+4. If a launcher gives a bad launch, diff its `launch_contexts.jsonl` record against
+   a good one (names only) and bisect the differing variables.
+
 ## Not tested
 
-- **20 consecutive cold starts of a built bundle** — no bundle was built or launched.
-- **Real Task Scheduler and Explorer launches** — not touched; item 3's root cause is therefore open.
+- **20 consecutive cold starts of a built bundle** — no bundle was built or launched (dispatch forbids launching apps).
+- **Real Task Scheduler, Explorer, Startup-shortcut launches** — not touched; item 3's root cause is therefore open.
+- The `config.json` migration on Nithin's real file and the missing-runtime/decode-OOM paths on a real GPU — unit tests with fakes only.
 - Build: the merged build script has not been run. Note for whoever does: `-SkipProcessCleanup` is a switch and
   cleanup is **on by default**, which kills the live app; pass it. `Assert-BundleBehaves` launches the real app.
 - Item 6 with gemma actually unloaded / the card actually full.

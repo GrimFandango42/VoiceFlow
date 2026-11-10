@@ -212,6 +212,32 @@ def _apply_performance_migrations(cfg: Config) -> bool:
     return changed
 
 
+_MODEL_NAME_FIELDS = ("model_name", "fast_model_name", "quality_model_name")
+
+
+def _apply_model_key_migration(cfg: Config) -> bool:
+    """Rewrite a legacy model key to the key whose weights it actually loads (VF-18).
+
+    ``distil-large-v3.5`` never loaded v3.5 (no CTranslate2 export existed when
+    the key was added); it loaded the distil-large-v3 weights. Persisting the
+    key that matches the weights keeps the saved config, the displayed label and
+    the log line in agreement. The real v3.5 export is a separate opt-in key,
+    ``distil-large-v3.5-ct2``, which this never touches.
+    """
+    from voiceflow.core.asr_engine import canonical_model_key
+
+    changed = False
+    for field in _MODEL_NAME_FIELDS:
+        current = getattr(cfg, field, None)
+        if not isinstance(current, str) or not current:
+            continue
+        canonical = canonical_model_key(current)
+        if canonical != current:
+            setattr(cfg, field, canonical)
+            changed = True
+    return changed
+
+
 CLOUD_LEARNING_CONSENT_VERSION = 1
 
 
@@ -281,6 +307,11 @@ def load_config(defaults: Config) -> Config:
 
     changed = _apply_performance_migrations(defaults)
     changed = _apply_cloud_learning_consent_migration(defaults) or changed
+    try:
+        changed = _apply_model_key_migration(defaults) or changed
+    except Exception:
+        # Never block startup on a label migration; the engine still aliases it.
+        pass
     try:
         validation_changed = pre_validation_state is not None and asdict(defaults) != pre_validation_state
     except Exception:

@@ -466,3 +466,166 @@ class TestHistoryWriteVisibility:
         rows = (tmp_path / "h.jsonl").read_text(encoding="utf-8").splitlines()
         assert seen == [] and len(rows) == 1
         assert json.loads(rows[0])["truncated"] is True
+
+
+# ---------------------------------------------------------------------------
+# Review round 1 (Codex): missing-runtime fallback, lazy-decode OOM, persisted key
+# ---------------------------------------------------------------------------
+
+
+class TestMissingCudaRuntime:
+    """An explicit CUDA request with no usable runtime is an announced fallback."""
+
+    @pytest.fixture
+    def runtime_missing(self, monkeypatch):
+        monkeypatch.setattr(ae, "_cuda_runtime_ready", lambda: False)
+        monkeypatch.setattr(ae, "_missing_cuda_dlls", lambda dlls: ["cublas64_12.dll"])
+
+    def test_explicit_cuda_enters_the_announced_fallback_state(self, runtime_missing):
+        events = []
+        ae.add_device_listener(lambda e, d: events.append((e, d)))
+        engine = ASREngine(model_name="distil-large-v3", device="cuda", compute_type="float16")
+        status = engine.device_status()
+        assert status["fell_back_to_cpu"] is True
+        assert status["device"] == "cpu"
+        assert status["fallback_reason"].startswith("missing_runtime:")
+        assert "cublas64_12.dll" in status["fallback_reason"]
+        assert [e for e, _ in events] == ["cpu_fallback"]
+        # The wanted compute type is remembered so the idle retry restores float16.
+        assert engine._backend._cuda_wanted_compute == "float16"
+
+    def test_tier_routing_still_picks_the_cpu_model(self, runtime_missing):
+        engine = ASREngine(tier=ae.ModelTier.QUICK, device="cuda", compute_type="float16")
+        assert engine.model_key == "small.en"
+        assert engine.device_status()["fell_back_to_cpu"] is True
+
+    def test_auto_without_cuda_is_plain_cpu_not_a_fallback(self, runtime_missing):
+        engine = ASREngine(model_name="distil-large-v3", device="auto", compute_type="float16")
+        status = engine.device_status()
+        assert status["device"] == "cpu"
+        assert status["fell_back_to_cpu"] is False
+
+    def test_the_idle_retry_restores_cuda_once_the_runtime_is_back(self, runtime_missing, monkeypatch):
+        events = []
+        ae.add_device_listener(lambda e, d: events.append(e))
+        engine = ASREngine(model_name="distil-large-v3", device="cuda", compute_type="float16")
+        backend = engine._backend
+        backend._model = object()  # the CPU model currently serving dictation
+
+        class Fine:
+            def __init__(self, ref, **kwargs):
+                self.device = kwargs.get("device")
+
+            def transcribe(self, audio, **kwargs):
+                return iter(()), None
+
+        import faster_whisper
+
+        monkeypatch.setattr(faster_whisper, "WhisperModel", Fine)
+        assert engine.retry_cuda_if_fallen_back(force=True) is True
+        assert backend.config.device == "cuda"
+        assert backend.config.compute_type == "float16"
+        assert engine.device_status()["fell_back_to_cpu"] is False
+        assert events == ["cpu_fallback", "cuda_restored"]
+
+
+class TestDecodeTimeOutOfMemory:
+    """faster-whisper decodes lazily; an OOM while consuming the generator must fall back."""
+
+    def test_oom_during_segment_iteration_falls_back_and_returns_cpu_text(self, monkeypatch):
+        import numpy as np
+
+        events = []
+        ae.add_device_listener(lambda e, d: events.append((e, d)))
+        info = SimpleNamespace(language="en")
+
+        class FullCard:
+            def transcribe(self, audio, **kwargs):
+                def gen():
+                    raise RuntimeError("CUDA failed with error out of memory")
+                    yield  # pragma: no cover - makes this a generator
+
+                return gen(), info
+
+        class CpuModel:
+            devices = []
+
+            def __init__(self, ref, **kwargs):
+                CpuModel.devices.append(kwargs.get("device"))
+
+            def transcribe(self, audio, **kwargs):
+                seg = SimpleNamespace(text=" hello world", start=0.0, end=1.0, avg_logprob=-0.1, no_speech_prob=0.01)
+                return iter([seg]), info
+
+        import faster_whisper
+
+        monkeypatch.setattr(faster_whisper, "WhisperModel", CpuModel)
+        backend = _backend()
+        backend._model = FullCard()
+
+        result = backend.transcribe(np.ones(16000, dtype=np.float32) * 0.1)
+
+        assert result.text == "hello world"
+        assert CpuModel.devices == ["cpu"]
+        assert backend.config.device == "cpu"
+        assert backend.fell_back_to_cpu
+        assert events and events[0][0] == "cpu_fallback"
+        assert "out_of_memory" in events[0][1]
+
+    def test_non_cuda_errors_during_iteration_still_propagate(self):
+        import numpy as np
+
+        class Broken:
+            def transcribe(self, audio, **kwargs):
+                def gen():
+                    raise ValueError("bad audio")
+                    yield  # pragma: no cover
+
+                return gen(), SimpleNamespace(language="en")
+
+        backend = _backend()
+        backend._model = Broken()
+        with pytest.raises(ValueError):
+            backend.transcribe(np.ones(16000, dtype=np.float32) * 0.1)
+        assert not backend.fell_back_to_cpu
+
+
+class TestPersistedModelKey:
+    """The saved config, the label, the log key and the weights all name one model."""
+
+    def _load(self, monkeypatch, tmp_path, saved: dict):
+        from voiceflow.core.config import Config
+        from voiceflow.utils import settings
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(saved), encoding="utf-8")
+        monkeypatch.setattr(settings, "config_path", lambda: path)
+        return settings.load_config(Config()), path
+
+    def test_legacy_key_is_rewritten_on_disk_and_agrees_with_the_engine(self, monkeypatch, tmp_path):
+        cfg, path = self._load(
+            monkeypatch,
+            tmp_path,
+            {"model_name": "distil-large-v3.5", "setup_completed": True},
+        )
+        assert cfg.model_name == "distil-large-v3"
+        assert json.loads(path.read_text(encoding="utf-8"))["model_name"] == "distil-large-v3"
+
+        engine = ASREngine(model_name=cfg.model_name, device="cpu", compute_type="int8")
+        assert engine.model_key == cfg.model_name
+        assert engine.model_config.model_id == "Systran/faster-distil-whisper-large-v3"
+
+    def test_the_real_v35_export_and_other_choices_are_left_alone(self, monkeypatch, tmp_path):
+        cfg, _ = self._load(
+            monkeypatch,
+            tmp_path,
+            {"model_name": "distil-large-v3.5-ct2", "quality_model_name": "small.en", "setup_completed": True},
+        )
+        assert cfg.model_name == "distil-large-v3.5-ct2"
+        assert cfg.quality_model_name == "small.en"
+
+    def test_migration_is_idempotent(self, monkeypatch, tmp_path):
+        from voiceflow.utils.settings import _apply_model_key_migration
+
+        cfg, _ = self._load(monkeypatch, tmp_path, {"model_name": "distil-large-v3.5", "setup_completed": True})
+        assert _apply_model_key_migration(cfg) is False

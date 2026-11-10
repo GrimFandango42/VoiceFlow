@@ -826,33 +826,37 @@ class FasterWhisperBackend(ASRBackend):
                 if initial_prompt:
                     kwargs["initial_prompt"] = initial_prompt
                 segments_iter, info = self._model.transcribe(audio, **kwargs)
+
+            # faster-whisper decodes lazily: transcribe() only returns a
+            # generator, and the real CUDA work (and any CUDA out-of-memory)
+            # happens while it is consumed. Consume it inside this guard, or a
+            # decode-time failure escapes with the engine still marked CUDA.
+            # (Not under self._lock: the generator holds its own model reference.)
+            segments = []
+            text_parts = []
+            max_no_speech_prob = 0.0
+
+            for seg in segments_iter:
+                seg_no_speech = float(getattr(seg, 'no_speech_prob', 0.0) or 0.0)
+                if seg.text and seg.text.strip():
+                    text_parts.append(seg.text.strip())
+                    segments.append(TranscriptionSegment(
+                        text=seg.text.strip(),
+                        start=seg.start,
+                        end=seg.end,
+                        confidence=getattr(seg, 'avg_logprob', 1.0),
+                        no_speech_prob=seg_no_speech,
+                    ))
+                # Track silence evidence from every segment, including ones whose
+                # text was empty -- those are the strongest signal of all.
+                if seg_no_speech > max_no_speech_prob:
+                    max_no_speech_prob = seg_no_speech
         except Exception as exc:
             if self._should_fallback_to_cpu(exc):
                 logger.warning("CUDA runtime failure detected (%s). Falling back to CPU and retrying once.", exc)
                 self._fallback_to_cpu(f"{classify_cuda_init_failure(exc)}: {type(exc).__name__}: {exc}")
                 return self.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
             raise
-
-        segments = []
-        text_parts = []
-
-        max_no_speech_prob = 0.0
-
-        for seg in segments_iter:
-            seg_no_speech = float(getattr(seg, 'no_speech_prob', 0.0) or 0.0)
-            if seg.text and seg.text.strip():
-                text_parts.append(seg.text.strip())
-                segments.append(TranscriptionSegment(
-                    text=seg.text.strip(),
-                    start=seg.start,
-                    end=seg.end,
-                    confidence=getattr(seg, 'avg_logprob', 1.0),
-                    no_speech_prob=seg_no_speech,
-                ))
-            # Track silence evidence from every segment, including ones whose
-            # text was empty -- those are the strongest signal of all.
-            if seg_no_speech > max_no_speech_prob:
-                max_no_speech_prob = seg_no_speech
 
         processing_time = time.time() - start_time
 
@@ -887,6 +891,7 @@ class FasterWhisperBackend(ASRBackend):
             "invalid handle",
             "driver",
             "cannot load symbol",
+            "out of memory",
         ]
         return any(marker in message for marker in runtime_markers)
 
@@ -1216,9 +1221,19 @@ class ASREngine:
         if requested_device == "auto":
             requested_device = "cuda" if _cuda_runtime_ready() else "cpu"
 
+        # An explicit CUDA request with a missing runtime is a fallback, not a
+        # different request: the intent stays "cuda" so the engine enters the same
+        # announced, retried CPU-fallback state a failed model load does (VF-18).
+        # ("auto" already resolved above using the same check, so it never gets here.)
+        cuda_runtime_missing = False
         if requested_device == "cuda" and not _cuda_runtime_ready():
-            logger.warning("CUDA requested but runtime dependencies are missing. Falling back to CPU int8.")
-            requested_device = "cpu"
+            cuda_runtime_missing = True
+            missing_dlls = _missing_cuda_dlls(list(CUDA_REQUIRED_DLLS))
+            cuda_missing_reason = (
+                "missing_runtime: CUDA runtime not ready"
+                + (f" (missing {', '.join(missing_dlls)})" if missing_dlls else " (no usable CUDA device reported)")
+            )
+            logger.warning("CUDA requested but the runtime is not ready. Falling back to CPU int8.")
 
         resolved_compute = str(compute_type or "int8").strip().lower()
         if requested_device == "cuda":
@@ -1250,12 +1265,16 @@ class ASREngine:
                 self.model_key = canonical_model_key(model_name)
                 self.model_config = dataclasses.replace(MODEL_CONFIGS[model_name])
         elif tier:
-            model_key = resolve_tier_model_key(tier, device)
+            # Tier routing is hardware-aware: with no usable CUDA it picks the
+            # model that suits the CPU it will actually run on.
+            model_key = resolve_tier_model_key(tier, "cpu" if cuda_runtime_missing else device)
             self.model_key = canonical_model_key(model_key)
             self.model_config = dataclasses.replace(MODEL_CONFIGS[model_key])
         else:
             # Default to QUICK tier
-            model_key = resolve_tier_model_key(ModelTier.QUICK, device)
+            model_key = resolve_tier_model_key(
+                ModelTier.QUICK, "cpu" if cuda_runtime_missing else device
+            )
             self.model_key = canonical_model_key(model_key)
             self.model_config = dataclasses.replace(MODEL_CONFIGS[model_key])
         self.requested_label = str(model_name or (tier.value if tier else "quick"))
@@ -1279,6 +1298,17 @@ class ASREngine:
         self._backend: Optional[ASRBackend] = None
         self._create_backend()
 
+        if cuda_runtime_missing:
+            if isinstance(self._backend, FasterWhisperBackend):
+                # Same state a failed CUDA model load ends in: warning, tray
+                # message, and the idle retry that puts the GPU back.
+                self._backend._enter_cpu_fallback(compute_type, cuda_missing_reason)
+            else:
+                # Other backends have no announced-fallback path; run them on CPU.
+                self.model_config.device = "cpu"
+                self.model_config.compute_type = "int8"
+                device, compute_type = "cpu", "int8"
+
         # Statistics
         self.transcription_count = 0
         self.total_processing_time = 0.0
@@ -1286,7 +1316,7 @@ class ASREngine:
 
         logger.info(
             f"ASR Engine initialized - model: {self.model_config.name}, "
-            f"backend: {self.model_config.backend}, device: {device}"
+            f"backend: {self.model_config.backend}, device: {self.model_config.device}"
         )
         logging.getLogger("voiceflow").info(
             "asr_engine_initialized model=%s model_id=%s backend=%s device=%s compute=%s "
