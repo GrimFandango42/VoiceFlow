@@ -284,6 +284,56 @@ class TestModelLabels:
         assert _HF_REPO_MAP["distil-large-v3.5"] == _HF_REPO_MAP["distil-large-v3"]
 
 
+class TestAppDeviceWiring:
+    """EnhancedApp's reaction to engine device events, with stub tray/engines."""
+
+    def _app(self, fallen: bool):
+        from voiceflow.ui.cli_enhanced import EnhancedApp
+
+        calls = []
+
+        class Tray:
+            def show_warning(self, message, notify=True):
+                calls.append(("warn", message, notify))
+
+            def clear_warning(self):
+                calls.append(("clear",))
+
+        class Engine:
+            def device_status(self):
+                return {"fell_back_to_cpu": fallen}
+
+        app = SimpleNamespace(
+            _device_warning="",
+            tray_controller=Tray(),
+            visual_indicators_enabled=False,
+            asr=Engine(),
+            asr_fast=None,
+            _CPU_WARNING=EnhancedApp._CPU_WARNING,
+        )
+        app._fallen_back_engines = lambda: EnhancedApp._fallen_back_engines(app)
+        app._apply_device_warning = lambda announce=False: EnhancedApp._apply_device_warning(app, announce)
+        return app, calls, EnhancedApp
+
+    def test_cpu_fallback_event_warns_the_tray(self):
+        app, calls, cls = self._app(fallen=True)
+        cls._on_asr_device_event(app, "cpu_fallback", "model: out_of_memory")
+        assert calls == [("warn", cls._CPU_WARNING, True)]
+        assert app._device_warning == cls._CPU_WARNING
+
+    def test_restore_clears_the_warning_once_nothing_is_on_cpu(self):
+        app, calls, cls = self._app(fallen=False)
+        app._device_warning = cls._CPU_WARNING
+        cls._on_asr_device_event(app, "cuda_restored", "model")
+        assert calls == [("clear",)]
+        assert app._device_warning == ""
+
+    def test_restore_keeps_the_warning_while_another_engine_is_still_on_cpu(self):
+        app, calls, cls = self._app(fallen=True)
+        cls._on_asr_device_event(app, "cuda_restored", "model")
+        assert calls == [("warn", cls._CPU_WARNING, False)]
+
+
 class TestStartupSelfCheck:
     def _run(self, tmp_path, log_write, **kwargs):
         from voiceflow.utils.launch_diagnostics import run_startup_selfcheck

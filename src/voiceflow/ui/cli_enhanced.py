@@ -3351,7 +3351,10 @@ def main(argv=None):
 
     # A CPU fallback that happened while the tray was still starting, and a
     # self-check that could not read its own records back, both need to be seen.
-    app._apply_device_warning(announce=False)
+    # The fallback event fires during EnhancedApp.__init__ (preload), before the
+    # tray exists, so this is the first moment it can actually be shown: announce
+    # it here, not just as a tooltip nobody hovers over.
+    app._apply_device_warning(announce=bool(app._device_warning))
     if not startup_selfcheck.get("ok", False):
         problems = "; ".join(startup_selfcheck.get("problems", [])) or "self-check failed"
         runtime_log.error("startup_selfcheck_failed problems=%s", problems)

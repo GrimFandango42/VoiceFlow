@@ -19,11 +19,22 @@ launched, and no scheduled task was touched.
 
 Checked: nothing was written to the fallback locations (`~\.voiceflow\logs`,
 `%TEMP%\VoiceFlow`, `voiceflow-<pid>.log`), so the app is not logging somewhere
-else. Two earlier fixes for this exact symptom (`393313e` stdout hardening,
-`cde7104` log-delivery check) landed on 2026-11-07, three days before the
-2026-11-10 report. **I could not establish whether the live
-`dist\VoiceFlow\VoiceFlow.exe` was built with them** (could not read its build
-stamp from this session), so they may simply not be in the running binary.
+else.
+
+Timeline (all 2026-11-07, local time): `393313e` stdout hardening 12:45,
+`cde7104` log-delivery check 13:50, **live `dist\VoiceFlow\VoiceFlow.exe` built
+17:29:57**, `b460a24` "cold builds by default" 17:48, `132e690` watchdog
+`Win32_Process::Create` fix 19:13. So the live exe was built *after* both
+logging fixes but *19 minutes before* cold builds became the default. `b460a24`
+describes exactly this failure class: a warm PyInstaller cache shipped a bundle
+built from modules dated 2026-09-13 ("no logging, no transcription history, no
+live caption, and a stamp naming the right commit"). That is a plausible
+explanation for the live binary, **but I could not confirm it** (I did not
+inspect the bundle's modules), and it conflicts with the order's statement that
+the same binary logs when started from a shell. The deciding test is a cold build
+from this branch launched from Explorer and from the scheduled task; if it logs,
+the cause was the stale build, and the instrumentation below stays as the
+alarm.
 
 Added so the next bad launch is explained rather than guessed at:
 
@@ -46,8 +57,31 @@ Added so the next bad launch is explained rather than guessed at:
   read back, and a failure is an ERROR plus a tray warning.
 
 To finish item 3, launch once from Explorer and once via the scheduled task with
-a build that contains this commit, then compare the last two lines of
+a cold build that contains this commit, then compare the last two lines of
 `launch_contexts.jsonl` and `boot_breadcrumb.log`.
+
+Scope of the self-check: it proves this process can write and read back in the
+data directory it resolved. It does **not** prove that directory is the right
+one. If a launcher gives the process a different `LOCALAPPDATA`, the self-check
+passes and the tray stays quiet; that case is visible in
+`launch_contexts.jsonl` (`env_values.LOCALAPPDATA`, `localappdata_set`) and in
+where `boot_breadcrumb.log` appears, not in the warning.
+
+## Acceptance grep for the 20 cold starts
+
+Pass, every start (from `voiceflow.log`):
+`model_ready key=distil-large-v3 weights=Systran/faster-distil-whisper-large-v3 device=cuda compute=float16 fell_back_to_cpu=False`
+(and the same with `fast_model_ready key=tiny.en …` for the fast path).
+Fail: any `asr_cpu_fallback_active`, `asr_cuda_init_failed`, or
+`startup_selfcheck_failed`. `asr_cuda_init_retry_ok` means the old race fired and
+the retry absorbed it (should not happen now that construction is serialized).
+
+## Config value: reconciled, not migrated
+
+Nithin's `config.json` still says `model_name: distil-large-v3.5`. It now
+resolves by alias (`canonical_model_key`) to the weights that load, and startup
+logs `model_selection … agrees=True`. I did not add a one-time rewrite of the
+file to `distil-large-v3`; the wizard writes the new value for new setups.
 
 ## Item 5: speed and accuracy (offline, RTX 4080, float16)
 
