@@ -621,6 +621,17 @@ class EnhancedApp:
                 print(f"[AI] Adaptive learning unavailable: {e}")
                 self.adaptive_learning = None
 
+        # VF-17: full-fidelity, local-only tuning corpus (raw -> final -> reconstructed).
+        self.tuning_log = None
+        self._recent_utterance_ids: Deque[Tuple[str, str]] = deque(maxlen=50)  # (pasted text, tuning id)
+        try:
+            from voiceflow.ai.tuning_log import TuningLog
+
+            self.tuning_log = TuningLog.from_config(cfg)
+        except Exception as e:
+            print(f"[AI] Tuning log unavailable: {e}")
+            self.tuning_log = None
+
         # Long conversation tracking
         self._session_start_time = time.time()
         self._total_transcription_time = 0.0
@@ -1979,6 +1990,38 @@ class EnhancedApp:
 
         self.postprocess_executor.submit(_task)
 
+    def _record_tuning(
+        self,
+        raw_text: str,
+        final_text: str,
+        metadata: Dict[str, Any],
+        reconstructed_text: Optional[str] = None,
+        reconstruction: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Append one utterance to the local tuning corpus (off the hot path)."""
+        if not self.tuning_log or not getattr(self.tuning_log, "enabled", False):
+            return ""
+        import uuid
+
+        uid = uuid.uuid4().hex[:12]
+        self._recent_utterance_ids.append((final_text, uid))
+
+        def _task() -> None:
+            try:
+                self.tuning_log.append_utterance(
+                    raw_text=raw_text,
+                    final_text=final_text,
+                    reconstructed_text=reconstructed_text,
+                    reconstruction=reconstruction,
+                    metadata=metadata,
+                    utterance_id=uid,
+                )
+            except Exception as exc:
+                logger.debug(f"tuning log write failed: {exc}")
+
+        self.postprocess_executor.submit(_task)
+        return uid
+
     def handle_manual_correction_feedback(
         self,
         original_text: str,
@@ -2013,6 +2056,15 @@ class EnhancedApp:
                 )
             except Exception as exc:
                 self._log.warning("correction_persist_failed error=%s", exc)
+
+        if self.tuning_log:
+            for pasted, uid in reversed(self._recent_utterance_ids):
+                if pasted.strip() == raw:
+                    try:
+                        self.tuning_log.append_user_edit(uid, corrected)
+                    except Exception as exc:
+                        self._log.debug("tuning_user_edit_failed error=%s", exc)
+                    break
 
         if not self.adaptive_learning:
             return
@@ -2181,6 +2233,7 @@ class EnhancedApp:
         second_pass_mode = "none"
         second_pass_chars_delta = 0
         idle_resume_force_primary = False
+        raw_transcript = ""  # bound on every path (was guarded with locals())
 
         def _capture_model_metadata(engine: Any) -> None:
             nonlocal asr_model_id, asr_model_name, asr_device, asr_compute
@@ -2873,8 +2926,25 @@ class EnhancedApp:
             )
 
             if text.strip():
+                tuning_meta = {
+                    "source": "runtime_transcription",
+                    "model_tier": getattr(self.cfg, "model_tier", ""),
+                    "code_mode": bool(self.code_mode),
+                    "course_corrected": course_corrected,
+                    "correction_type": correction_type,
+                    "audio_duration": round(audio_duration, 3),
+                    "raw_audio_duration": round(raw_audio_duration, 3),
+                    "compacted_audio_duration": round(compacted_audio_duration, 3),
+                    "compaction_reduction_pct": round(compaction_reduction_pct, 2),
+                    "retry_used": bool(retry_used),
+                    "retry_strategy": retry_strategy,
+                    "transcription_path": final_transcription_path,
+                    "processing_time": round(transcription_time, 3),
+                    "second_pass_mode": second_pass_mode,
+                }
+                self._record_tuning(raw_transcript or text, text, tuning_meta)
                 self._observe_adaptive_async(
-                    raw_transcript if 'raw_transcript' in locals() else text,
+                    raw_transcript or text,
                     text,
                     {
                         "source": "runtime_transcription",

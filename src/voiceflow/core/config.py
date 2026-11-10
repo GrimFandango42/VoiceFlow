@@ -290,6 +290,12 @@ class Config:
     adaptive_max_rules: int = 200  # Cap learned replacements to bound memory
     adaptive_max_phrase_tokens: int = 4  # Allow short phrase learning, not just single-token swaps
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
+
+    # VF-17 full-fidelity tuning log: local-only, never uploaded (VF-03).
+    tuning_log_enabled: bool = True
+    tuning_log_max_chars: int = 8000
+    tuning_log_max_entries: int = 2000
+    tuning_log_max_age_days: int = 30
     # OFF by default: when on, the nightly learning batch sends up to
     # adaptive_ai_analysis_max_items verbatim transcripts (plus correction pairs)
     # to a CLOUD model — Anthropic via the Claude CLI, or Google Gemini as
