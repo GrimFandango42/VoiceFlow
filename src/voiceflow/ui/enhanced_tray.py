@@ -317,6 +317,16 @@ class EnhancedTrayController(ITrayManager):
 
             threading.Thread(target=_run, daemon=True).start()
 
+        def replace_last_paste(icon, item):  # noqa: ARG001
+            """VF-17: swap the last paste for its reconstructed version."""
+            threading.Thread(target=self.app.replace_last_paste, daemon=True, name="ReplaceLastPaste").start()
+
+        def _has_improvement(item):  # noqa: ARG001
+            try:
+                return bool(self.app.has_pending_improvement())
+            except Exception:
+                return False
+
         def show_recent_history(icon, item):
             """Open recent history panel from tray."""
             try:
@@ -454,6 +464,11 @@ class EnhancedTrayController(ITrayManager):
             ),
             pystray.MenuItem("Reset Dock Position", reset_positions),
             pystray.MenuItem("Setup & Defaults", open_setup_defaults),
+            pystray.MenuItem(
+                "Replace last paste with improved version",
+                replace_last_paste,
+                enabled=_has_improvement,
+            ),
             pystray.MenuItem("Recent History", show_recent_history),
             pystray.MenuItem("Correction Review", show_correction_review),
             pystray.Menu.SEPARATOR,

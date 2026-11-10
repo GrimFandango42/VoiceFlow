@@ -291,6 +291,20 @@ class Config:
     adaptive_max_phrase_tokens: int = 4  # Allow short phrase learning, not just single-token swaps
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
 
+    # VF-17 reconstruction pass (form repair, never meaning change). Local Ollama, CPU only.
+    reconstruction_enabled: bool = True
+    reconstruction_mode: str = "auto"  # auto | sync | async | off  (auto stays async unless p95 fits the budget)
+    reconstruction_model: str = ""  # "" = pick a small instruct model from what Ollama has installed
+    reconstruction_budget_ms: int = 800  # max the paste may wait for the reconstruction (sync path)
+    reconstruction_timeout_s: float = 45.0  # hard timeout for the model call (cold model load can be ~40 s)
+    reconstruction_min_words: int = 4
+    reconstruction_max_chars: int = 2000
+    reconstruction_num_threads: int = 0  # 0 = Ollama default; set to leave CPU for other apps
+    replace_last_paste_hotkey: str = "ctrl+alt+r"
+    replace_last_paste_max_age_s: float = 120.0
+    hotword_promotion_enabled: bool = True
+    hotword_promotion_min_count: int = 3
+
     # VF-17 full-fidelity tuning log: local-only, never uploaded (VF-03).
     tuning_log_enabled: bool = True
     tuning_log_max_chars: int = 8000

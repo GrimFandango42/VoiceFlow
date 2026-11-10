@@ -213,6 +213,16 @@ class TrayController:
             ]
         )
 
+        def replace_last_paste(icon, item):  # noqa: ARG001
+            """VF-17: swap the last paste for its reconstructed version."""
+            threading.Thread(target=self.app.replace_last_paste, daemon=True, name="ReplaceLastPaste").start()
+
+        def _has_improvement(item):  # noqa: ARG001
+            try:
+                return bool(self.app.has_pending_improvement())
+            except Exception:
+                return False
+
         def open_setup_defaults(icon, item):  # noqa: ARG001
             def _run():
                 try:
@@ -253,6 +263,11 @@ class TrayController:
             pystray.MenuItem("Switch Model", model_menu),
             pystray.MenuItem("Set Ctrl+Alt as default PTT", set_ctrl_alt_default),
             pystray.MenuItem("Setup & Defaults", open_setup_defaults),
+            pystray.MenuItem(
+                "Replace last paste with improved version",
+                replace_last_paste,
+                enabled=_has_improvement,
+            ),
             pystray.MenuItem("Recent History", show_recent_history, enabled=lambda item: VISUAL_INDICATORS_AVAILABLE),
             pystray.MenuItem("Correction Review", show_correction_review, enabled=lambda item: VISUAL_INDICATORS_AVAILABLE),
             pystray.Menu.SEPARATOR,

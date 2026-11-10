@@ -228,21 +228,29 @@ class TuningLog:
                 logger.warning("tuning_log read failed for %s: %s", target, exc)
 
     def load_utterances(self) -> List[Dict[str, Any]]:
-        """Utterances with later reconstruction / user-edit records merged in."""
+        """Utterances with later reconstruction / user-edit records merged in.
+
+        Order-independent: an async verdict can be written before the
+        utterance record it belongs to (they come from different threads).
+        """
+        records = list(self.iter_records())
         merged: Dict[str, Dict[str, Any]] = {}
         order: List[str] = []
-        for rec in self.iter_records():
-            uid = str(rec.get("id", ""))
-            kind = rec.get("kind")
-            if kind == "utterance":
+        for rec in records:
+            if rec.get("kind") == "utterance":
+                uid = str(rec.get("id", ""))
                 if uid not in merged:
                     order.append(uid)
                 merged[uid] = dict(rec)
-            elif uid in merged:
-                if kind == "reconstruction":
-                    if "reconstructed_text" in rec:
-                        merged[uid]["reconstructed_text"] = rec["reconstructed_text"]
-                    merged[uid]["reconstruction"] = rec.get("reconstruction", {})
-                elif kind == "user_edit":
-                    merged[uid]["edited_text"] = rec.get("edited_text", "")
+        for rec in records:
+            uid = str(rec.get("id", ""))
+            kind = rec.get("kind")
+            if uid not in merged:
+                continue
+            if kind == "reconstruction":
+                if "reconstructed_text" in rec:
+                    merged[uid]["reconstructed_text"] = rec["reconstructed_text"]
+                merged[uid]["reconstruction"] = rec.get("reconstruction", {})
+            elif kind == "user_edit":
+                merged[uid]["edited_text"] = rec.get("edited_text", "")
         return [merged[u] for u in order]
