@@ -1363,6 +1363,20 @@ class EnhancedApp:
                 else:
                     i += 1
             speech = filtered
+        # VF-17: the blip filter above exists to drop clicks in the MIDDLE of a
+        # pause. At the end of the clip it deletes real speech: a short, soft,
+        # unstressed last word ("... end of the") that follows a pause is both
+        # quieter than ``dyn_thr`` and shorter than ``min_speech_frames``, so it
+        # was classified as a blip and cut. Re-admit anything above a relaxed
+        # threshold in the final ``tail_protect_ms`` (blip filter bypassed).
+        tail_protect_ms = max(
+            0,
+            int(options.get("tail_protect_ms", getattr(self.cfg, "pause_compaction_tail_protect_ms", 1500))),
+        )
+        tail_frames = min(len(speech), int(np.ceil(tail_protect_ms / float(frame_ms)))) if tail_protect_ms else 0
+        if tail_frames:
+            relaxed_thr = max(base_thr * 1.1, noise_floor * 1.5)
+            speech[-tail_frames:] |= rms[-tail_frames:] >= relaxed_thr
         if not np.any(speech):
             return audio_data
 
@@ -1384,9 +1398,11 @@ class EnhancedApp:
         if (len(compacted) / len(audio_data)) < min_keep_ratio:
             # Over-compaction guardrail: preserve more context for recognition quality.
             return audio_data
-        # Keep any tail samples if original ends with speech-like energy.
+        # Keep any tail samples if original ends with speech-like energy. With
+        # tail protection on, the sub-frame remainder is always kept: it is the
+        # last <30 ms of what the user said, and costs nothing.
         tail = audio_data[usable:]
-        if tail.size > 0 and np.sqrt(np.mean(tail * tail)) >= dyn_thr:
+        if tail.size > 0 and (tail_frames or np.sqrt(np.mean(tail * tail)) >= dyn_thr):
             compacted = np.concatenate((compacted, tail))
         return compacted
 

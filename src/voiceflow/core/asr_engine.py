@@ -1090,8 +1090,20 @@ class ASREngine:
             self.last_no_speech_prob = 1.0
             return TranscriptionResult(text="", duration=audio_duration, processing_time=0.0)
 
+        # Optional trailing-silence pad (VF-17). Off by default: measured on
+        # TTS speech it did not recover any dropped final word and on one clip
+        # it made the decoder invent a continuation ("... next week or so").
+        # Kept as a knob so the eval harness can show pad=0 vs pad=N.
+        backend_audio = audio
+        pad_ms = int(getattr(self, "tail_pad_ms", 0) or 0)
+        if pad_ms > 0:
+            pad = np.zeros(int(self.sample_rate * pad_ms / 1000.0), dtype=audio.dtype)
+            backend_audio = np.concatenate([audio, pad])
+
         # Transcribe
-        result = self._backend.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
+        result = self._backend.transcribe(backend_audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
+        if backend_audio is not audio and result.duration:
+            result.duration = float(audio_duration)
 
         # Expose the decoder's silence evidence to callers that only receive a
         # string. Set on every path, including the early returns above, so a
@@ -1265,6 +1277,7 @@ class ModernWhisperASR(ASREngine):
                 condition_on_previous_text=condition_on_previous_text,
             )
         self.cfg = cfg
+        self.tail_pad_ms = max(0, int(getattr(cfg, "asr_tail_pad_ms", 0) or 0))
 
         # Session tracking for legacy compatibility
         self.session_start_time = time.time()
