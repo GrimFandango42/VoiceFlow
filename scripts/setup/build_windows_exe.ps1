@@ -17,6 +17,10 @@ param(
     [switch]$Console,
     [switch]$InstallPackagingDeps,
     [switch]$SkipCudaRuntime,
+    # A bundle without the CUDA runtime silently demotes a device=cuda config to
+    # CPU int8. That shipped twice by accident, so it now needs an explicit
+    # opt-in; without it a missing CUDA runtime fails the build.
+    [switch]$AllowCpuOnly,
     [switch]$SkipProcessCleanup,
     # How many timestamped build snapshots to keep in dist\packages. Each is
     # ~2 GB. Published release assets are never pruned. 0 keeps all of them.
@@ -25,6 +29,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($SkipCudaRuntime -and -not $AllowCpuOnly) {
+    throw "[build_windows_exe] -SkipCudaRuntime produces a CPU-only bundle. Pass -AllowCpuOnly as well if that is really what you want."
+}
 
 function Resolve-PythonExe {
     param([string]$RepoRoot, [string]$ExplicitPython)
@@ -480,7 +488,13 @@ function Get-CudaRuntimeDlls {
         "zlibwapi.dll"
     )
 
+    # One file per DLL name, first candidate wins (VOICEFLOW_TORCH_LIB_DIR, then
+    # the venv, then previous bundles). Two sources for the same name used to
+    # both be passed to PyInstaller and the later one -- a previous bundle under
+    # dist\ -- won, then PyInstaller deleted dist\<name> before collecting it:
+    # a CPU-only bundle with no error. The post-build verifier caught that.
     $files = New-Object System.Collections.Generic.List[string]
+    $seenNames = @{}
     $seenDirs = @{}
     foreach ($dir in $candidates) {
         if (-not $dir) {
@@ -497,12 +511,41 @@ function Get-CudaRuntimeDlls {
         }
         foreach ($pattern in $patterns) {
             Get-ChildItem -Path $full -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
-                $files.Add($_.FullName)
+                $nameKey = $_.Name.ToLowerInvariant()
+                if (-not $seenNames.ContainsKey($nameKey)) {
+                    $seenNames[$nameKey] = $true
+                    $files.Add($_.FullName)
+                }
             }
         }
     }
 
-    return $files | Sort-Object -Unique
+    return $files
+}
+
+function Copy-DllsOutOfDist {
+    # PyInstaller empties dist\<OutputName> before it collects binaries, so a
+    # DLL sourced from a previous bundle there must be copied somewhere safe first.
+    param(
+        [string[]]$Dlls,
+        [string]$DistPath,
+        [string]$StageDir
+    )
+
+    $distFull = [System.IO.Path]::GetFullPath($DistPath).TrimEnd('\') + '\'
+    $result = New-Object System.Collections.Generic.List[string]
+    foreach ($dll in $Dlls) {
+        $full = [System.IO.Path]::GetFullPath($dll)
+        if ($full.StartsWith($distFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+            New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
+            $staged = Join-Path $StageDir ([System.IO.Path]::GetFileName($full))
+            Copy-Item -Path $full -Destination $staged -Force
+            $result.Add($staged)
+        } else {
+            $result.Add($full)
+        }
+    }
+    return $result
 }
 
 function Compress-ArchiveWithRetry {
@@ -642,6 +685,11 @@ $args = @(
     # line under the waveform never populated. ~15 MB is worth a working preview.
     "--hidden-import", "onnxruntime",
     "--collect-all", "onnxruntime",
+    # ...and the Silero model itself. faster-whisper loads
+    # faster_whisper/assets/silero_vad_v6.onnx from its package directory; without
+    # this the preview logs "[ONNXRuntimeError] NO_SUCHFILE" every session (VF-09).
+    "--hidden-import", "faster_whisper.vad",
+    "--collect-data", "faster_whisper",
     "--add-data", ((Join-Path $repoRoot "docs\examples\engineering_terms.json") + ";defaults"),
     "--add-data", ((Join-Path $repoRoot "docs\examples\technical_terms.json") + ";defaults"),
     # Bundled vocabulary seed; copied to user's custom_vocabulary.txt on first launch.
@@ -683,37 +731,11 @@ if ($tclTkArgs.Count -gt 0) {
 }
 
 if (-not $SkipCudaRuntime) {
-    $cudaDlls = Get-CudaRuntimeDlls -RepoRoot $repoRoot -PythonExe $pythonExe
-
-    # Stage the DLLs outside dist\ before PyInstaller runs.
-    #
-    # Get-CudaRuntimeDlls can resolve to dist\VoiceFlow\_internal\torch\lib --
-    # the previous bundle -- and PyInstaller wipes its output directory on the
-    # way in. Adding those paths directly means it deletes the sources mid-build
-    # and copies whatever it still happens to find: on 2026-11-06 that produced
-    # a bundle with 8 of 18 CUDA DLLs and a torch so incomplete that importing
-    # it raised "module 'torch' has no attribute 'Tensor'". GPU was silently
-    # demoted to CPU int8. Copying first makes the sources immune to that.
-    $cudaStageDir = Join-Path $repoRoot "build\cuda-stage"
-    if (Test-Path $cudaStageDir) {
-        Remove-Item -Path $cudaStageDir -Recurse -Force -ErrorAction SilentlyContinue
+    $cudaDlls = @(Get-CudaRuntimeDlls -RepoRoot $repoRoot -PythonExe $pythonExe)
+    if ($cudaDlls.Count -gt 0) {
+        $cudaDlls = @(Copy-DllsOutOfDist -Dlls $cudaDlls -DistPath $distPath -StageDir (Join-Path $workPath "cuda_stage"))
     }
-    New-Item -ItemType Directory -Path $cudaStageDir -Force | Out-Null
-
-    $stagedDlls = New-Object System.Collections.Generic.List[string]
-    foreach ($dll in $cudaDlls) {
-        $staged = Join-Path $cudaStageDir ([System.IO.Path]::GetFileName($dll))
-        if (-not (Test-Path $staged)) {
-            Copy-Item -Path $dll -Destination $staged -Force -ErrorAction SilentlyContinue
-            if (Test-Path $staged) {
-                $stagedDlls.Add($staged)
-            }
-        }
-    }
-    $cudaDlls = $stagedDlls.ToArray()
-    Write-Host ("[build_windows_exe] Staged CUDA runtime DLLs outside dist: {0}" -f $cudaDlls.Count)
-
-    if ($cudaDlls -and $cudaDlls.Count -gt 0) {
+    if ($cudaDlls.Count -gt 0) {
         foreach ($dll in $cudaDlls) {
             # Bundle CUDA runtime DLLs so packaged builds can run the GPU path without
             # depending on a system-wide torch install.
@@ -733,9 +755,15 @@ if (-not $SkipCudaRuntime) {
             $args += @("--add-binary", ($dll + ";."))
         }
         Write-Host ("[build_windows_exe] Bundling CUDA runtime DLLs: {0}" -f $cudaDlls.Count)
+    } elseif ($AllowCpuOnly) {
+        Write-Warning "[build_windows_exe] No CUDA runtime DLLs found; -AllowCpuOnly given, so this bundle runs CPU int8 ONLY."
     } else {
-        Write-Host "[build_windows_exe] No CUDA runtime DLLs found; package will run CPU-only unless host provides them."
+        throw ("[build_windows_exe] No CUDA runtime DLLs found (need cudnn_ops64_9.dll, cublas64_12.dll and friends). " +
+            "Install torch in the build venv, or set VOICEFLOW_TORCH_LIB_DIR to a torch\lib folder that has them. " +
+            "Pass -AllowCpuOnly only if a CPU-only bundle is intended.")
     }
+} else {
+    Write-Warning "[build_windows_exe] ==== CPU-ONLY BUILD (-SkipCudaRuntime -AllowCpuOnly): no CUDA runtime will be bundled ===="
 }
 
 $args += $entryScript
@@ -750,10 +778,35 @@ $bundleRoot = Join-Path $distPath $OutputName
 $oneFileExe = Join-Path $distPath "$OutputName.exe"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
+function Invoke-BundleVerification {
+    # Static checks (one-dir) plus the frozen self-check: verify_bundle.py runs
+    # '<exe> --self-check=<json>', waits for it, and exits non-zero on any
+    # failure. The EXE's self-check returns before tray/hotkey/microphone setup
+    # and runs with LOCALAPPDATA/TEMP redirected under the build folder.
+    # Every build mode goes through here; a failure throws, so the script
+    # exits non-zero and no zip is produced.
+    param([string]$Target)
+
+    $verifyScript = Join-Path $repoRoot "scripts\setup\verify_bundle.py"
+    $verifyReport = Join-Path $workPath "verify_bundle.json"
+    $verifyArgs = @($verifyScript, $Target, "--json-out", $verifyReport)
+    if ($AllowCpuOnly) {
+        $verifyArgs += "--allow-cpu-only"
+    }
+    Write-Host "[build_windows_exe] Verifying bundle (static + frozen self-check)..."
+    & $pythonExe @verifyArgs
+    $verifyExit = $LASTEXITCODE
+    if ($verifyExit -ne 0) {
+        throw "[build_windows_exe] Bundle self-check FAILED (exit $verifyExit). Report: $verifyReport"
+    }
+    Write-Host "[build_windows_exe] Bundle self-check passed. Report: $verifyReport"
+}
+
 if ($OneFile) {
     if (-not (Test-Path $oneFileExe)) {
         throw "Expected output not found: $oneFileExe"
     }
+    Invoke-BundleVerification -Target $oneFileExe
     $zipOut = Join-Path $packagePath "$OutputName-$timestamp-onefile.zip"
     Write-Host "[build_windows_exe] Built one-file executable: $oneFileExe"
     if (Compress-ArchiveWithRetry -Path @($oneFileExe) -DestinationPath $zipOut) {
@@ -767,6 +820,7 @@ if ($OneFile) {
     }
     Remove-ConflictingRuntimeDlls -BundleRoot $bundleRoot
     Remove-DuplicateCudaDlls -BundleRoot $bundleRoot
+    Invoke-BundleVerification -Target $bundleRoot
     if (-not $SkipCudaRuntime) {
         Assert-CudaRuntimeComplete -BundleRoot $bundleRoot
     }

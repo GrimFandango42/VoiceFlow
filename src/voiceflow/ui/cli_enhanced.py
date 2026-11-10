@@ -1063,13 +1063,30 @@ class EnhancedApp:
 
                 ring_capacity_mb = float(getattr(self.rec, "get_memory_usage_mb", lambda: 0.0)() or 0.0)
                 live_audio_s = float(getattr(self.rec, "get_current_duration", lambda: 0.0)() or 0.0)
+                audio_health = {}
+                try:
+                    audio_health = dict(getattr(self.rec, "get_audio_health", lambda: {})() or {})
+                except Exception:
+                    audio_health = {}
                 self._log.info(
-                    "longrun_health rss_mb=%.1f ring_capacity_mb=%.2f live_audio_s=%.2f perf_window=%d checkpoint_parts=%d",
+                    "longrun_health rss_mb=%.1f ring_capacity_mb=%.2f live_audio_s=%.2f perf_window=%d checkpoint_parts=%d "
+                    "audio_overflow_recording=%d audio_overflow_continuous=%d audio_status_other=%d "
+                    "audio_callback_errors=%d ring_wraps=%d audio_queue_dropped_recording=%d "
+                    "audio_queue_dropped_continuous=%d audio_queue_high_water=%d capture_worker_alive=%s",
                     rss_mb,
                     ring_capacity_mb,
                     live_audio_s,
                     len(self._perf_window),
                     len(self._checkpoint_preview_parts),
+                    int(audio_health.get("overflow_recording", 0)),
+                    int(audio_health.get("overflow_continuous", 0)),
+                    int(audio_health.get("status_other", 0)),
+                    int(audio_health.get("callback_errors", 0)),
+                    int(audio_health.get("ring_wraps", 0)),
+                    int(audio_health.get("queue_dropped_recording", 0)),
+                    int(audio_health.get("queue_dropped_continuous", 0)),
+                    int(audio_health.get("queue_high_water", 0)),
+                    str(audio_health.get("capture_worker_alive", "unknown")),
                 )
 
                 if self.adaptive_learning and hasattr(self.adaptive_learning, "_purge_expired"):
@@ -3063,10 +3080,12 @@ def main(argv=None):
         f"(warn={monitor_memory_warning_mb:.0f}MB, critical={monitor_memory_critical_mb:.0f}MB)..."
     )
     monitor = start_idle_monitoring(
-        operation_timeout=120.0,        # 2 minutes max for active operations
+        operation_timeout=120.0,        # 2 minutes max for processing/injection
         memory_warning_mb=monitor_memory_warning_mb,
         memory_critical_mb=monitor_memory_critical_mb,
-        check_interval=10.0             # Check every 10 seconds
+        check_interval=10.0,            # Check every 10 seconds
+        recording_timeout=1800.0,       # a 30-minute hold is a stuck key, not dictation
+        recording_stall_seconds=15.0,   # no audio blocks for 15s while held = stuck stream
     )
     app_ref: Dict[str, Any] = {"instance": None}
 
@@ -3118,6 +3137,9 @@ def main(argv=None):
     injector_backend = create_injector_backend(cfg, platform_name=current_platform)
     app = EnhancedApp(cfg, injector_backend=injector_backend)
     app_ref["instance"] = app
+    # A long dictation is healthy while audio blocks keep arriving; the
+    # watchdog used to call any hold past 120s a hang (VF-05/VF-10).
+    monitor.activity_probe = lambda: int(getattr(app.rec, "_callback_count", 0))
     if VISUAL_INDICATORS_AVAILABLE:
         try:
             visual_set_correction_feedback_handler(app.handle_manual_correction_feedback)

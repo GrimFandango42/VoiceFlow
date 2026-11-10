@@ -161,9 +161,15 @@ def _missing_cuda_dlls(required_dlls: list[str]) -> list[str]:
     return [dll for dll in required_dlls if not _find_dll_in_path(dll)]
 
 
+# DLLs ctranslate2 needs for CUDA float16 on Windows. The build verifier
+# (scripts/setup/verify_bundle.py) checks the same list, so "bundle passed" and
+# "runtime found CUDA" cannot disagree.
+CUDA_REQUIRED_DLLS = ("cudnn_ops64_9.dll", "cublas64_12.dll")
+
+
 def _cuda_runtime_ready() -> bool:
     """Best-effort CUDA runtime check for faster-whisper/ctranslate2 on Windows."""
-    required_dlls = ["cudnn_ops64_9.dll", "cublas64_12.dll"]
+    required_dlls = list(CUDA_REQUIRED_DLLS)
     _register_external_cuda_runtime_path(required_dlls)
 
     # Source/venv fallback path: keep torch probing for environments that depend on
@@ -1101,7 +1107,7 @@ class ASREngine:
         if result.duration > 0:
             rtf = result.processing_time / result.duration
             logger.debug(f"Transcribed {result.duration:.2f}s in {result.processing_time:.2f}s "
-                        f"(RTF: {rtf:.2f}, speed: {1/rtf:.1f}x realtime)")
+                        f"(RTF: {rtf:.2f}, speed: {1 / max(rtf, 0.001):.1f}x realtime)")
 
         return result
 
