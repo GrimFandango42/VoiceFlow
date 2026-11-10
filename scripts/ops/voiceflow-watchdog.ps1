@@ -88,11 +88,27 @@ try {
     # Start-Process is safe here: this script runs from Task Scheduler, so the
     # child is parented to a PowerShell that exits immediately, and the app
     # keeps running. The scheduler, not an interactive session, owns the chain.
+    # Load models from the local cache only.
+    #
+    # The app preloads two Whisper models at the same instant. Each goes through
+    # huggingface_hub's snapshot_download, whose progress-bar class shares one
+    # class-level lock that the two threads create and delete under each other.
+    # The loser fails with "type object 'disabled_tqdm' has no attribute '_lock'"
+    # and the app answers by dropping that model to CPU int8 -- a main model that
+    # takes seconds per dictation instead of a fraction of one. Which launch
+    # loses is luck (seen 2026-11-10 12:22: warmup 4.62s on CPU vs 0.10s on GPU).
+    # Offline mode returns the cached path without that code. Every model the
+    # app uses is already cached; a new model needs one online start.
+    $env:HF_HUB_OFFLINE = '1'
+
     $proc = Start-Process -FilePath $ExePath `
                           -WorkingDirectory (Split-Path -Parent $ExePath) `
                           -WindowStyle Hidden `
                           -PassThru
     if ($proc) {
+        # Task Scheduler runs this at priority 7, and the child inherits
+        # BelowNormal CPU priority. Dictation is interactive; put it back.
+        try { $proc.PriorityClass = 'Normal' } catch { Write-WatchdogLog "could not raise priority: $($_.Exception.Message)" }
         Write-WatchdogLog "started pid=$($proc.Id)"
     } else {
         Write-WatchdogLog "START FAILED: no process handle returned"
