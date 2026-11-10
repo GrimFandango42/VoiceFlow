@@ -165,7 +165,10 @@ What that means:
   corrected. This used to rewrite the request to plain CPU before the backend was
   built, so there was no warning and no idle retry. It now enters the same
   announced, retried fallback state (`missing_runtime: …` reason). `device=auto`
-  with no CUDA is still plain CPU, not a fallback.
+  with no CUDA is still plain CPU, not a fallback. In the real app the listener is
+  registered (`EnhancedApp.__init__`) before the engine is built, so the event sets
+  the standing warning, and the post-tray call to `_apply_device_warning` shows it
+  once the tray exists; the event does not need to arrive after the tray.
 - **gemma unloaded:** ~14 GB free; no pressure.
 
 *Not measured:* the real behaviour with gemma toggled. I did not unload it
@@ -203,19 +206,37 @@ here. What static reading did establish:
   `~\.voiceflow\logs`), `Path.cwd()` as one CUDA DLL probe root, and
   `VOICEFLOW_*` switches. None of those explains "no log, no history, no GPU" by
   itself, and no fallback log location held any file.
+- `asr_engine.py` uses `Path.cwd()` as one CUDA-DLL probe root, and the working
+  directory differs by launcher (shell: repo root; Explorer: the exe folder; Task
+  Scheduler: System32 unless the task sets "Start in"). It cannot explain a missing
+  log, but it is a concrete GPU-side suspect for a scheduler-launched process.
 - Unchecked, and the first thing to check: whether the registered scheduled task
-  actually runs this script copy, and whether the live `dist\VoiceFlow\VoiceFlow.exe`
-  (built 2026-11-07 17:29) is the stale-module build `b460a24` describes.
+  actually runs this script copy (and its "Start in", logon type and run level),
+  and whether the live `dist\VoiceFlow\VoiceFlow.exe` (built 2026-11-07 17:29) is the
+  stale-module build `b460a24` describes. I did not query the task: the dispatch
+  says not to touch scheduled tasks and I read that conservatively. A read-only
+  `Get-ScheduledTask | Where TaskName -like '*VoiceFlow*'` / `Export-ScheduledTask`
+  by the conductor answers it in one command.
 
-**Runbook for whoever is cleared to launch** (all in a side directory; do not stop
-the live app):
+### Why no bundle was built in this round
 
-1. Cold build from this branch to a side output directory (e.g.
-   `C:\AI_Projects\_wt\VoiceFlow-vf18\dist-side`) with `-SkipProcessCleanup`
-   (cleanup is on by default and kills the live app), and check that nothing
-   copies over `C:\AI_Projects\VoiceFlow\dist`. `Assert-BundleBehaves` launches the
-   app: run it only with its own `LOCALAPPDATA`-equivalent data dir and a different
-   hotkey.
+Building is not launching, but this build script launches. `Invoke-BundleVerification`
+runs `verify_bundle.py`, which executes the frozen exe with `--self-check` (sandboxed
+`LOCALAPPDATA`/`TEMP`, returns before tray/hotkey/mic), and no switch skips it
+(`-SkipSmokeTest` only skips `Assert-BundleBehaves`). That is an app launch, which this
+dispatch forbids, so I did not run the build. Other properties checked in the script
+so the next run is safe: output is fixed at `<repo>\dist` of the checkout being built
+(this worktree's `dist`, not `C:\AI_Projects\VoiceFlow\dist`, which the watchdog
+runs); `-SkipProcessCleanup` turns the live-app kill off; `-SkipSmokeTest` skips the
+behaviour launch; nothing copies to the live dist.
+
+**Runbook for whoever is cleared to launch** (do not stop the live app):
+
+1. From this worktree: `scripts\setup\build_windows_exe.ps1 -SkipProcessCleanup`
+   (cold by default; cleanup is on by default and kills the live app). The bundle
+   lands in this worktree's `dist\VoiceFlow`. Its `--self-check` runs sandboxed; leave
+   `Assert-BundleBehaves` on only if its launch (own data dir, different hotkey) is
+   acceptable, else add `-SkipSmokeTest` and do the launches in step 2 by hand.
 2. Launch that bundle (a) from Explorer, (b) via a *copy* of the watchdog pointed
    at the side exe, (c) via a one-off scheduled task for the side exe. After each,
    compare the last two lines of `launch_contexts.jsonl` and `boot_breadcrumb.log`,
@@ -227,10 +248,11 @@ the live app):
 
 ## Not tested
 
-- **20 consecutive cold starts of a built bundle** — no bundle was built or launched (dispatch forbids launching apps).
+- **20 consecutive cold starts of a built bundle** — no bundle was built or launched: the build script's mandatory `--self-check` launches the frozen exe, which this dispatch forbids (see "Why no bundle was built").
+- **Scheduled task definition** — not queried (see above).
 - **Real Task Scheduler, Explorer, Startup-shortcut launches** — not touched; item 3's root cause is therefore open.
 - The `config.json` migration on Nithin's real file and the missing-runtime/decode-OOM paths on a real GPU — unit tests with fakes only.
-- Build: the merged build script has not been run. Note for whoever does: `-SkipProcessCleanup` is a switch and
-  cleanup is **on by default**, which kills the live app; pass it. `Assert-BundleBehaves` launches the real app.
+- Build: the merged build script has not been run (reason above). Note for whoever does: `-SkipProcessCleanup` is a
+  switch and cleanup is **on by default**, which kills the live app; pass it.
 - Item 6 with gemma actually unloaded / the card actually full.
 - Model accuracy on a real microphone.
