@@ -97,6 +97,7 @@ def tail_kept(reference: str, hypothesis: str) -> bool:
 CLAUSE_STARTERS = frozenset(
     "the a an we i you they he she it this that there these those my our your their his her its please thanks thank".split()
 )
+CONJUNCTIVE_ADVERBS = frozenset("otherwise however therefore instead meanwhile furthermore moreover finally".split())
 RUN_ON_WORDS = 35
 
 
@@ -104,11 +105,15 @@ def is_run_on(sentence: str) -> bool:
     """Proxy for a run-on: one 'sentence' that is very long, or has a comma splice."""
     if len(norm_words(sentence)) > RUN_ON_WORDS:
         return True
+    if ";" in sentence:
+        return False  # a semicolon is a deliberate join, not a splice
     pieces = sentence.split(",")
     seen = 0
     for k, piece in enumerate(pieces):
         seen += len(norm_words(piece))
         nxt = norm_words(pieces[k + 1]) if k + 1 < len(pieces) else []
+        if norm_words(piece)[-1:] and norm_words(piece)[-1] in CONJUNCTIVE_ADVERBS:
+            continue  # "..., otherwise, we hold it" / "..., however, the team"
         if nxt and seen >= 4 and nxt[0] in CLAUSE_STARTERS and len(nxt) >= 3:
             # "if X, we ..." / "when X, the ..." is a normal subordinate clause, not a splice
             first = norm_words(pieces[0])[:1]

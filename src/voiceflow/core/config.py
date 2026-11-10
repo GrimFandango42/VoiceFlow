@@ -299,7 +299,7 @@ class Config:
     reconstruction_timeout_s: float = 45.0  # hard timeout for the model call (cold model load can be ~40 s)
     reconstruction_min_words: int = 4
     reconstruction_max_chars: int = 2000
-    reconstruction_num_threads: int = 0  # 0 = Ollama default; set to leave CPU for other apps
+    reconstruction_num_threads: int = 0  # 0 = half the logical cores (leaves CPU for the foreground app and ASR)
     replace_last_paste_hotkey: str = "ctrl+alt+r"
     replace_last_paste_max_age_s: float = 120.0
     hotword_promotion_enabled: bool = True
