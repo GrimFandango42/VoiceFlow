@@ -311,49 +311,90 @@ def _read_source_stamp(path: Path) -> dict | None:
     return values
 
 
-def _check_build_commit(report: Report, frozen_report: dict | None) -> None:
-    """The bundle must be a build of the checkout's HEAD (VF-11b review finding 2).
+_HEX = frozenset("0123456789abcdef")
+_STATIC_ONLY_NOTE = "static-only debugging, NOT acceptance evidence"
+
+
+def _check_build_commit(report: Report, frozen_report: dict | None, *, frozen_required: bool = True) -> None:
+    """The bundle must be a clean build of the checkout's HEAD (VF-11b review findings).
 
     A bundle left over from an older commit passes every other check, so a
-    stale build could be reviewed and accepted as the current tip. The commit
-    the frozen EXE reports about itself is authoritative; the stamp file the
-    build wrote into the source tree is the fallback (static-only runs, or an
-    EXE too old to report it).
+    stale build could be reviewed and accepted as the current tip.
+
+    frozen_required=True (every real verification, and the build): only the
+    identity the frozen EXE reports about itself counts, and the check fails
+    closed -- a missing, malformed, errored or "unknown" build block, a dirty
+    build, or an unreadable git HEAD is a FAIL, never a warning, because none
+    of them proves the EXE is exactly the commit under review. The source-tree
+    stamp is never consulted here.
+
+    frozen_required=False (--static-only debugging): the EXE was not run, so
+    the stamp the build wrote into the source tree is the only evidence. A
+    mismatch still fails; anything inconclusive only warns, and every detail
+    says the result is not acceptance evidence.
     """
-    frozen_build = (frozen_report or {}).get("build") if isinstance(frozen_report, dict) else None
-    if isinstance(frozen_build, dict) and frozen_build.get("commit"):
-        stamp, source = frozen_build, "frozen EXE"
-    else:
-        stamp, source = _read_source_stamp(BUILD_STAMP), f"{BUILD_STAMP.name}"
-    if not stamp:
-        report.add("build_commit_matches_head", False, f"no build stamp found ({BUILD_STAMP})")
+    name = "build_commit_matches_head"
+    if frozen_required:
+        build = frozen_report.get("build") if isinstance(frozen_report, dict) else None
+        if not isinstance(build, dict):
+            report.add(name, False, "frozen EXE reported no build identity -- cannot prove which commit it is")
+            return
+        if build.get("error"):
+            report.add(name, False, f"frozen EXE could not read its build stamp: {build['error']}")
+            return
+        commit = build.get("commit")
+        if not isinstance(commit, str) or len(commit.strip()) < 7 or not set(commit.strip().lower()) <= _HEX:
+            report.add(name, False, f"frozen EXE build commit is missing or not a commit id: {commit!r}")
+            return
+        commit = commit.strip().lower()
+        if build.get("dirty") is not False:
+            report.add(
+                name,
+                False,
+                f"frozen EXE {commit} was built from a dirty tree (dirty={build.get('dirty')!r}) "
+                "-- commit or discard changes and rebuild",
+            )
+            return
+        head = _git_head(REPO_ROOT)
+        if head is None:
+            report.add(name, False, f"git HEAD unavailable -- cannot prove frozen EXE {commit} is HEAD")
+            return
+        if not head.lower().startswith(commit):
+            report.add(name, False, f"stale bundle: built from {commit} (frozen EXE) but HEAD is {head[:12]} -- rebuild")
+            return
+        report.add(name, True, f"{commit} (frozen EXE) == HEAD, clean tree")
         return
-    commit = str(stamp.get("commit") or "").strip()
+
+    stamp = _read_source_stamp(BUILD_STAMP)
+    if not stamp:
+        report.add(name, False, f"no build stamp found ({BUILD_STAMP}; {_STATIC_ONLY_NOTE})")
+        return
+    commit = str(stamp.get("commit") or "").strip().lower()
     head = _git_head(REPO_ROOT)
     if head is None or commit in ("", "unknown"):
         report.add(
-            "build_commit_matches_head",
+            name,
             False,
-            f"cannot compare: build commit={commit or '?'}, HEAD={head or 'git unavailable'}",
+            f"cannot compare: build commit={commit or '?'}, HEAD={head or 'git unavailable'} ({_STATIC_ONLY_NOTE})",
             warn_only=True,
         )
         return
-    if len(commit) < 7 or not head.startswith(commit):
+    if len(commit) < 7 or not head.lower().startswith(commit):
         report.add(
-            "build_commit_matches_head",
+            name,
             False,
-            f"stale bundle: built from {commit} ({source}) but HEAD is {head[:12]} -- rebuild",
+            f"stale bundle: built from {commit} ({BUILD_STAMP.name}) but HEAD is {head[:12]} -- rebuild",
         )
         return
-    if stamp.get("dirty"):
+    if stamp.get("dirty") is not False:
         report.add(
-            "build_commit_matches_head",
+            name,
             False,
-            f"{commit} ({source}) matches HEAD but was built from a dirty tree",
+            f"{commit} ({BUILD_STAMP.name}) matches HEAD but dirty={stamp.get('dirty')!r} ({_STATIC_ONLY_NOTE})",
             warn_only=True,
         )
         return
-    report.add("build_commit_matches_head", True, f"{commit} ({source}) == HEAD, clean tree")
+    report.add(name, True, f"{commit} ({BUILD_STAMP.name}) == HEAD, clean tree ({_STATIC_ONLY_NOTE})")
 
 
 def verify(
@@ -376,7 +417,7 @@ def verify(
             report.add("frozen_self_check", False, "one-file builds can only be verified by the frozen self-check")
             return report
         report.frozen_report = run_frozen_self_check(target, work_dir, allow_cpu_only, report)
-        _check_build_commit(report, report.frozen_report)
+        _check_build_commit(report, report.frozen_report, frozen_required=True)
         return report
 
     exe = target / "VoiceFlow.exe"
@@ -395,7 +436,9 @@ def verify(
     _check_modules(exe, internal, modules, report)
     if run_frozen:
         report.frozen_report = run_frozen_self_check(exe, work_dir, allow_cpu_only, report)
-    _check_build_commit(report, report.frozen_report)
+    else:
+        report.add("frozen_self_check", False, f"skipped (--static-only): {_STATIC_ONLY_NOTE}", warn_only=True)
+    _check_build_commit(report, report.frozen_report, frozen_required=run_frozen)
     return report
 
 
