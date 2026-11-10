@@ -246,6 +246,32 @@ behaviour launch; nothing copies to the live dist.
 4. If a launcher gives a bad launch, diff its `launch_contexts.jsonl` record against
    a good one (names only) and bisect the differing variables.
 
+## Review round 2 (Codex, on `0de208c`): status
+
+Codex confirmed the three round-1 code findings as corrected (42/42 VF-18 tests,
+428/428 broader suite) and kept one finding: item 3's root cause and every
+end-to-end gate are unproven. That finding **stands**; this dispatch has the same
+prohibitions (no app launch, no scheduled-task access), so it cannot be closed by
+the executor. No source change was made in round 2.
+
+What was tried this round, read-only, and where it stopped:
+
+- Looked for a build stamp in the live bundle (`C:\AI_Projects\VoiceFlow\dist\VoiceFlow`):
+  it is a one-file `VoiceFlow.exe` plus `_internal`; no stamp file is on disk.
+- Tried to test the stale-module hypothesis statically: parse the exe's embedded PYZ
+  (never executing it) and check whether `voiceflow.utils.logging_setup` contains
+  `_verify_delivery_or_fall_back` (added in `cde7104`, 2026-11-07 13:50). The
+  interpreter call needed an approval this non-interactive session could not
+  give, so **it was not run**. A "no" would mean the live exe predates the logging
+  fixes and item 3 is the stale-cache build `b460a24` describes, not a launcher
+  problem; a "yes" sends the bisect to the environment diff in runbook step 4.
+  That check never starts the app, so the conductor can run it directly.
+
+The decision for the conductor: either run the runbook above (build with
+`-SkipProcessCleanup`, three launch paths, 20 cold starts) under an order that
+permits launching a side-directory bundle, or accept items 1, 2, 4, 5, 6 as done
+and split item 3 plus the acceptance runs into their own order.
+
 ## Not tested
 
 - **20 consecutive cold starts of a built bundle** — no bundle was built or launched: the build script's mandatory `--self-check` launches the frozen exe, which this dispatch forbids (see "Why no bundle was built").
