@@ -2054,6 +2054,18 @@ class EnhancedApp:
             if outcome.accepted:
                 # Feed the learner the model's repair (low weight: it is a suggestion, not a user edit).
                 self._observe_adaptive_async(raw, outcome.text, {"source": "reconstruction", "async": True})
+                self._accepted_reconstructions = getattr(self, "_accepted_reconstructions", 0) + 1
+                if (
+                    self.adaptive_learning
+                    and self.tuning_log
+                    and bool(getattr(self.cfg, "hotword_promotion_enabled", True))
+                    and self._accepted_reconstructions % 10 == 0
+                ):
+                    report = self.adaptive_learning.promote_hotwords(self.tuning_log)
+                    self._log.info(
+                        "hotword_promotion promoted=%s candidates=%s",
+                        report.get("promoted_count"), report.get("hotword_candidates"),
+                    )
             if usable:
                 hotkey = str(getattr(self.cfg, "replace_last_paste_hotkey", "ctrl+alt+r"))
                 print(f"[AI] Better version ready - press {hotkey} to swap it in")
