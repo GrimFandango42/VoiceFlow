@@ -32,16 +32,24 @@ the two orders do not contradict each other: anything VF-12 would call a rewrite
 A candidate is accepted only if **all** of these hold, checked on the text the user would otherwise get:
 
 1. Every number, URL, file path and code-ish token (CamelCase, snake_case, extensions, dotted names)
-   in the input is still there, verbatim, the same number of times. **The raw ASR text is checked too**: digits,
-   protected tokens and proper nouns that were in the raw must be in the candidate even if text processing had
-   already lost them (spelled-out numbers are exempt there because text processing normalises them, `nine` -> `9`).
-2. Every capitalised proper noun in the input is still there; none appears that was not in the input
-   or the vocabulary (sentence-initial function words excepted).
+   in the input is still there, verbatim, the same number of times. **The raw ASR text is checked too**, as
+   multisets: every number, protected token and name in the raw must be in the candidate as many times as it was
+   said, even if text processing had already lost it. Numbers are compared by value, spoken or typed (`nine` ==
+   `9`, `forty two` == `42`, `two thousand twenty six` == `2026`), so a spelled number cannot vanish and a
+   repeated `7` cannot collapse to one `7`.
+2. Every capitalised proper noun in the input is still there, **including a name that opens a sentence**
+   ("Alice sent..." -> "Alicia sent..." is rejected; only function words are exempt from this); none appears
+   that was not in the input or the vocabulary. A sentence-initial word is excused only when it was folded into
+   a vocabulary term the candidate introduces ("Pie installer is slow" -> "PyInstaller is slow").
 3. Word count stays within 0.8x-1.4x.
 4. A word-level diff against the input only contains repairs of form: insert a small connecting word (never
    `a`/`an`/`the`, and never beside a name, number, protected token or vocabulary term), delete a filler sound
-   or an immediate stutter, respell a word or phrase into a close spelling or a vocabulary term (`pie installer`
-   -> `PyInstaller`, `that is` -> `that's`). Deleting any other word (including `and`: "thanks everyone and see you
+   or an immediate stutter, respell a word or phrase into a vocabulary term or a term the speaker already used in
+   the same dictation (`pie installer` -> `PyInstaller`, `cubernetes` -> `kubernetes` after `kubernetes`), or
+   contract/expand or swap a homophone (`that is` -> `that's`, `there` -> `their`). A close spelling alone is
+   never enough: `the cat is here` -> `the car is here` and `he` -> `she` are rejected
+   (`unsourced_replacement` / `rewritten`) because the new word is not a vocabulary term, not in the utterance,
+   and not the same spoken word. Deleting any other word (including `and`: "thanks everyone and see you
    there" -> "thanks everyone, see you there"), inserting or swapping a content word, reordering, inflection
    changes (`note` -> `notes`), inserting a determiner (`over WebSocket` -> `over a WebSocket`) and swapping one
    small word for another (`is good` -> `they're good`) are rejected. Each of those was seen in an evaluation run.

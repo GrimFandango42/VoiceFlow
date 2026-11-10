@@ -646,15 +646,29 @@ def print_table(results: List[Dict[str, Any]], have_llm: bool) -> str:
     return "\n".join(lines)
 
 
-def acceptance_failures(results: List[Dict[str, Any]], have_llm: bool) -> List[str]:
+WINDOW_CHECKS = ("text_preserved", "replace_refused_after_switch")
+
+
+def window_failures(window: Optional[Dict[str, Any]]) -> List[str]:
+    """The window-switch scenario is a gate too: a missing or false result is a failure, never a silent pass."""
+    window = window or {}
+    if window.get("error"):
+        return [f"window switch: scenario crashed ({window['error']})"]
+    return [f"window switch: {name} is {window.get(name)!r}, expected True" for name in WINDOW_CHECKS if window.get(name) is not True]
+
+
+def acceptance_failures(results: List[Dict[str, Any]], have_llm: bool, window: Optional[Dict[str, Any]] = None,
+                        check_window: bool = False) -> List[str]:
     """VF-17 acceptance gates over the per-fixture rows. Empty list = pass.
 
     - no fixture may get a worse WER, lose a tail word it used to keep, or become less legible;
     - the "utterance ends in a short word" scenario must retain 100 % of its tail words;
-    - no scenario's mean WER may rise.
+    - no scenario's mean WER may rise;
+    - when ``check_window`` is set (main() always sets it), the window-switch scenario must have kept the text and refused
+      replace-last-paste after the switch.
     "After" is the full pipeline when the reconstruction columns were measured, else the audio side only.
     """
-    fails: List[str] = []
+    fails: List[str] = window_failures(window) if check_window else []
     eps = 1e-9
     for r in results:
         full = bool(have_llm and r["rows"] and "wer_after" in r["rows"][0])
@@ -716,7 +730,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"[vf_eval] {key} ...", file=sys.stderr, flush=True)
         results.append(run_scenario(key, tts, asr, recon if have_llm else None))
 
-    window = run_window_switch()
+    try:
+        window = run_window_switch()
+    except Exception as exc:  # a crashed scenario must fail the gate, not the report
+        window = {"error": f"{type(exc).__name__}: {exc}"}
     corpus = None if args.no_corpus else run_corpus(recon if have_llm else None, args.corpus_limit)
     paths = None
     if have_llm:
@@ -755,13 +772,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if paths:
         print("\nadded latency, reconstruction paths:", json.dumps(paths, indent=2))
     print(f"\n(elapsed {time.time() - started:.0f}s)")
-    failures = acceptance_failures(results, have_llm)
+    failures = acceptance_failures(results, have_llm, window, check_window=True)
     if failures:
         print("\nACCEPTANCE: FAIL")
         for f in failures:
             print(f"  - {f}")
     else:
-        print("\nACCEPTANCE: PASS (no fixture regressed; tail retention 100% where measured)")
+        print("\nACCEPTANCE: PASS (no fixture regressed; tail retention 100% where measured; window-switch safeguards held)")
 
     if args.out:
         Path(args.out).write_text(json.dumps({"results": results, "window": window, "corpus": corpus, "paths": paths,

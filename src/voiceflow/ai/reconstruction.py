@@ -300,8 +300,31 @@ def _special_norms(pre: str, vocab_norms: Set[str]) -> Set[str]:
     return special
 
 
+#: Contraction tails: "that is" <-> "thats". The only function-word swap that is a respelling rather than a new word.
+_CONTRACTION_TAILS: dict = {"is": "s", "are": "re", "will": "ll", "would": "d", "had": "d", "have": "ve", "am": "m", "not": "nt"}
+
+#: Homophone sets whose members are the same spoken word (their/there/they're).
+_HOMOPHONES = (frozenset({"their", "there", "theyre"}), frozenset({"your", "youre"}), frozenset({"whose", "whos"}))
+
+
+def _function_respelling(removed: Sequence[str], added: Sequence[str]) -> bool:
+    """True only for contraction/expansion (that is <-> thats) and homophone respellings (there -> their).
+
+    Anything else between two small words ("he" -> "she", "can" -> "cant", "is" -> "are") is a different word the speaker
+    did not say, however close the letters are.
+    """
+    if len(removed) == 1 and len(added) == 1:
+        return any(removed[0] in group and added[0] in group for group in _HOMOPHONES)
+    for long_, short in ((removed, added), (added, removed)):
+        if len(long_) == 2 and len(short) == 1 and long_[1] in _CONTRACTION_TAILS:
+            if short[0] == long_[0] + _CONTRACTION_TAILS[long_[1]]:
+                return True
+    return False
+
+
 def _structural_diff(
-    pre_words: Sequence[str], cand_words: Sequence[str], *, vocab_norms: Set[str], special_norms: Optional[Set[str]] = None
+    pre_words: Sequence[str], cand_words: Sequence[str], *, vocab_norms: Set[str], special_norms: Optional[Set[str]] = None,
+    utterance_norms: Optional[Set[str]] = None,
 ) -> GuardResult:
     """Word-level diff of candidate against the pre-text, whitelisting only repairs of FORM.
 
@@ -342,9 +365,9 @@ def _structural_diff(
                 inserted_fn += len(added)
                 continue
             if all(w in FUNCTION_NORMS or w in FILLERS for w in removed + added):
-                # "is good" -> "they're good" swaps one word the speaker chose for another; only a respelling
-                # (that is -> that's) of the same words is a form repair.
-                if len(removed) <= 2 and len(added) <= 2 and _spelling_close("".join(removed), "".join(added)):
+                # "is good" -> "they're good" or "he" -> "she" swaps one word the speaker chose for another; only a
+                # respelling of the same words (that is -> that's, there -> their) is a form repair.
+                if _function_respelling(removed, added):
                     inserted_fn += max(0, len(added) - len(removed))
                     continue
                 return GuardResult(False, "rewritten", f"{' '.join(removed)}->{' '.join(added)}")
@@ -353,6 +376,12 @@ def _structural_diff(
             a, b = "".join(removed), "".join(added)
             if not _spelling_close(a, b):
                 return GuardResult(False, "rewritten", f"{' '.join(removed)}->{' '.join(added)}")
+            # Close spelling is necessary, not sufficient: cat -> car is two letters apart and a different thing. A content
+            # word may only become a vocabulary term or a term the speaker already used in this utterance.
+            sources = vocab_norms | (utterance_norms or set())
+            unsourced = [w for w in added if w not in sources]
+            if unsourced:
+                return GuardResult(False, "unsourced_replacement", f"{' '.join(removed)}->{' '.join(added)}")
     if inserted_fn > max(2, int(round(0.15 * len(pre_words)))):
         return GuardResult(False, "too_many_insertions", str(inserted_fn))
 
@@ -362,31 +391,149 @@ def _structural_diff(
     return GuardResult(True)
 
 
-def _raw_tokens_lost(raw: str, candidate: str) -> List[str]:
-    """Raw-text digits, protected tokens and proper nouns that the candidate no longer contains.
+_NUM_TOKEN = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?%?|[A-Za-z][A-Za-z']*")
 
-    Spelled-out numbers are deliberately not checked here: text processing normalises them (nine -> 9) before the
-    reconstruction stage, and the pre-text number guard already pins the candidate to that.
+_UNIT_VALUES = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9}
+_TEEN_VALUES = {"ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+                "seventeen": 17, "eighteen": 18, "nineteen": 19}
+_TENS_VALUES = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+_SCALE_VALUES = {"thousand": 1000, "million": 1000000, "billion": 1000000000, "trillion": 1000000000000}
+_SPOKEN = frozenset(_UNIT_VALUES) | frozenset(_TEEN_VALUES) | frozenset(_TENS_VALUES) | frozenset(_SCALE_VALUES) | {"hundred"}
+#: number words that stay words ("first", "half"): compared as the word itself
+_WORD_NUMBERS = frozenset(NUMBER_WORDS) - _SPOKEN
+
+
+def _mask_protected(text: str) -> str:
+    """``text`` with every protected token blanked out, so digits inside v3.2.1 or a file name are not counted as numbers."""
+    for token in sorted(protected_tokens(text), key=len, reverse=True):
+        text = re.sub(re.escape(token), lambda m: " " * len(m.group(0)), text)
+    return text
+
+
+def numeric_values(text: str) -> Counter:
+    """Every number in ``text`` as a multiset of canonical values, whether it was typed or spoken.
+
+    "42", "forty two" and "forty-two" all count as "42"; "two thousand twenty six" and "2026" both count as "2026". This is
+    what lets the raw ASR text ("nine") be compared with processed text ("9") without a spelled number ever being able to
+    vanish unnoticed. A lone "one" is not a number (pronoun: "the one that", "no one").
+    """
+    out: Counter = Counter()
+    tokens = [m.group(0) for m in _NUM_TOKEN.finditer(_mask_protected(text).replace("-", " "))]
+    state = {"total": 0, "cur": 0, "n": 0, "last": "", "scale": 10 ** 15}
+
+    def flush() -> None:
+        if state["n"] and not (state["n"] == 1 and state["last"] == "one"):
+            out[str(state["total"] + state["cur"])] += 1
+        state.update(total=0, cur=0, n=0, last="", scale=10 ** 15)
+
+    def accepts(word: str) -> bool:
+        cur = state["cur"]
+        if word in _UNIT_VALUES:
+            return cur % 100 == 0 or (20 <= cur % 100 <= 90 and cur % 10 == 0)
+        if word in _TEEN_VALUES or word in _TENS_VALUES:
+            return cur % 100 == 0
+        if word == "hundred":
+            return 0 <= cur < 100
+        return _SCALE_VALUES[word] < state["scale"] and (cur > 0 or state["n"] == 0)
+
+    def add(word: str) -> None:
+        if word in _UNIT_VALUES:
+            state["cur"] += _UNIT_VALUES[word]
+        elif word in _TEEN_VALUES:
+            state["cur"] += _TEEN_VALUES[word]
+        elif word in _TENS_VALUES:
+            state["cur"] += _TENS_VALUES[word]
+        elif word == "hundred":
+            state["cur"] = (state["cur"] or 1) * 100
+        else:
+            state["total"] += (state["cur"] or 1) * _SCALE_VALUES[word]
+            state["cur"] = 0
+            state["scale"] = _SCALE_VALUES[word]
+        state["n"] += 1
+        state["last"] = word
+
+    for i, tok in enumerate(tokens):
+        if tok[0].isdigit():
+            flush()
+            out[tok.replace(",", "").rstrip("%")] += 1
+            continue
+        word = tok.lower().replace("'", "")
+        if word in _SPOKEN:
+            if state["n"] and not accepts(word):
+                flush()
+            add(word)
+        elif word == "and" and state["last"] in ("hundred", *_SCALE_VALUES) \
+                and i + 1 < len(tokens) and tokens[i + 1].lower() in _SPOKEN:
+            continue  # "one hundred and five"
+        else:
+            flush()
+            if word in _WORD_NUMBERS:
+                out[word] += 1
+    flush()
+    return out
+
+
+def initial_names(text: str) -> Counter:
+    """Sentence-initial capitalised words that are not function words: names and content words that open a sentence.
+
+    ``proper_nouns`` ignores them because "The" and "Send" are capitalised for position only; here a word that is
+    neither a function word nor a filler is treated as a name, because it is cheaper to refuse a repair that touches
+    one than to let "Alice sent ..." become "Alicia sent ...".
+    """
+    found: Counter = Counter()
+    for word, initial in _sentence_initial_flags(text):
+        norm = _norm(word)
+        if initial and _is_capitalised_word(word) and norm not in FUNCTION_NORMS and norm not in FILLERS and norm not in NUMBER_WORDS:
+            found[norm] += 1
+    return found
+
+
+def _names_lost(source: str, candidate: str, vocab_terms: Sequence[str] = ()) -> List[str]:
+    """Names (mid-sentence and sentence-initial) in ``source`` that the candidate no longer has, with multiplicity.
+
+    A name is excused only when it was folded into a vocabulary term the candidate introduces
+    ("Pie installer is slow" -> "PyInstaller is slow").
+    """
+    cand_norm = [_norm(w) for w in words(candidate)]
+    cand_counts = Counter(cand_norm)
+    src_norm = [_norm(w) for w in words(source)]
+    display: dict = {}
+    for w in words(source):
+        display.setdefault(_norm(w), w)
+    wanted: Counter = Counter({_norm(n): c for n, c in proper_nouns(source).items()})
+    wanted.update(initial_names(source))
+    new_terms = {_norm("".join(words(t))) for t in vocab_terms if t} - {"".join(src_norm)}
+    new_terms = {t for t in new_terms if t and t in cand_norm}
+    lost: List[str] = []
+    for name, count in wanted.items():
+        if count - cand_counts.get(name, 0) <= 0:
+            continue
+        if name in src_norm and new_terms:
+            i = src_norm.index(name)
+            joined, run = [], ""
+            for k in range(i, min(i + 3, len(src_norm))):
+                run += src_norm[k]
+                joined.append(run)
+            if any(_spelling_close(j, t) for j in joined for t in new_terms):
+                continue
+        lost.append(display.get(name, name))
+    return lost
+
+
+def _raw_tokens_lost(raw: str, candidate: str, vocab_terms: Sequence[str] = ()) -> List[str]:
+    """Numbers, protected tokens and names in the raw ASR text that the candidate no longer contains.
+
+    Everything is compared as a multiset ("7 ... 7" cannot become "7"), spelled numbers are normalised to the same
+    canonical value as digits (nine == 9), and sentence-initial names are protected like mid-sentence ones.
     """
     if not raw.strip():
         return []
-    cand_lower = candidate.lower()
-    cand_words_norm = {_norm(w) for w in words(candidate)}
-    cand_digits = {n.replace(",", "").rstrip("%") for n in _DIGIT_NUMBER.findall(candidate)}
-    protected = list(protected_tokens(raw))
-    lost: List[str] = []
-    for token in protected:
-        if token.lower() not in cand_lower:
-            lost.append(token)
-    for m in _DIGIT_NUMBER.finditer(raw):
-        if any(m.group(0).rstrip(",") in tok for tok in protected):
-            continue  # a digit run inside v3.2.1 / a file name is covered by the protected-token check
-        number = m.group(0).replace(",", "").rstrip("%")
-        if number not in cand_digits:
-            lost.append(m.group(0))
-    for noun in proper_nouns(raw):
-        if _norm(noun) not in cand_words_norm and noun.lower() not in cand_lower:
-            lost.append(noun)
+    shown = {t.lower(): t for t in protected_tokens(raw)}
+    raw_prot = Counter(t.lower() for t in protected_tokens(raw).elements())
+    cand_prot = Counter(t.lower() for t in protected_tokens(candidate).elements())
+    lost: List[str] = [shown[t] for t in sorted((raw_prot - cand_prot).elements())]
+    lost.extend(sorted((numeric_values(raw) - numeric_values(candidate)).elements()))
+    lost.extend(_names_lost(raw, candidate, vocab_terms))
     return lost
 
 
@@ -441,7 +588,7 @@ def check_candidate(
     # --- the RAW ASR text is the reference for what was actually said. The pre-text may already have lost a token
     # (a text-processing bug must not let the model "agree" with it), so digits, protected tokens and proper nouns
     # that were in the raw have to be in the candidate too.
-    raw_lost = _raw_tokens_lost(raw_text or "", cand)
+    raw_lost = _raw_tokens_lost(raw_text or "", cand, vocab_terms)
     if raw_lost:
         return GuardResult(False, "raw_token_lost", ",".join(raw_lost[:5]))
 
@@ -449,6 +596,10 @@ def check_candidate(
     lost_nouns = sorted((proper_nouns(pre) - proper_nouns(cand)).elements())
     if lost_nouns:
         return GuardResult(False, "proper_noun_lost", ",".join(lost_nouns[:5]))
+    # sentence-initial names (raw may be empty or already processed, and the pre-text is what the diff below starts from)
+    lost_initial = _names_lost(pre, cand, vocab_terms)
+    if lost_initial:
+        return GuardResult(False, "proper_noun_lost", ",".join(lost_initial[:5]))
 
     # --- new entities
     known = {_norm(w) for w in pre_words} | {_norm(w) for w in words(raw_text or "")}
@@ -468,7 +619,8 @@ def check_candidate(
 
     # --- structural diff: only form repairs are allowed (the part that is hardest to fake with a prompt)
     vocab_norms = {_norm(w) for term in vocab_terms for w in words(term)}
-    verdict = _structural_diff(pre_words, cand_words, vocab_norms=vocab_norms, special_norms=_special_norms(pre, vocab_norms))
+    verdict = _structural_diff(pre_words, cand_words, vocab_norms=vocab_norms, special_norms=_special_norms(pre, vocab_norms),
+                               utterance_norms=known)
     if not verdict.ok:
         return verdict
 

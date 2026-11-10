@@ -168,8 +168,11 @@ def test_empty_candidate_is_rejected() -> None:
 # Each of these was ACCEPTED by the first version of the guards and made WER worse.
 
 def test_trailing_off_word_must_not_be_altered() -> None:
-    bad("Everything is on track for the launch next week, and that.",
-        "Everything is on track for the launch next week, and that's.", "tail_changed")
+    # Round 3 made function-word swaps stricter, so this is now caught as a rewrite before the tail rule is reached;
+    # what matters is that the altered final word never gets through.
+    result = check_candidate("Everything is on track for the launch next week, and that.",
+                             "Everything is on track for the launch next week, and that's.", vocab_terms=VOCAB)
+    assert not result.ok and result.reason in {"tail_changed", "rewritten"}, result
 
 
 def test_dangling_tail_words_must_not_be_dropped() -> None:

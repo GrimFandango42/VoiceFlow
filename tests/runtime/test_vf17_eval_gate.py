@@ -66,19 +66,64 @@ def test_full_pipeline_columns_are_used_when_the_llm_ran(ev) -> None:
     assert any("WER regressed" in f for f in failures), failures
 
 
-@pytest.mark.parametrize("flag,expected", [([], 1), (["--no-gate"], 0)])
-def test_main_exit_code_follows_the_gate(ev, monkeypatch, tmp_path, flag, expected) -> None:
+GOOD_WINDOW = {"text_preserved": True, "replace_refused_after_switch": True, "verdict": "clipboard:window_changed"}
+
+
+def _run_main(ev, monkeypatch, tmp_path, scenario, window, flag=()):
     class _Dummy:
         def __init__(self, *a, **k) -> None:
             pass
 
-    regressed = _result("technical", _row(wer_before=0.0, wer_after_audio=0.1))
-    regressed.update(wer_before=0.0, wer_after_audio=0.1, wer_after=None, tail_before=1.0, tail_after_audio=1.0,
-                     tail_after=None, legible_before=1.0, legible_after_audio=1.0, legible_after=None)
     monkeypatch.setenv("VOICEFLOW_VOCABULARY_PATH", "")  # main() points it at an empty file; undo on teardown
     monkeypatch.setattr(ev, "Tts", _Dummy)
     monkeypatch.setattr(ev, "Asr", _Dummy)
-    monkeypatch.setattr(ev, "run_scenario", lambda *a, **k: regressed)
-    monkeypatch.setattr(ev, "run_window_switch", lambda: {})
-    code = ev.main(["--no-llm", "--no-corpus", "--scenarios", "technical", "--cache-dir", str(tmp_path), *flag])
-    assert code == expected
+    monkeypatch.setattr(ev, "run_scenario", lambda *a, **k: scenario)
+    if isinstance(window, Exception):
+        def _boom():
+            raise window
+        monkeypatch.setattr(ev, "run_window_switch", _boom)
+    else:
+        monkeypatch.setattr(ev, "run_window_switch", lambda: window)
+    return ev.main(["--no-llm", "--no-corpus", "--scenarios", "technical", "--cache-dir", str(tmp_path), *flag])
+
+
+def _clean_scenario():
+    clean = _result("technical", _row())
+    clean.update(wer_before=0.05, wer_after_audio=0.05, wer_after=None, tail_before=1.0, tail_after_audio=1.0,
+                 tail_after=None, legible_before=1.0, legible_after_audio=1.0, legible_after=None)
+    return clean
+
+
+@pytest.mark.parametrize("flag,expected", [([], 1), (["--no-gate"], 0)])
+def test_main_exit_code_follows_the_gate(ev, monkeypatch, tmp_path, flag, expected) -> None:
+    regressed = _result("technical", _row(wer_before=0.0, wer_after_audio=0.1))
+    regressed.update(wer_before=0.0, wer_after_audio=0.1, wer_after=None, tail_before=1.0, tail_after_audio=1.0,
+                     tail_after=None, legible_before=1.0, legible_after_audio=1.0, legible_after=None)
+    assert _run_main(ev, monkeypatch, tmp_path, regressed, GOOD_WINDOW, flag) == expected
+
+
+# --- review round 3, finding 3: the window-switch scenario is part of the gate -------------------------------
+
+def test_a_clean_run_with_good_window_safeguards_passes(ev, monkeypatch, tmp_path) -> None:
+    assert _run_main(ev, monkeypatch, tmp_path, _clean_scenario(), GOOD_WINDOW) == 0
+
+
+@pytest.mark.parametrize("broken", ["text_preserved", "replace_refused_after_switch"])
+def test_a_false_window_switch_result_fails_the_gate(ev, monkeypatch, tmp_path, capsys, broken) -> None:
+    window = dict(GOOD_WINDOW, **{broken: False})
+    assert _run_main(ev, monkeypatch, tmp_path, _clean_scenario(), window) == 1
+    out = capsys.readouterr().out
+    assert "ACCEPTANCE: FAIL" in out and broken in out
+    assert _run_main(ev, monkeypatch, tmp_path, _clean_scenario(), window, ["--no-gate"]) == 0
+
+
+def test_a_missing_or_crashed_window_switch_result_fails_the_gate(ev, monkeypatch, tmp_path) -> None:
+    assert _run_main(ev, monkeypatch, tmp_path, _clean_scenario(), {}) == 1
+    assert _run_main(ev, monkeypatch, tmp_path, _clean_scenario(), RuntimeError("boom")) == 1
+
+
+def test_window_failures_unit(ev) -> None:
+    assert ev.window_failures(GOOD_WINDOW) == []
+    assert len(ev.window_failures({"text_preserved": False, "replace_refused_after_switch": False})) == 2
+    assert ev.acceptance_failures([], have_llm=False, window={"text_preserved": True}, check_window=True)
+    assert ev.acceptance_failures([], have_llm=False) == []  # window not checked unless asked
