@@ -104,15 +104,25 @@ Local, on the merge result (system Python 3.13, CI's selection):
 - `ruff check src/`: all checks passed (after the two unused-import removals).
 - `pytest tests/ -m "not audio and not gui and not slow"`: **1004 passed, 12 skipped,
   3 failed**. The 3 failures are `TestExeSelfCheckFlag` tests in
-  `test_verify_bundle.py`; the `vad_asset` check fails because this machine's
-  faster-whisper 1.2.0 ships the older split Silero v5 assets (the same cause skips
-  11 sibling tests). Both files are byte-identical to the integration branch, so the
-  merge did not cause this. CI installs a current faster-whisper.
+  `test_verify_bundle.py` (`test_self_check_from_source_writes_report`,
+  `test_self_check_never_starts_tray_hotkeys_or_microphone`,
+  `test_cpu_only_flag_downgrades_only_the_cuda_check`). Each fails on the
+  `vad_asset` check with `missing: ...\faster_whisper\assets\silero_vad_v6.onnx`:
+  this machine's faster-whisper 1.2.0 has only `silero_encoder_v5.onnx` /
+  `silero_decoder_v5.onnx`. 11 sibling tests skip for the same reason
+  ("faster-whisper VAD asset not installed in this venv"). The `silero_vad_v6.onnx`
+  check and these tests are the same on `origin/main` (the integration diff in
+  `voiceflow_exe_entry.py` only changes the self-check module list and the CUDA DLL
+  location), and the merge leaves both files exactly as on the integration branch.
+  Whether CI's fresh `pip install -e ".[test]"` resolves a faster-whisper that ships
+  `silero_vad_v6.onnx` was not verified here: CI status could not be read from
+  this session.
 - Merged deltas specifically: `test_vf18_fast_every_launch.py`,
   `test_hotkeys_enhanced.py`, `test_vf15_ci_hygiene.py`: 61 passed.
 - `git diff --check`: clean.
 
-Not run here: CI (branch not pushed), the Runtime Tests workflow's unfiltered
+Not run here: mypy (CI's "Lint and type check" job runs only `ruff check src/`;
+`[tool.mypy]` exists but is not gated), CI (branch not pushed), the Runtime Tests workflow's unfiltered
 `pytest tests/runtime` (includes audio/gui markers), the build script, the frozen
 EXE, GPU behaviour, real paste into a target window.
 
