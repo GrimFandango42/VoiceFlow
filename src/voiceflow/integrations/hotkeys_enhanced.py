@@ -141,6 +141,18 @@ class EnhancedPTTHotkeyListener:
                 with self._lock:
                     if not self._recording:
                         self._release_candidate_since = 0.0
+                        # Scrub stale tracked keys while idle.
+                        #
+                        # A key-up event can be lost: an elevated window takes
+                        # focus, or keyboard.write() synthesises modifier
+                        # presses while injecting text. The tracked set then
+                        # keeps a modifier the user is not holding, and the
+                        # chord can be completed by the remaining key alone --
+                        # a bare Ctrl tap starting a recording. Physical state
+                        # is the truth, so reconcile against it whenever the
+                        # tracked set claims keys that are not really down.
+                        if self._pressed_keys and not self._chord_active_physical():
+                            self._sync_pressed_keys_from_physical()
                     else:
                         current_time = time.time()
                         physical_active = self._chord_active_physical()
@@ -354,13 +366,21 @@ class EnhancedPTTHotkeyListener:
             return
 
         key_name = self._normalize_key_name(event.name)
-        if event.event_type == keyboard.KEY_DOWN:
-            self._pressed_keys.add(key_name)
-        elif event.event_type == keyboard.KEY_UP:
-            self._pressed_keys.discard(key_name)
 
         with self._lock:
             current_time = time.time()
+
+            # Inside an injection window the event stream is not the user's.
+            # keyboard.write() presses and releases Shift of its own accord to
+            # produce capitals, so folding those events into the tracked set is
+            # how a modifier gets stuck down. Read physical state instead and
+            # let this event go.
+            if current_time < self._event_suppress_until:
+                self._sync_pressed_keys_from_physical()
+            elif event.event_type == keyboard.KEY_DOWN:
+                self._pressed_keys.add(key_name)
+            elif event.event_type == keyboard.KEY_UP:
+                self._pressed_keys.discard(key_name)
 
             # During synthetic injection windows, trust physical state to avoid false release detection.
             if self._recording and current_time < self._event_suppress_until:
@@ -407,6 +427,17 @@ class EnhancedPTTHotkeyListener:
 
             # START RECORDING - when chord becomes active
             if chord_active and not self._recording:
+                # Never open the microphone on tracked state alone. The
+                # tracked set is built from hook events, which can be lost or
+                # synthesised; physical state cannot. Requiring both means a
+                # stale modifier can no longer turn a single-key tap into a
+                # recording -- it just gets scrubbed on the next poll.
+                if not self._chord_active_physical():
+                    self._sync_pressed_keys_from_physical()
+                    self._chord_was_active = False
+                    self._chord_first_active_time = 0.0
+                    return
+
                 # Cancel any pending stop
                 self._cancel_tail_timer()
                 self._pending_stop = False

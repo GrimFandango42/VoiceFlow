@@ -573,6 +573,23 @@ class EnhancedTrayController(ITrayManager):
         if self._icon and hasattr(self._icon, 'title'):
             self._icon.title = text
 
+    _BASE_TOOLTIP = "VoiceFlow - Enhanced"
+
+    def show_warning(self, message: str, notify: bool = True) -> None:
+        """Show a standing warning in the tray tooltip (and once as a balloon).
+
+        Used for conditions the user would otherwise never notice, such as the
+        speech model running on the CPU or logging not working (VF-18). The
+        tooltip keeps the warning until ``clear_warning`` is called.
+        """
+        self.set_tooltip(f"VoiceFlow - {message}")
+        if notify:
+            self._notify("VoiceFlow warning", message)
+
+    def clear_warning(self) -> None:
+        """Restore the normal tooltip after a warning has cleared."""
+        self.set_tooltip(self._BASE_TOOLTIP)
+
     def get_current_status(self):
         """Get current tray status
         Returns: Current status as TrayStatus enum or string

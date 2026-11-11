@@ -19,12 +19,12 @@ def _prompt_terms(text: str) -> list[str]:
 class TestUserTermsWin:
     def test_user_terms_appear_before_builtins(self, monkeypatch):
         monkeypatch.setattr(
-            vocab, "_read_corrections", lambda _p: ["Veeva LIMS", "Caddyfile"]
+            vocab, "_read_corrections", lambda _p: ["Acme Telemetry", "Caddyfile"]
         )
         vocab.invalidate_cache()
 
         terms = _prompt_terms(vocab.initial_prompt())
-        assert terms[0] == "Veeva LIMS"
+        assert terms[0] == "Acme Telemetry"
         assert terms[1] == "Caddyfile"
 
     def test_user_terms_survive_a_full_builtin_list(self, monkeypatch):
@@ -36,9 +36,9 @@ class TestUserTermsWin:
 
     def test_the_regression_this_prevents(self, monkeypatch):
         # With built-ins first, this term never made it in.
-        monkeypatch.setattr(vocab, "_read_corrections", lambda _p: ["Veeva LIMS"])
+        monkeypatch.setattr(vocab, "_read_corrections", lambda _p: ["Acme Telemetry"])
         vocab.invalidate_cache()
-        assert "Veeva LIMS" in vocab.initial_prompt()
+        assert "Acme Telemetry" in vocab.initial_prompt()
 
 
 class TestBudget:

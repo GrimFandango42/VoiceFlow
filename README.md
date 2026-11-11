@@ -17,46 +17,40 @@ VoiceFlow runs quietly in the system tray and surfaces a minimal overlay only wh
 
 ### Recording overlay
 
-While you hold `Ctrl+Shift`, the overlay appears at the bottom of your screen with a reactive waveform visualization and live streaming preview of the transcription:
+While you hold `Ctrl+Shift`, a compact overlay appears at the bottom of your screen with a
+reactive waveform and a live streaming preview of the transcription — shown above. Release
+the hotkey and the finalized text is injected into whatever window has focus.
 
-![Recording overlay with audio visualization and live transcription preview](docs/screenshots/overlay-closeup.png)
+### Control Center
 
-### Full-screen context
+A guided launcher for setup, health checks and troubleshooting:
 
-The overlay is non-intrusive — it floats above your active application so you can see what you're dictating into:
-
-![VoiceFlow overlay floating over active application](docs/screenshots/full-overlay.png)
-
-### Live transcription preview
-
-As you speak, partial transcription streams in real time so you can see what VoiceFlow is picking up:
-
-![Live streaming transcription preview](docs/screenshots/transcription-preview.png)
-
-### After release — text injection
-
-Once you release the hotkey, the finalized transcription is injected directly into whatever application has focus:
-
-![Transcription injected into active application](docs/screenshots/after-transcription.png)
-
-### Idle state
-
-When not recording, VoiceFlow sits quietly in the tray — no overlay, no distractions:
-
-![VoiceFlow idle state — overlay hidden](docs/screenshots/idle-state.png)
+![VoiceFlow Control Center: quick actions, system snapshot and activity log](assets/control-center-polished-main.png)
 
 ---
 
 ## VoiceFlow vs. Wispr Flow
 
-| Feature | VoiceFlow | Wispr Flow |
-|---------|-----------|------------|
-| Price | Free / open-source | $13/month |
-| Processing | 100% local, no cloud | Cloud-based |
-| Privacy | Audio never leaves your machine | Sent to cloud for processing |
-| GPU acceleration | Yes (CUDA) | N/A |
-| Customizable | Yes (source available) | No |
-| Platform | Windows | Mac & Windows |
+Wispr Flow is the product VoiceFlow was built to replace for my own use, so it is the
+honest point of comparison. It is a polished commercial app with a real free tier, and
+it is better than VoiceFlow at several things — pick accordingly.
+
+| | VoiceFlow | Wispr Flow |
+|---|---|---|
+| Price | Free, MIT licensed | Free tier with a weekly word cap; Pro [$15/mo, $12 annual](https://wisprflow.ai/pricing) |
+| Processing | On-device | Cloud |
+| Audio leaves your machine | No | Yes |
+| GPU acceleration | Yes, CUDA | Not applicable |
+| Platforms | Windows | Windows, macOS, iOS, Android |
+| Modifiable | Yes, it's source | No |
+| Setup | Clone or run an unsigned EXE; CUDA libraries for GPU | Install and sign in |
+| Polish and support | A personal project | Funded product with a support team |
+
+**Choose Wispr Flow** if you want something that works in two minutes, you're on a Mac
+or phone, or you'd rather not maintain anything.
+
+**Choose VoiceFlow** if your audio must stay on your machine, you want no usage cap, or
+you want to change how it behaves.
 
 
 ---
@@ -75,7 +69,8 @@ It ships with a continual-learning system that adapts to your accent and vocabul
 
 - Windows 10 or 11 (64-bit)
 - 4 GB RAM minimum; 8 GB+ recommended for GPU mode
-- NVIDIA GPU with CUDA 11.8+ for GPU acceleration (optional but recommended)
+- NVIDIA GPU for acceleration (optional but recommended) — needs cuBLAS 12 and cuDNN 9;
+  see the GPU note under **Install**. Without them VoiceFlow runs on CPU.
 
 ### Install
 
@@ -97,7 +92,26 @@ pip install -e ".[dev]"
 python _app_entry.py
 ```
 
-> **GPU users:** Install CUDA-enabled PyTorch into the same virtual environment before the editable install: `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118`.
+> **GPU users:** transcription runs through ctranslate2, which needs cuBLAS 12 and
+> cuDNN 9 on the DLL search path. Install them directly — they are a few hundred
+> megabytes, where a CUDA build of PyTorch is several gigabytes and is not used on
+> the transcription path at all:
+>
+> ```bash
+> pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+> ```
+>
+> Do not rely on a CUDA build of PyTorch to supply these. A CPU-only `torch` satisfies
+> the install and then silently gives you no GPU, and a cuDNN 8 / CUDA 11.8 stack is the
+> wrong major version for ctranslate2 4.x. Verify with:
+>
+> ```bash
+> python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"
+> ```
+>
+> A `0` means the libraries were not found and VoiceFlow will fall back to CPU `int8`,
+> which is roughly 85x slower. On startup the log line `asr_engine_initialized` records
+> the device actually in use — check it says `device=cuda compute=float16`.
 
 ### First use
 
