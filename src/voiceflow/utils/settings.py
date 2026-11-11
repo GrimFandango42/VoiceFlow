@@ -275,7 +275,7 @@ def _apply_single_model_migration(cfg: Config) -> bool:
     return True
 
 
-VF19_MIGRATION_VERSION = 1
+VF19_MIGRATION_VERSION = 2
 
 
 def _apply_vf19_migration(cfg: Config) -> bool:
@@ -295,6 +295,13 @@ def _apply_vf19_migration(cfg: Config) -> bool:
     if seen >= VF19_MIGRATION_VERSION:
         return False
     cfg.vf19_migration_version = VF19_MIGRATION_VERSION
+    # v2: the background reconstruction pass off. Measured on 2026-11-10: it ran
+    # a local 8B model on every CPU core for 13-52 s after each dictation, 16 of
+    # 17 results were unusable, and dictations made meanwhile decoded up to 80x
+    # slower. It stays available as an opt-in.
+    cfg.reconstruction_enabled = False
+    if seen >= 1:
+        return True
     if int(getattr(cfg, "reconstruction_max_chars", 2000) or 2000) > 400:
         cfg.reconstruction_max_chars = 400
     if int(getattr(cfg, "live_caption_max_chars", 150) or 150) > 150:

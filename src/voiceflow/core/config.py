@@ -368,7 +368,7 @@ class Config:
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
 
     # VF-17 reconstruction pass (form repair, never meaning change). Local Ollama, CPU only.
-    reconstruction_enabled: bool = True
+    reconstruction_enabled: bool = False  # opt-in: a local LLM pass after each paste; costs every CPU core for tens of seconds
     reconstruction_mode: str = "auto"  # auto | sync | async | off  (auto stays async unless p95 fits the budget)
     reconstruction_model: str = ""  # "" = pick a small instruct model from what Ollama has installed
     reconstruction_budget_ms: int = 800  # max the paste may wait for the reconstruction (sync path)

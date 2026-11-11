@@ -71,3 +71,16 @@ def test_migration_leaves_compaction_on_without_a_gpu():
     cfg.enable_gpu_acceleration, cfg.device, cfg.enable_pause_compaction = False, "cpu", True
     settings._apply_vf19_migration(cfg)
     assert cfg.enable_pause_compaction is True
+
+
+def test_v2_turns_the_reconstruction_pass_off_for_installs_already_on_v1():
+    cfg = Config()
+    cfg.vf19_migration_version = 1
+    cfg.reconstruction_enabled = True
+    cfg.reconstruction_max_chars = 400
+    assert settings._apply_vf19_migration(cfg) is True
+    assert cfg.reconstruction_enabled is False
+    assert cfg.vf19_migration_version == 2
+    cfg.reconstruction_enabled = True  # a later opt-in is respected
+    assert settings._apply_vf19_migration(cfg) is False
+    assert cfg.reconstruction_enabled is True

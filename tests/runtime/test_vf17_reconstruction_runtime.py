@@ -52,6 +52,7 @@ class _FakeReconstructor:
 
 def _coord(**cfg_overrides) -> tuple[ReconstructionCoordinator, _FakeReconstructor]:
     cfg = Config()
+    cfg.reconstruction_enabled = True  # opt-in since VF-19; these tests exercise it switched on
     for k, v in cfg_overrides.items():
         setattr(cfg, k, v)
     fake = _FakeReconstructor()
