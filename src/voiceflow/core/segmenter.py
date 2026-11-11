@@ -484,10 +484,54 @@ def _decode_plans(
         if not piece.text:
             continue
         if out:
-            out.append("\n\n" if pending_gap >= paragraph_gap else " ")
-        out.append(piece.text)
+            if pending_gap >= paragraph_gap:
+                out.append("\n\n")
+                out.append(piece.text)
+            else:
+                out[-1], joined = join_across_pause(out[-1], piece.text)
+                out.append(" ")
+                out.append(joined)
+        else:
+            out.append(piece.text)
         pending_gap = 0.0
     return SegmentedTranscript(text="".join(out).strip(), pieces=list(pieces))
+
+
+# Words a sentence does not end on. A piece that ends with one was cut by a
+# pause in mid-sentence, whatever full stop the model put after it.
+_DANGLING = frozenset(
+    "a an the to of and or but so that which who with for from in on at by as if than then is are was were "
+    "be been am i we you they he she it my your our their his her its this these those not very really just "
+    "can could will would should may might must do does did have has had because while when where".split()
+)
+
+
+def join_across_pause(before: str, after: str) -> Tuple[str, str]:
+    """Repair the seam between two pieces that a short pause split mid-sentence.
+
+    Each piece is decoded on its own, so the model closes it with a full stop
+    and opens the next with a capital even when the speaker only paused for
+    breath: "seems to. Work well". Two cases are safe to mend without changing
+    a word: the next piece starts in lower case (the model itself heard a
+    continuation), or the first piece ends on a word no sentence ends on.
+    """
+    left, right = (before or "").rstrip(), (after or "").lstrip()
+    if not left or not right or not left.endswith("."):
+        return before, after
+    if left.endswith("..") or left.endswith("\u2026"):
+        return before, after
+    first = right.split()[0]
+    last_word = left[:-1].split()[-1].strip("\"'()[],;:").lower() if left[:-1].split() else ""
+    if first[:1].islower():
+        return left[:-1] + ",", right
+    if last_word in _DANGLING:
+        lowered = right
+        bare = first.strip("\"'()[],.;:!?")
+        # Keep "I", acronyms and anything with an inner capital (names, product names).
+        if bare not in {"I", "I'm", "I'll", "I've", "I'd"} and bare[:1].isupper() and bare[1:].islower():
+            lowered = right[0].lower() + right[1:]
+        return left[:-1], lowered
+    return before, after
 
 
 def decode_for_duration(engine, audio: np.ndarray, cfg=None, log: Optional[logging.Logger] = None) -> str:
@@ -518,6 +562,7 @@ __all__: Sequence[str] = (
     "room_tone",
     "pad_right_context",
     "decode_audio",
+    "join_across_pause",
     "decode_for_duration",
     "should_segment",
     "transcribe_segmented",
