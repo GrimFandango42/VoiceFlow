@@ -96,6 +96,7 @@ _HISTORY_FILTER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("live", "Live"),
     ("corrections", "Corrections"),
     ("retries", "Retries"),
+    ("failed", "Failed"),
 )
 _CORRECTION_FEEDBACK_HANDLER: Optional[Callable[[str, str, Dict[str, Any]], None]] = None
 
@@ -200,6 +201,23 @@ def _emit_correction_feedback_learning(original_text: str, corrected_text: str, 
         handler(str(original_text or ""), str(corrected_text or ""), dict(metadata or {}))
     except Exception as exc:
         logger.debug("Correction feedback learning dispatch failed: %s", exc)
+
+def caption_tail(text: str, max_chars: int) -> str:
+    """The end of ``text`` that fits in ``max_chars``, starting on a whole word.
+
+    The live caption is the whole dictation so far; the overlay shows where the
+    speaker is now. A leading ellipsis marks that earlier text exists.
+    """
+    text = " ".join(str(text or "").split())
+    limit = max(8, int(max_chars))
+    if len(text) <= limit:
+        return text
+    tail = text[-(limit - 1):]
+    space = tail.find(" ")
+    if 0 <= space < len(tail) - 1:
+        tail = tail[space + 1:]
+    return "\u2026" + tail
+
 
 def format_elapsed(seconds: float) -> str:
     """Recording timer text: whole seconds ("7s") for the first minute, then m:ss ("1:05").
@@ -369,7 +387,7 @@ class BottomScreenIndicator:
         self._last_preview_words: list[str] = []
         self._preview_correction_tokens: Dict[str, float] = {}
         self.live_caption_words = 20
-        self.live_caption_max_chars = 380
+        self.live_caption_max_chars = 150
         self.live_caption_font_size = 14
         self.live_caption_correction_window_seconds = 2.0
 
@@ -434,7 +452,7 @@ class BottomScreenIndicator:
             return max(min_value, min(max_value, parsed))
 
         self.live_caption_words = _bounded_int("live_caption_words", 20, min_value=1, max_value=50)
-        self.live_caption_max_chars = _bounded_int("live_caption_max_chars", 380, min_value=40, max_value=800)
+        self.live_caption_max_chars = _bounded_int("live_caption_max_chars", 150, min_value=40, max_value=800)
         self.live_caption_font_size = _bounded_int("live_caption_font_size", 14, min_value=10, max_value=32)
         self.live_caption_correction_window_seconds = _bounded_float(
             "live_caption_correction_window_seconds",
@@ -684,6 +702,7 @@ class BottomScreenIndicator:
 
             # Create UI elements
             self._create_ui()
+            self._fit_overlay_height()
             self._setup_dock_window(screen_width, screen_height)
             self._setup_history_panel(screen_width, screen_height)
             self._position_overlay(screen_width, screen_height)
@@ -698,6 +717,27 @@ class BottomScreenIndicator:
         except Exception as e:
             print(f"[VisualIndicator] Unexpected error during window setup: {type(e).__name__}: {e}")
             self.window = None
+
+    def _fit_overlay_height(self) -> None:
+        """Grow the overlay to fit its content, and record what was measured.
+
+        The height was a fixed 130 px while the text rows are sized in points,
+        which scale with display DPI. On a scaled display the caption card,
+        the last row, is what fell off the bottom of the window.
+        """
+        try:
+            self.window.update_idletasks()
+            needed = max(int(child.winfo_reqheight()) for child in self.window.winfo_children())
+            label_h = int(self.preview_label.winfo_reqheight()) if self.preview_label else 0
+            fixed = int(self.height)
+            if needed > fixed:
+                self.height = needed + 2
+            logger.info(
+                "overlay_geometry width=%d fixed_height=%d content_height=%d height=%d caption_label_height=%d",
+                int(self.width), fixed, needed, int(self.height), label_h,
+            )
+        except Exception as exc:
+            logger.warning("overlay_geometry_unmeasured error=%s", exc)
 
     def _position_overlay(self, screen_width: int, screen_height: int):
         """Position overlay safely above tray/dock region.
@@ -827,7 +867,10 @@ class BottomScreenIndicator:
             font=("Segoe UI", 9),
             wraplength=self.wave_w - 24,
             justify=tk.LEFT,
-            anchor="nw",
+            # Bottom-anchored: when the caption is taller than the label, Tk
+            # clips the far side from the anchor. Anchored top-left, that was
+            # the newest words, so a long caption looked frozen.
+            anchor="sw",
             height=2,
         )
         self.preview_label.pack(fill=tk.BOTH, expand=True)
@@ -2306,6 +2349,9 @@ class BottomScreenIndicator:
                     "full_text": full_text,
                     "retry_used": bool(payload.get("retry_used", False)),
                     "source_kind": source_kind,
+                    "outcome": str(payload.get("outcome", "ok") or "ok"),
+                    "failure_reason": str(payload.get("failure_reason", "") or ""),
+                    "failure_summary": str(payload.get("failure_summary", "") or ""),
                 }
             )
 
@@ -2321,6 +2367,8 @@ class BottomScreenIndicator:
             return [row for row in rows if str(row.get("source_kind", "")) == "correction"]
         if selected == "retries":
             return [row for row in rows if bool(row.get("retry_used", False))]
+        if selected == "failed":
+            return [row for row in rows if str(row.get("outcome", "ok")) == "failed"]
         return list(rows)
 
     @staticmethod
@@ -2330,6 +2378,12 @@ class BottomScreenIndicator:
         live_count = sum(1 for row in rows if str(row.get("source_kind", "live")) == "live")
         correction_count = sum(1 for row in rows if str(row.get("source_kind", "")) == "correction")
         retry_count = sum(1 for row in rows if bool(row.get("retry_used", False)))
+
+        failed_count = sum(1 for row in rows if str(row.get("outcome", "ok")) == "failed")
+        if selected == "failed":
+            if failed_count <= 0:
+                return "No failed dictations."
+            return f"Showing {failed_count} failed dictation{'s' if failed_count != 1 else ''}. Copy keeps any text that was recognised."
 
         if total <= 0:
             if selected == "corrections":
@@ -2350,10 +2404,13 @@ class BottomScreenIndicator:
         return (
             f"{total} item{'s' if total != 1 else ''}: "
             f"{live_count} live, {correction_count} correction{'s' if correction_count != 1 else ''}, "
-            f"{retry_count} retr{'ies' if retry_count != 1 else 'y'}."
+            f"{retry_count} retr{'ies' if retry_count != 1 else 'y'}"
+            + (f", {failed_count} failed." if failed_count else ".")
         )
 
     def _history_source_badge(self, item: Dict[str, Any]) -> tuple[str, str, str]:
+        if str(item.get("outcome", "ok")) == "failed":
+            return "Failed", self._ui("panel_surface"), self.error_color
         if str(item.get("source_kind", "live")) == "correction":
             return "Correction", self._ui("badge_correction_bg"), self._ui("badge_correction_fg")
         if bool(item.get("retry_used", False)):
@@ -2714,11 +2771,18 @@ class BottomScreenIndicator:
 
             meta = tk.Label(
                 header,
-                text="[{ts}] dur={dur:.1f}s proc={proc:.2f}s rtf={rtf:.2f}x".format(
-                    ts=item["ts"],
-                    dur=item["audio_duration"],
-                    proc=item["processing_time"],
-                    rtf=item["rtf"],
+                text=(
+                    "[{ts}] {why}".format(
+                        ts=item["ts"],
+                        why=str(item.get("failure_summary", "") or "not transcribed"),
+                    )
+                    if str(item.get("outcome", "ok")) == "failed"
+                    else "[{ts}] dur={dur:.1f}s proc={proc:.2f}s rtf={rtf:.2f}x".format(
+                        ts=item["ts"],
+                        dur=item["audio_duration"],
+                        proc=item["processing_time"],
+                        rtf=item["rtf"],
+                    )
                 ),
                 bg=self._ui("panel_surface_alt"),
                 fg=self._ui("text_muted"),
@@ -2940,6 +3004,10 @@ class BottomScreenIndicator:
     ):
         """Record summary for always-on dock/history panel."""
         safe_text = (text or "").strip()
+        failed = str((metadata or {}).get("outcome", "")) == "failed"
+        if not safe_text and failed:
+            # A failure with no recognised text still gets a row; its text is the reason.
+            safe_text = "Not transcribed: " + str((metadata or {}).get("failure_summary", "unknown reason"))
         if not safe_text:
             return
         event_epoch = time.time()
@@ -2967,6 +3035,9 @@ class BottomScreenIndicator:
                 "retry_used": bool(event_meta.get("retry_used", False)),
                 "transcription_path": str(event_meta.get("transcription_path", "")),
                 "idle_resume_active": bool(event_meta.get("idle_resume_active", False)),
+                "outcome": "failed" if failed else "ok",
+                "failure_reason": str(event_meta.get("failure_reason", "")),
+                "failure_summary": str(event_meta.get("failure_summary", "")),
             }
         )
 
@@ -3031,7 +3102,8 @@ class BottomScreenIndicator:
                 "full_text": safe_text,
             }
         )
-        merge_target = self._get_active_correction_target()
+        failed = str(event_meta.get("outcome", "")) == "failed"
+        merge_target = None if failed else self._get_active_correction_target()
         if merge_target:
             self._remember_history_fingerprint(incoming_fingerprint)
             item = self._merge_history_item(
@@ -3065,6 +3137,9 @@ class BottomScreenIndicator:
             "rtf": float(rtf),
             "preview": preview,
             "full_text": safe_text,
+            "outcome": "failed" if failed else "ok",
+            "failure_reason": str(event_meta.get("failure_reason", "")),
+            "failure_summary": str(event_meta.get("failure_summary", "")),
             "segments": 1,
             "raw_audio_duration": float(event_meta.get("raw_audio_duration", audio_duration) or audio_duration),
             "compacted_audio_duration": float(
@@ -3419,10 +3494,7 @@ class BottomScreenIndicator:
                     self._preview_correction_tokens.clear()
                     return
 
-                caption_tokens = words[-max(1, int(self.live_caption_words)) :]
-                caption = " ".join(caption_tokens)
-                if len(caption) > int(self.live_caption_max_chars):
-                    caption = "..." + caption[-int(self.live_caption_max_chars):]
+                caption = caption_tail(" ".join(words), int(self.live_caption_max_chars))
                 self.preview_var.set(caption)
                 self._last_preview_words = list(words)
         except Exception as e:

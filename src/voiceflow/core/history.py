@@ -33,6 +33,46 @@ STATUS_PENDING = "pending"
 STATUS_PASTED = "pasted"
 STATUS_SAVED = "saved"            # recognised and kept, not pasted (e.g. target closed)
 STATUS_CLIPBOARD = "clipboard"    # not pasted but placed on the clipboard
+STATUS_FAILED = "failed"          # nothing was pasted because nothing usable was recognised
+
+#: Why a dictation produced no paste. Keys are stable (they are logged and stored);
+#: values are what the user reads.
+FAILURE_REASONS: Dict[str, str] = {
+    "no_audio": "The microphone delivered no audio",
+    "silent": "Only silence was recorded",
+    "non_speech": "It sounded like a noise burst, not speech",
+    "filtered": "Discarded as a likely silence artifact",
+    "too_short": "The recognised text was too short to paste",
+    "empty": "The speech model returned no text",
+    "timeout": "Transcription timed out",
+    "error": "Transcription failed with an error",
+}
+
+
+def failure_summary(entry: Dict[str, Any]) -> str:
+    """One readable line saying why an entry was not transcribed."""
+    reason = str(entry.get("reason", "") or "")
+    line = FAILURE_REASONS.get(reason, reason.replace("_", " ").capitalize() or "Not transcribed")
+    detail = str(entry.get("detail", "") or "").strip()
+    seconds = float(entry.get("audio_seconds", 0.0) or 0.0)
+    parts = [line]
+    if detail:
+        parts.append(detail)
+    if seconds > 0:
+        parts.append(f"{seconds:.1f}s of audio")
+    return " - ".join(parts)
+
+
+def copy_text(entry: Dict[str, Any]) -> str:
+    """What "copy" puts on the clipboard for an entry.
+
+    The transcript when there is one, including text a filter threw away, so a
+    wrongly discarded dictation is recoverable. Otherwise the failure line.
+    """
+    text = str(entry.get("text", "") or "").strip()
+    if text:
+        return text
+    return "VoiceFlow did not transcribe this: " + failure_summary(entry)
 
 
 def default_history_path() -> Path:
@@ -66,7 +106,9 @@ class TranscriptHistory:
         if not isinstance(items, list):
             return
         for item in items:
-            if isinstance(item, dict) and str(item.get("text", "")).strip():
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("text", "")).strip() or item.get("status") == STATUS_FAILED:
                 self._items.append(item)
         self._items = self._items[-self.max_items:]
         self._next_id = max((int(i.get("id", 0) or 0) for i in self._items), default=0) + 1
@@ -117,6 +159,39 @@ class TranscriptHistory:
             self._save_locked()
             return int(entry["id"])
 
+    def add_failure(
+        self,
+        reason: str,
+        *,
+        detail: str = "",
+        text: str = "",
+        audio_seconds: float = 0.0,
+        target: str = "",
+    ) -> int:
+        """Record a dictation that produced nothing to paste, and why.
+
+        ``text`` is whatever was recognised before it was thrown away (a
+        filtered or too-short result); it stays copyable.
+        """
+        clean = str(text or "").strip()
+        with self._lock:
+            entry = {
+                "id": self._next_id,
+                "ts": time.time(),
+                "text": clean[:_MAX_TEXT_CHARS],
+                "words": len(clean.split()),
+                "status": STATUS_FAILED,
+                "reason": str(reason or "error")[:40],
+                "detail": str(detail or "")[:300],
+                "audio_seconds": round(float(audio_seconds or 0.0), 2),
+                "target": str(target or "")[:80],
+            }
+            self._next_id += 1
+            self._items.append(entry)
+            self._items = self._items[-self.max_items:]
+            self._save_locked()
+            return int(entry["id"])
+
     def set_status(self, entry_id: int, status: str) -> None:
         with self._lock:
             for item in self._items:
@@ -132,8 +207,12 @@ class TranscriptHistory:
         return items[: int(limit)] if limit else items
 
     def last(self) -> Optional[Dict[str, Any]]:
+        """The most recent entry that has text (a failure with no text cannot be re-pasted)."""
         with self._lock:
-            return dict(self._items[-1]) if self._items else None
+            for item in reversed(self._items):
+                if str(item.get("text", "")).strip():
+                    return dict(item)
+        return None
 
     def get(self, entry_id: int) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -170,13 +249,18 @@ def menu_pages(entries: List[Dict[str, Any]], first: int = 10, page: int = 10) -
 
 def menu_label(entry: Dict[str, Any], width: int = 56) -> str:
     """One-line label for a tray menu item: ``12:41  first words of the transcript...``."""
+    failed = entry.get("status") == STATUS_FAILED
     text = " ".join(str(entry.get("text", "")).split())
+    if failed:
+        # With recovered text, keep the tag short: the text is what the user is looking for.
+        tag = {"filtered": "discarded", "too_short": "too short"}.get(str(entry.get("reason", "")), "failed")
+        text = f"[{tag}] {text}" if text else f"[failed] {failure_summary(entry)}"
     if len(text) > width:
         text = text[: width - 1].rstrip() + "…"
     try:
         stamp = time.strftime("%H:%M", time.localtime(float(entry.get("ts", 0.0))))
     except Exception:
         stamp = "--:--"
-    marker = "" if entry.get("status") in (STATUS_PASTED, STATUS_PENDING) else " (not pasted)"
+    marker = "" if entry.get("status") in (STATUS_PASTED, STATUS_PENDING, STATUS_FAILED) else " (not pasted)"
     # '&' is a menu accelerator marker in Win32 menus; double it so text shows literally.
     return f"{stamp}  {text}{marker}".replace("&", "&&")
