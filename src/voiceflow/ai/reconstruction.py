@@ -307,16 +307,18 @@ def _special_norms(pre: str, vocab_norms: Set[str]) -> Set[str]:
 
 
 def _term_norms(*texts: str) -> Set[str]:
-    """Normalised words of the names and identifiers the speaker used: protected tokens, proper nouns, sentence-initial names.
+    """Normalised words of the names and identifiers the speaker used: protected tokens and mid-sentence proper nouns.
 
-    These are the only utterance words a content word may be respelled to. Ordinary words are deliberately absent.
+    These are the only utterance words a content word may be respelled to. Ordinary words are deliberately absent, and
+    so are sentence-initial words: "Car is ready." is capitalised for position, and a capital it earns that way must not
+    license "The cat is red." -> "The car is red." (sentence-initial names are still protected from LOSS by
+    ``_names_lost``; they just are not a replacement source).
     """
     out: Set[str] = set()
     for text in texts:
         for token in protected_tokens(text):
             out.update(_norm(w) for w in words(token))
         out.update(_norm(n) for n in proper_nouns(text))
-        out.update(initial_names(text))
     out.discard("")
     return out
 
@@ -369,15 +371,20 @@ def _structural_diff(
             determiners = [w for w in added if w in DETERMINERS]
             if determiners:
                 return GuardResult(False, "determiner_inserted", ",".join(determiners))
-            bad = [w for w in added if w not in INSERTABLE and w not in vocab_norms]
-            if bad:
-                return GuardResult(False, "novel_content", ",".join(bad[:5]))
             # A vocabulary entry never licenses a meaning-bearing function word ("not" in a vocabulary list is still "not").
             unsafe = [w for w in added if w in FUNCTION_NORMS and w not in INSERTABLE and w not in DETERMINERS]
             if unsafe:
                 return GuardResult(False, "meaning_word_inserted", ",".join(unsafe[:5]))
+            # A vocabulary term is never inserted on its own: it may only REPLACE a word that was actually transcribed
+            # and sounds/spells like it ("we will send it today" must not grow "to Claude").
+            vocab_added = [w for w in added if w in vocab_norms and w not in INSERTABLE]
+            if vocab_added:
+                return GuardResult(False, "vocab_inserted", ",".join(vocab_added[:5]))
+            bad = [w for w in added if w not in INSERTABLE]
+            if bad:
+                return GuardResult(False, "novel_content", ",".join(bad[:5]))
             neighbours = [pre_n[k] for k in (i1 - 1, i1) if 0 <= k < len(pre_n)]
-            if special_norms and any(n in special_norms for n in neighbours) and not all(w in vocab_norms for w in added):
+            if special_norms and any(n in special_norms for n in neighbours):
                 return GuardResult(False, "inserted_beside_protected", " ".join(added) + " near " + " ".join(neighbours))
             inserted_fn += len(added)
         elif tag == "delete":
@@ -401,10 +408,16 @@ def _structural_diff(
             a, b = "".join(removed), "".join(added)
             if not _spelling_close(a, b):
                 return GuardResult(False, "rewritten", f"{' '.join(removed)}->{' '.join(added)}")
+            # A replacement may merge words ("pie installer" -> "PyInstaller") but never grow: an extra word riding along
+            # with a respelling is an insertion in disguise ("cloud" -> "to Claude").
+            if len(added) > len(removed):
+                return GuardResult(False, "vocab_inserted" if any(w in vocab_norms for w in added) else "novel_content",
+                                   f"{' '.join(removed)}->{' '.join(added)}")
             # Close spelling is necessary, not sufficient: cat -> car is two letters apart and a different thing. A content
             # word may only become a genuine vocabulary term, or a name/identifier the speaker already used in this
-            # utterance (protected token, proper noun, sentence-initial name) - never an ordinary word that merely
-            # occurs elsewhere ("The cat and car are here. The cat is red." must not become "... The car is red.").
+            # utterance (protected token, mid-sentence proper noun) - never an ordinary word that merely occurs
+            # elsewhere ("The cat and car are here. The cat is red." must not become "... The car is red."), and never a
+            # word that is capitalised only because it opens a sentence ("Car is ready. The cat is red.").
             sources = vocab_norms | (utterance_norms or set())
             unsourced = [w for w in added if w not in sources]
             if unsourced:
