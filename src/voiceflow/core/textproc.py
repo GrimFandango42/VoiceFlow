@@ -172,6 +172,8 @@ _GLOBAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # Built in (not in custom_vocabulary.txt, which is seeded once and never overwritten)
     # so existing installs get it.
     (re.compile(r"\bvoice[\s-]*flo(?:w|wn|wna|na|nah)?\b", re.IGNORECASE), "VoiceFlow"),
+    # The dictation app he runs alongside VoiceFlow; Whisper writes it as the model's name.
+    (re.compile(r"\bwhisper[\s-]*flow\b", re.IGNORECASE), "Wispr Flow"),
 )
 
 _CONTEXTUAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -612,6 +614,11 @@ def format_transcript_for_destination(
         # Defense in depth: collapse any stray newlines back to spaces so a
         # later code path can't accidentally submit a half-finished message.
         formatted = re.sub(r"\s*\n+\s*", " ", formatted).strip()
+        # Lists that reach a chat box arrive as their own lines (list_format, then
+        # format_transcript_preserving_breaks). Markers the whole-text formatter put
+        # inside a line would read "followed by • And then. •" once collapsed.
+        formatted = re.sub(r"(^|[\s.!?:])(?:•|\d{1,2}\.)\s+(?=[A-Z])", r"\1", formatted)
+        formatted = re.sub(r"\s{2,}", " ", formatted).strip()
         formatted = re.sub(r"[ \t]{2,}", " ", formatted)
 
     if destination and not bool(destination.get("destination_wrap_enabled", True)):
@@ -654,8 +661,19 @@ def auto_paragraphs(
     is returned untouched. Pure string work: tens of microseconds.
     """
     source = (text or "").strip()
-    if not source or "\n" in source:
+    if not source:
         return text
+    if "\n" in source:
+        # Shape each prose paragraph on its own; lists and lines the speaker asked
+        # for ("new line", "new paragraph") are left as they are.
+        parts = re.split(r"(\n\s*\n)", source)
+        shaped = [
+            p if (not p.strip() or "\n" in p) else auto_paragraphs(p, min_words=min_words,
+                                                                 max_sentences=max_sentences, max_words=max_words)
+            for p in parts
+        ]
+        joined = "".join(shaped)
+        return joined if joined != source else text
     if len(source.split()) < max(1, int(min_words)):
         return text
     sentences = [part.strip() for part in _SENTENCE_SPLIT.split(source) if part.strip()]
@@ -710,12 +728,19 @@ def format_transcript_preserving_breaks(
         if not part or part.startswith("\n"):
             out.append(part)
             continue
-        bullet = part.startswith("- ")
-        body = part[2:] if bullet else part
+        marker_match = re.match(r"(?:[-•]|\d{1,2}\.)\s+", part)
+        marker = marker_match.group(0) if marker_match else ""
+        body = part[len(marker):]
         formatted = format_transcript_for_destination(body, destination, 0.0)
         if profile == "chat":
             formatted = re.sub(r"\s*\n+\s*", " ", formatted).strip()
-        out.append(("- " if bullet else "") + formatted)
+        if marker:
+            # A list item is a line of its own: the whole-text formatter must not
+            # re-list it ("• Fix ...") or end an unpunctuated item with a period.
+            formatted = re.sub(r"^(?:[-•]|\d{1,2}\.)\s+", "", formatted)
+            if not re.search(r"[.!?]$", body.strip()):
+                formatted = re.sub(r"\.$", "", formatted)
+        out.append(marker + formatted)
     return "".join(out).strip()
 
 
@@ -1417,12 +1442,9 @@ def _format_bullet_points(text: str) -> str:
         return f"{prefix}- "
 
     # Convert "point one", "bullet 2", "point three:" into numbered/bullet list markers.
-    text, spoken_count = re.subn(
-        r"\b(?:point|bullet)\s*(one|two|three|four|five|six|seven|eight|nine|ten|\d{1,2})\s*[,:\-]?\s*",
-        _spoken_point_to_numbered,
-        text,
-        flags=re.IGNORECASE,
-    )
+    # Spoken markers ("point one", "bullet 2") are handled by core.list_format, which
+    # refuses a list whose items are empty; doing it here deleted those words.
+    spoken_count = 0
 
     # Convert " ... . 3, item ..." into a new numbered item.
     text = re.sub(r"([.!?])\s+(\d{1,2})\s*[,:\-]\s*", r"\1\n\2. ", text)
@@ -1449,7 +1471,8 @@ def _format_bullet_points(text: str) -> str:
     # "Second thought, I'd rather..." or "First, I want you to..." is prose; turning it
     # into "- Second, thought" rewrote what the user said (VF-12).
     _ordinal_start = r"(?:(?<=^)|(?<=\n)|(?<=[.!?]\s))(first|second|third|fourth|fifth)\s*[,:\-]?\s*"
-    if len(re.findall(_ordinal_start, text, flags=re.IGNORECASE)) >= 2:
+    _found = [w.lower() for w in re.findall(_ordinal_start, text, flags=re.IGNORECASE)]
+    if len(_found) >= 2 and _found[:2] == ["first", "second"]:
         text = re.sub(
             _ordinal_start,
             lambda m: _number_to_bullet(m.group(1)) + " ",

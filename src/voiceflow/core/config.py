@@ -404,6 +404,7 @@ class Config:
     vf19_migration_version: int = 0
     # Long single-block dictations are split into paragraphs at subject changes.
     auto_paragraphs_enabled: bool = True
+    auto_lists_enabled: bool = True  # "point one ..." / "first ... second ..." become list lines
     auto_paragraph_min_words: int = 60
     # Keep the audio of the most recent dictations (local only) so a bad
     # transcription can be replayed against other settings. 0 keeps none.

@@ -68,6 +68,7 @@ from voiceflow.core.silence_artifacts import classify as classify_silence_artifa
 
 # Streaming preview
 from voiceflow.core.live_caption import LiveCaptionSession
+from voiceflow.core.list_format import format_lists
 from voiceflow.core.textproc import (
     apply_code_mode,
     auto_paragraphs,
@@ -1845,17 +1846,36 @@ class EnhancedApp:
         context["destination_editor_chars"] = int(getattr(self.cfg, "destination_editor_chars", 94))
         return context
 
-    def _auto_paragraphs(self, text: str, destination_profile: str) -> str:
-        """Paragraph a long one-block dictation where line breaks are safe to deliver."""
+    def _line_breaks_deliverable(self, text: str, destination_profile: str) -> bool:
+        """Can structure (paragraphs, list lines) reach this destination intact?"""
+        if destination_profile == "terminal" or bool(self.code_mode):
+            return False  # a multi-line paste into a shell can run commands
+        if bool(getattr(self.cfg, "press_enter_after_paste", False)):
+            return False
+        return bool(self._keep_chat_newlines(text))  # typed injection sends each break as Enter
+
+    def _format_lists(self, text: str, destination_profile: str) -> str:
+        """Spoken lists ("point one ...", "first ... second ...") as one item per line."""
         try:
-            if not bool(getattr(self.cfg, "auto_paragraphs_enabled", True)) or "\n" in (text or ""):
+            if not bool(getattr(self.cfg, "auto_lists_enabled", True)) or not text:
                 return text
-            if destination_profile == "terminal" or bool(self.code_mode):
-                return text  # a multi-line paste into a shell can run commands
-            if bool(getattr(self.cfg, "press_enter_after_paste", False)):
+            if not self._line_breaks_deliverable(text, destination_profile):
                 return text
-            if not self._keep_chat_newlines(text):
-                return text  # typed injection would send each break as Enter
+            shaped = format_lists(text)
+            if shaped != text:
+                self._log.info("auto_lists items=%d", len(re.findall(r"(?m)^(?:-|\d{1,2}\.) ", shaped)))
+            return shaped
+        except Exception as exc:
+            self._log.warning("auto_lists_failed error=%s", exc)
+            return text
+
+    def _auto_paragraphs(self, text: str, destination_profile: str) -> str:
+        """Paragraph long prose where line breaks are safe to deliver."""
+        try:
+            if not bool(getattr(self.cfg, "auto_paragraphs_enabled", True)) or not text:
+                return text
+            if not self._line_breaks_deliverable(text, destination_profile):
+                return text
             shaped = auto_paragraphs(text, min_words=int(getattr(self.cfg, "auto_paragraph_min_words", 60)))
             if shaped != text:
                 self._log.info("auto_paragraphs paragraphs=%d words=%d", shaped.count("\n\n") + 1, len(text.split()))
@@ -3369,6 +3389,7 @@ class EnhancedApp:
                 )
                 if self.adaptive_learning and text.strip():
                     text = self.adaptive_learning.apply(text)
+                text = self._format_lists(text, destination_profile)
                 text = format_transcript_preserving_breaks(
                     text,
                     destination=destination_context,

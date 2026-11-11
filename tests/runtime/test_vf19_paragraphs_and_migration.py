@@ -37,7 +37,12 @@ def test_short_text_and_existing_breaks_are_left_alone():
     short = "Please rename the function. Then run the tests. Thanks."
     assert auto_paragraphs(short) == short
     broken = DICTATION.replace(" Remember,", "\n\nRemember,")
-    assert auto_paragraphs(broken) == broken
+    shaped = auto_paragraphs(broken)
+    # A break the speaker made stays; a long block on either side of it may be split further.
+    assert "\n\nRemember," in shaped
+    assert shaped.split() == broken.split()
+    listed = "We need two things:\n1. Speed.\n2. Accuracy."
+    assert auto_paragraphs(listed) == listed
 
 
 def test_a_run_of_sentences_with_no_cue_still_gets_broken_up():
