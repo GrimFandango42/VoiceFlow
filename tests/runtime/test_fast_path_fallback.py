@@ -29,7 +29,8 @@ class _DummyApp:
     _transcribe_with_fast_path_fallback = EnhancedApp._transcribe_with_fast_path_fallback
 
     def __init__(self, primary_text: str, fast_text: str):
-        self.cfg = SimpleNamespace(min_rms_amplitude=5e-4)
+        # These tests feed constant-level fakes, not speech; the VAD gate is tested elsewhere.
+        self.cfg = SimpleNamespace(min_rms_amplitude=5e-4, silence_vad_gate_enabled=False)
         self.asr = _FakeASR(primary_text, "primary-model")
         self.asr_fast = _FakeASR(fast_text, "fast-model")
         self._log = logging.getLogger("voiceflow.tests.fast_path_fallback")

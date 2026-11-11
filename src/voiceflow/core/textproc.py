@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from voiceflow.core.dictation_format import protect_codeish, restore_codeish
+
 SYMBOL_MAP: Dict[str, str] = {
     # Brackets
     "open bracket": "[",
@@ -170,6 +172,8 @@ _GLOBAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # Built in (not in custom_vocabulary.txt, which is seeded once and never overwritten)
     # so existing installs get it.
     (re.compile(r"\bvoice[\s-]*flo(?:w|wn|wna|na|nah)?\b", re.IGNORECASE), "VoiceFlow"),
+    # The dictation app he runs alongside VoiceFlow; Whisper writes it as the model's name.
+    (re.compile(r"\bwhisper[\s-]*flow\b", re.IGNORECASE), "Wispr Flow"),
 )
 
 _CONTEXTUAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -523,6 +527,11 @@ def format_transcript_text(text: str) -> str:
     # Start with basic cleanup
     text = text.strip()
 
+    # VF-12: file names, paths, CamelCase, snake_case and flags are not prose. Every
+    # rule below (sentence breaks after '.', vocabulary rewrites, casing) used to
+    # mangle them: "config.yaml" -> "config. YAML", "src/voiceflow" -> "src/VoiceFlow".
+    text, _codeish = protect_codeish(text)
+
     # Context-aware correction for common dictation substitutions.
     text = _apply_context_corrections(text)
 
@@ -536,7 +545,7 @@ def format_transcript_text(text: str) -> str:
     text = _format_spoken_inline_lists(text)
     text = _fix_sentence_capitalization(text)
 
-    return text
+    return restore_codeish(text, _codeish)
 
 
 def infer_destination_profile(destination: Optional[Mapping[str, Any]]) -> str:
@@ -605,6 +614,11 @@ def format_transcript_for_destination(
         # Defense in depth: collapse any stray newlines back to spaces so a
         # later code path can't accidentally submit a half-finished message.
         formatted = re.sub(r"\s*\n+\s*", " ", formatted).strip()
+        # Lists that reach a chat box arrive as their own lines (list_format, then
+        # format_transcript_preserving_breaks). Markers the whole-text formatter put
+        # inside a line would read "followed by • And then. •" once collapsed.
+        formatted = re.sub(r"(^|[\s.!?:])(?:•|\d{1,2}\.)\s+(?=[A-Z])", r"\1", formatted)
+        formatted = re.sub(r"\s{2,}", " ", formatted).strip()
         formatted = re.sub(r"[ \t]{2,}", " ", formatted)
 
     if destination and not bool(destination.get("destination_wrap_enabled", True)):
@@ -617,6 +631,117 @@ def format_transcript_for_destination(
     if wrap_width <= 0:
         return formatted
     return _wrap_transcript_blocks(formatted, wrap_width, profile)
+
+
+# Sentence openers that mark a change of subject in spoken prompts.
+_TOPIC_SHIFT = re.compile(
+    r"^(?:so yeah|so,|okay|ok\b|alright|all right|also|another thing|the other thing|one more thing|"
+    r"next|now,|finally|lastly|first(?:ly)?,|second(?:ly)?,|third(?:ly)?,|separately|additionally|"
+    r"in addition|anyway|remember|on another note|beyond that|as for|and then|the (?:second|third|last|next) "
+    r"(?:thing|piece|part|item|one)|moving on|going forward|to summarize|in summary)",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[\"'(\[]?[A-Z0-9])")
+
+
+def auto_paragraphs(
+    text: str,
+    *,
+    min_words: int = 60,
+    max_sentences: int = 5,
+    max_words: int = 90,
+) -> str:
+    """Break a long single-block dictation into paragraphs. Words are never changed.
+
+    A minute of dictation used to arrive as one block. Breaks go where the
+    speaker changed subject (a sentence opening with "So yeah", "Also", "The
+    other thing", ...) once the paragraph has at least two sentences, and
+    otherwise when it reaches ``max_sentences`` or ``max_words``. Text that is
+    short, or already has line breaks (spoken "new paragraph", a long pause),
+    is returned untouched. Pure string work: tens of microseconds.
+    """
+    source = (text or "").strip()
+    if not source:
+        return text
+    if "\n" in source:
+        # Shape each prose paragraph on its own; lists and lines the speaker asked
+        # for ("new line", "new paragraph") are left as they are.
+        parts = re.split(r"(\n\s*\n)", source)
+        shaped = [
+            p if (not p.strip() or "\n" in p) else auto_paragraphs(p, min_words=min_words,
+                                                                 max_sentences=max_sentences, max_words=max_words)
+            for p in parts
+        ]
+        joined = "".join(shaped)
+        return joined if joined != source else text
+    if len(source.split()) < max(1, int(min_words)):
+        return text
+    sentences = [part.strip() for part in _SENTENCE_SPLIT.split(source) if part.strip()]
+    if len(sentences) < 4:
+        return text
+
+    paragraphs: list[list[str]] = [[]]
+    for sentence in sentences:
+        current = paragraphs[-1]
+        words = sum(len(item.split()) for item in current)
+        shift = bool(_TOPIC_SHIFT.match(sentence)) and len(current) >= 2
+        full = len(current) >= max_sentences or (words >= max_words and len(current) >= 2)
+        if current and (shift or full):
+            paragraphs.append([sentence])
+        else:
+            current.append(sentence)
+
+    # A sign-off or stray fragment should not stand alone as a paragraph.
+    if len(paragraphs) > 1 and sum(len(item.split()) for item in paragraphs[-1]) < 6:
+        tail = paragraphs.pop()
+        paragraphs[-1].extend(tail)
+    if len(paragraphs) < 2:
+        return text
+    return "\n\n".join(" ".join(items) for items in paragraphs)
+
+
+def format_transcript_preserving_breaks(
+    text: str,
+    destination: Optional[Mapping[str, Any]] = None,
+    audio_duration: float = 0.0,
+    *,
+    keep_chat_newlines: bool = False,
+) -> str:
+    """Format each explicit line/paragraph on its own so deliberate structure survives.
+
+    Line breaks that come from the user ("new line", "new paragraph", "bullet") or from a
+    long pause (VF-12 segmentation) are real structure. The whole-text formatter merges
+    "short paragraphs" and, for chat destinations, collapses every newline. Formatting
+    block by block keeps casing/punctuation/term fixes without touching that structure.
+
+    Chat apps: newlines are kept only with ``keep_chat_newlines`` (the caller sets it when
+    text is PASTED, which does not press Enter); otherwise the chat-safe collapse applies.
+    """
+    if "\n" not in text:
+        return format_transcript_for_destination(text, destination, audio_duration)
+    profile = infer_destination_profile(destination)
+    if profile == "chat" and not keep_chat_newlines:
+        return format_transcript_for_destination(text, destination, audio_duration)
+
+    out = []
+    for part in re.split(r"(\n+)", text):
+        if not part or part.startswith("\n"):
+            out.append(part)
+            continue
+        marker_match = re.match(r"(?:[-•]|\d{1,2}\.)\s+", part)
+        marker = marker_match.group(0) if marker_match else ""
+        body = part[len(marker):]
+        formatted = format_transcript_for_destination(body, destination, 0.0)
+        if profile == "chat":
+            formatted = re.sub(r"\s*\n+\s*", " ", formatted).strip()
+        if marker:
+            # A list item is a line of its own: the whole-text formatter must not
+            # re-list it ("• Fix ...") or end an unpunctuated item with a period.
+            formatted = re.sub(r"^(?:[-•]|\d{1,2}\.)\s+", "", formatted)
+            if not re.search(r"[.!?]$", body.strip()):
+                formatted = re.sub(r"\.$", "", formatted)
+        out.append(marker + formatted)
+    return "".join(out).strip()
 
 
 def normalize_context_terms(
@@ -1278,7 +1403,9 @@ def _fix_sentence_capitalization(text: str) -> str:
         return text
 
     # Capitalize first alphabetical character while preserving leading punctuation/quotes.
-    text = re.sub(r"^([^A-Za-z]*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
+    # A masked code-ish token (VF-12 placeholder, opens with U+27E6) at the start is the first
+    # "word": do not skip over it and capitalise the NEXT word ("config.yaml Is broken").
+    text = re.sub(r"^([^A-Za-z⟦]*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
 
     # Capitalize after sentence endings (including optional trailing quote/bracket).
     text = re.sub(r'([.!?][\'"\)\]]*\s+)([a-z])', lambda m: m.group(1) + m.group(2).upper(), text)
@@ -1315,12 +1442,9 @@ def _format_bullet_points(text: str) -> str:
         return f"{prefix}- "
 
     # Convert "point one", "bullet 2", "point three:" into numbered/bullet list markers.
-    text, spoken_count = re.subn(
-        r"\b(?:point|bullet)\s*(one|two|three|four|five|six|seven|eight|nine|ten|\d{1,2})\s*[,:\-]?\s*",
-        _spoken_point_to_numbered,
-        text,
-        flags=re.IGNORECASE,
-    )
+    # Spoken markers ("point one", "bullet 2") are handled by core.list_format, which
+    # refuses a list whose items are empty; doing it here deleted those words.
+    spoken_count = 0
 
     # Convert " ... . 3, item ..." into a new numbered item.
     text = re.sub(r"([.!?])\s+(\d{1,2})\s*[,:\-]\s*", r"\1\n\2. ", text)
@@ -1343,13 +1467,18 @@ def _format_bullet_points(text: str) -> str:
             flags=re.IGNORECASE,
         )
 
-    # Handle ordinal words at sentence starts.
-    text = re.sub(
-        r"(?:(?<=^)|(?<=\n)|(?<=[.!?]\s))(first|second|third|fourth|fifth)\s*[,:\-]?\s*",
-        lambda m: _number_to_bullet(m.group(1)) + " ",
-        text,
-        flags=re.IGNORECASE,
-    )
+    # Handle ordinal words at sentence starts -- but only when they form a list. A lone
+    # "Second thought, I'd rather..." or "First, I want you to..." is prose; turning it
+    # into "- Second, thought" rewrote what the user said (VF-12).
+    _ordinal_start = r"(?:(?<=^)|(?<=\n)|(?<=[.!?]\s))(first|second|third|fourth|fifth)\s*[,:\-]?\s*"
+    _found = [w.lower() for w in re.findall(_ordinal_start, text, flags=re.IGNORECASE)]
+    if len(_found) >= 2 and _found[:2] == ["first", "second"]:
+        text = re.sub(
+            _ordinal_start,
+            lambda m: _number_to_bullet(m.group(1)) + " ",
+            text,
+            flags=re.IGNORECASE,
+        )
 
     # Normalize line starts.
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -1394,9 +1523,35 @@ def _improve_punctuation(text: str) -> str:
 
     # Add periods to end sentences that need them
     if text and not text.endswith(('.', '!', '?', ':')):
-        text += '.'
+        text += '?' if _last_sentence_is_question(text) else '.'
 
     return text
+
+
+_WH_WORDS = frozenset("who whom whose what when where why how which".split())
+_AUX_WORDS = frozenset(
+    "can could would should will do does did is are was were have has am shall may might".split()
+)
+_AUX_FOLLOWERS = frozenset(
+    "i you we they he she it that this these those there the a an my your our his her their "
+    "anyone anybody everyone someone something anything everything any".split()
+)
+
+
+def _last_sentence_is_question(text: str) -> bool:
+    """True when the unpunctuated final sentence is plainly a question.
+
+    "when will that happen" -> "?" (a wh-word opens it, or an auxiliary followed by a
+    subject: "can you", "is that"). Deliberately narrow: a wrong "?" is as bad as a
+    wrong "."; ambiguous openers ("will", "may") need a subject word right after.
+    """
+    tail = re.split(r"[.!?\n]", text.rstrip())[-1].strip().lower()
+    words = re.findall(r"[a-z']+", tail)
+    if len(words) < 2:
+        return False
+    if words[0] in _WH_WORDS:
+        return True
+    return words[0] in _AUX_WORDS and words[1] in _AUX_FOLLOWERS
 
 
 def _fix_sentence_breaks(text: str) -> str:

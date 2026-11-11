@@ -53,14 +53,28 @@ else:
 import keyboard
 
 from voiceflow.core.preloader import ModelPreloader, PreloadState
+from voiceflow.core.dictation_format import prepare_prompt_text
+from voiceflow.core.history import (
+    FAILURE_REASONS,
+    STATUS_CLIPBOARD,
+    STATUS_PASTED,
+    STATUS_SAVED,
+    TranscriptHistory,
+    failure_summary,
+)
+from voiceflow.core.history import copy_text as history_copy_text
+from voiceflow.core.segmenter import decode_audio, decode_for_duration, should_segment
 from voiceflow.core.silence_artifacts import classify as classify_silence_artifact
 
 # Streaming preview
-from voiceflow.core.streaming import StreamingResult, StreamingTranscriber
+from voiceflow.core.live_caption import LiveCaptionSession
+from voiceflow.core.list_format import format_lists
 from voiceflow.core.textproc import (
     apply_code_mode,
+    auto_paragraphs,
     apply_second_pass_cleanup,
     format_transcript_for_destination,
+    format_transcript_preserving_breaks,
     format_transcript_text,
     infer_destination_profile,
     normalize_context_terms,
@@ -405,6 +419,19 @@ except ImportError:
     def visual_set_correction_feedback_handler(handler): pass
 
 
+def inject_failure_message(reason: str, clipboard_ok: bool) -> str:
+    """Overlay text when a paste did not land. The transcript is always in history."""
+    if reason == "target_closed":
+        return "Target window closed - saved to history"
+    if clipboard_ok:
+        return "Focus changed - copied, saved to history"
+    return "Focus changed - saved to history"
+
+
+def paste_success_message(word_count: int) -> str:
+    return "Pasted " + str(word_count) + (" word" if word_count == 1 else " words")
+
+
 class EnhancedTranscriptionManager:
     """Enhanced thread-safe transcription manager for long conversations"""
 
@@ -542,6 +569,17 @@ class EnhancedApp:
         self._audio_preprocessor = AudioPreprocessor(cfg)
         self.injector = injector_backend or create_injector_backend(cfg)
 
+        # VF-12: local transcript history (last N dictations; never uploaded) so a missed
+        # paste never loses text, plus Esc-to-cancel bookkeeping.
+        self.history: Optional[TranscriptHistory] = None
+        if bool(getattr(cfg, "history_enabled", True)):
+            try:
+                self.history = TranscriptHistory(max_items=int(getattr(cfg, "history_max_items", 50)))
+            except Exception as exc:
+                logging.getLogger("voiceflow").warning("history_unavailable error=%s", exc)
+        self._cancel_pending = False
+        self._cancel_hook: Any = None
+
         # Cold start elimination: Create ASR and start background preloading
         print("[STARTUP] Creating ASR engine...")
         # Registered before any engine loads so a CPU fallback during preload is
@@ -627,6 +665,33 @@ class EnhancedApp:
                 print(f"[AI] Adaptive learning unavailable: {e}")
                 self.adaptive_learning = None
 
+        # VF-17: full-fidelity, local-only tuning corpus (raw -> final -> reconstructed).
+        self.tuning_log = None
+        self._recent_utterance_ids: Deque[Tuple[str, str]] = deque(maxlen=50)  # (pasted text, tuning id)
+        try:
+            from voiceflow.ai.tuning_log import TuningLog
+
+            self.tuning_log = TuningLog.from_config(cfg)
+        except Exception as e:
+            print(f"[AI] Tuning log unavailable: {e}")
+            self.tuning_log = None
+
+        # VF-17: reconstruction pass (form repair; guarded; sync-in-budget or async).
+        self.reconstruction = None
+        if bool(getattr(cfg, "reconstruction_enabled", True)) and str(getattr(cfg, "reconstruction_mode", "auto")) != "off":
+            try:
+                from voiceflow.ai.reconstruction import Reconstructor
+                from voiceflow.ai.reconstruction_runtime import ReconstructionCoordinator
+                from voiceflow.core import vocab as _vocab
+
+                self.reconstruction = ReconstructionCoordinator(
+                    cfg,
+                    Reconstructor(cfg, vocab_provider=lambda: _vocab.known_terms(60)),
+                )
+            except Exception as e:
+                print(f"[AI] Reconstruction pass unavailable: {e}")
+                self.reconstruction = None
+
         # Long conversation tracking
         self._session_start_time = time.time()
         self._total_transcription_time = 0.0
@@ -640,9 +705,9 @@ class EnhancedApp:
         # Streaming preview (VoiceFlow 3.0)
         self.live_caption_enabled = bool(getattr(cfg, "live_caption_enabled", True))
         self.streaming_enabled = bool(getattr(cfg, 'enable_streaming', True)) and self.live_caption_enabled
-        self._streaming_transcriber: Optional[StreamingTranscriber] = None
-        self._streaming_start_timer: Optional[threading.Timer] = None
-        self._last_preview_text = ""
+        self._caption_session: Optional[LiveCaptionSession] = None
+        self._caption_engine_name = "main"
+        self._last_caption_summary: Dict[str, Any] = {}
         self._audio_visual_thread: Optional[threading.Thread] = None
         self._audio_visual_stop = threading.Event()
         self._audio_noise_floor = 0.0
@@ -1358,7 +1423,9 @@ class EnhancedApp:
     ) -> tuple[str, Any, bool, str, float, float]:
         """Decode with the selected engine, retrying blank fast-path results on primary."""
         decode_start = time.perf_counter()
-        text = active_asr.transcribe(audio_data)
+        # VF-12: every final decode goes through decode_for_duration: right-context
+        # padding always, pause-segmented decoding for long recordings.
+        text = decode_for_duration(active_asr, audio_data, self.cfg, self._log)
         decode_ms = (time.perf_counter() - decode_start) * 1000.0
 
         retry_used = False
@@ -1388,7 +1455,7 @@ class EnhancedApp:
         )
 
         retry_start = time.perf_counter()
-        retry_text = self.asr.transcribe(audio_data)
+        retry_text = decode_for_duration(self.asr, audio_data, self.cfg, self._log)
         retry_ms = (time.perf_counter() - retry_start) * 1000.0
         retry_chars = len(str(retry_text or "").strip())
         retry_words = len(str(retry_text or "").split())
@@ -1456,8 +1523,12 @@ class EnhancedApp:
 
         for idx, chunk in enumerate(chunks):
             chunk_duration = len(chunk) / float(sample_rate)
-            retry_asr, retry_path = self._pick_asr_engine(chunk_duration, force_primary=force_primary)
-            piece = str(retry_asr.transcribe(chunk) or "").strip()
+            # VF-12: a short FINAL chunk must not drop to the fast model while the
+            # earlier chunks used the primary one; multi-chunk decodes stay primary.
+            retry_asr, retry_path = self._pick_asr_engine(
+                chunk_duration, force_primary=force_primary or len(chunks) > 1
+            )
+            piece = str(decode_audio(retry_asr, chunk, self.cfg) or "").strip()
             chunks_used += 1
             if not piece:
                 continue
@@ -1550,6 +1621,20 @@ class EnhancedApp:
                 else:
                     i += 1
             speech = filtered
+        # VF-17: the blip filter above exists to drop clicks in the MIDDLE of a
+        # pause. At the end of the clip it deletes real speech: a short, soft,
+        # unstressed last word ("... end of the") that follows a pause is both
+        # quieter than ``dyn_thr`` and shorter than ``min_speech_frames``, so it
+        # was classified as a blip and cut. Re-admit anything above a relaxed
+        # threshold in the final ``tail_protect_ms`` (blip filter bypassed).
+        tail_protect_ms = max(
+            0,
+            int(options.get("tail_protect_ms", getattr(self.cfg, "pause_compaction_tail_protect_ms", 1500))),
+        )
+        tail_frames = min(len(speech), int(np.ceil(tail_protect_ms / float(frame_ms)))) if tail_protect_ms else 0
+        if tail_frames:
+            relaxed_thr = max(base_thr * 1.1, noise_floor * 1.5)
+            speech[-tail_frames:] |= rms[-tail_frames:] >= relaxed_thr
         if not np.any(speech):
             return audio_data
 
@@ -1558,6 +1643,13 @@ class EnhancedApp:
         for shift in range(1, keep_frames + 1):
             dilated[:-shift] |= speech[shift:]
             dilated[shift:] |= speech[:-shift]
+
+        # VF-12: never trim the real end of the recording. The words nearest key-up are
+        # the ones the decoder is least sure of and they need their right context.
+        tail_keep_ms = int(options.get("tail_keep_ms", getattr(self.cfg, "pause_compaction_tail_keep_ms", 450)))
+        tail_frames = max(0, int(tail_keep_ms / frame_ms))
+        if tail_frames:
+            dilated[-tail_frames:] = True
 
         kept_frames = framed[dilated]
         if kept_frames.size == 0:
@@ -1571,9 +1663,11 @@ class EnhancedApp:
         if (len(compacted) / len(audio_data)) < min_keep_ratio:
             # Over-compaction guardrail: preserve more context for recognition quality.
             return audio_data
-        # Keep any tail samples if original ends with speech-like energy.
+        # Keep any tail samples if original ends with speech-like energy. With
+        # tail protection on, the sub-frame remainder is always kept: it is the
+        # last <30 ms of what the user said, and costs nothing.
         tail = audio_data[usable:]
-        if tail.size > 0 and np.sqrt(np.mean(tail * tail)) >= dyn_thr:
+        if tail.size > 0:
             compacted = np.concatenate((compacted, tail))
         return compacted
 
@@ -1752,6 +1846,93 @@ class EnhancedApp:
         context["destination_editor_chars"] = int(getattr(self.cfg, "destination_editor_chars", 94))
         return context
 
+    def _line_breaks_deliverable(self, text: str, destination_profile: str) -> bool:
+        """Can structure (paragraphs, list lines) reach this destination intact?"""
+        if destination_profile == "terminal" or bool(self.code_mode):
+            return False  # a multi-line paste into a shell can run commands
+        if bool(getattr(self.cfg, "press_enter_after_paste", False)):
+            return False
+        return bool(self._keep_chat_newlines(text))  # typed injection sends each break as Enter
+
+    def _format_lists(self, text: str, destination_profile: str) -> str:
+        """Spoken lists ("point one ...", "first ... second ...") as one item per line."""
+        try:
+            if not bool(getattr(self.cfg, "auto_lists_enabled", True)) or not text:
+                return text
+            if not self._line_breaks_deliverable(text, destination_profile):
+                return text
+            shaped = format_lists(text)
+            if shaped != text:
+                self._log.info("auto_lists items=%d", len(re.findall(r"(?m)^(?:-|\d{1,2}\.) ", shaped)))
+            return shaped
+        except Exception as exc:
+            self._log.warning("auto_lists_failed error=%s", exc)
+            return text
+
+    def _auto_paragraphs(self, text: str, destination_profile: str) -> str:
+        """Paragraph long prose where line breaks are safe to deliver."""
+        try:
+            if not bool(getattr(self.cfg, "auto_paragraphs_enabled", True)) or not text:
+                return text
+            if not self._line_breaks_deliverable(text, destination_profile):
+                return text
+            shaped = auto_paragraphs(text, min_words=int(getattr(self.cfg, "auto_paragraph_min_words", 60)))
+            if shaped != text:
+                self._log.info("auto_paragraphs paragraphs=%d words=%d", shaped.count("\n\n") + 1, len(text.split()))
+            return shaped
+        except Exception as exc:
+            self._log.warning("auto_paragraphs_failed error=%s", exc)
+            return text
+
+    def _keep_dictation_audio(self, audio_data: np.ndarray) -> None:
+        """Save this dictation's audio (16-bit WAV, local only), keeping the newest N.
+
+        Without the audio a wrong word cannot be reproduced, so no change to the
+        model or its settings can be checked against what was actually said.
+        """
+        keep = int(getattr(self.cfg, "keep_audio_last_n", 0) or 0)
+        if keep <= 0 or audio_data is None or len(audio_data) < int(self.cfg.sample_rate):
+            return
+        samples = np.asarray(audio_data, dtype=np.float32).copy()
+        rate = int(self.cfg.sample_rate)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+
+        def _write() -> None:
+            try:
+                import wave
+
+                folder = config_dir() / "audio"
+                folder.mkdir(parents=True, exist_ok=True)
+                pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2")
+                with wave.open(str(folder / f"dictation-{stamp}.wav"), "wb") as out:
+                    out.setnchannels(1)
+                    out.setsampwidth(2)
+                    out.setframerate(rate)
+                    out.writeframes(pcm.tobytes())
+                for old in sorted(folder.glob("dictation-*.wav"))[:-keep]:
+                    old.unlink(missing_ok=True)
+            except Exception as exc:
+                self._log.warning("keep_audio_failed error=%s", exc)
+
+        threading.Thread(target=_write, name="KeepAudio", daemon=True).start()
+
+    def _keep_chat_newlines(self, text: str) -> bool:
+        """May explicit line breaks reach a chat window?
+
+        Chat apps submit on Enter, so breaks were always stripped for them. A PASTE does
+        not press Enter in the chat apps checked so far, so breaks the user asked for
+        (spoken commands, long pauses) are kept when the text is pasted. Typed injection
+        sends "
+" as Enter and therefore stays stripped. ``chat_preserve_newlines``
+        turns the whole thing off.
+        """
+        if not bool(getattr(self.cfg, "chat_preserve_newlines", True)):
+            return False
+        if not bool(getattr(self.cfg, "paste_injection", True)):
+            return False
+        type_limit = int(getattr(self.cfg, "type_if_len_le", 0) or 0)
+        return not (type_limit > 0 and len(text or "") <= type_limit)
+
     def _normalize_context_terms_runtime(self, text: str) -> str:
         return normalize_context_terms(
             text,
@@ -1892,117 +2073,81 @@ class EnhancedApp:
             with self._checkpoint_lock:
                 self._checkpoint_in_flight = False
 
-    def _on_streaming_preview(self, result: StreamingResult) -> None:
-        """Handle streaming preview update"""
-        if result.text and result.text != self._last_preview_text:
-            self._last_preview_text = result.text
-            # Apply a cheap cleanup so live preview text reads as naturally as
-            # the final output — strip leading fillers, fix punctuation spacing.
-            preview_text = result.text.strip()
-            preview_text = re.sub(r"(?i)^(uh+[,.]?\s+|um+[,.]?\s+|er+[,.]?\s+)+", "", preview_text)
-            preview_text = apply_second_pass_cleanup(preview_text, heavy=False)
+    def _caption_engine(self):
+        """The model the live caption decodes on, and what to call it in the log.
 
-            # Caption-style preview: keep latest N words for readable live feedback.
-            words = re.findall(r"\S+", preview_text)
-            keep_words = max(1, int(getattr(self.cfg, "live_caption_words", 6)))
-            caption_text = " ".join(words[-keep_words:]) if words else preview_text
-            display_cap = max(40, int(getattr(self.cfg, "live_caption_max_chars", 110)))
-            preview_display = caption_text[:display_cap] + "..." if len(caption_text) > display_cap else caption_text
-            print(f"[PREVIEW] {preview_display}")
+        The fast model only if it has finished loading. Handing the caption an
+        engine that is still loading makes its first decode trigger a second,
+        concurrent model load from the caption thread.
+        """
+        if self.asr_fast is not None and self._fast_model_ready:
+            return self.asr_fast, "fast"
+        return self.asr, "main"
 
-            # Update visual overlay preview
-            if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
-                # Send cleaned partial text to UI for flowing word bubbles.
-                visual_show_preview(preview_text)
+    def _show_caption(self, text: str) -> None:
+        if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+            visual_show_preview(text)
 
     def _start_streaming_preview(self) -> None:
-        """Start streaming preview for real-time transcription feedback"""
+        """Start the live caption for the recording that has just begun."""
+        if self._caption_session is not None:
+            return
         try:
-            if self._streaming_transcriber is not None:
-                return
-            self._last_preview_text = ""
-            streaming_beam = int(getattr(self.cfg, "streaming_beam_size", 2))
-            streaming_max_audio = float(getattr(self.cfg, "streaming_partial_max_audio_seconds", 8.0))
-            streaming_vad = bool(getattr(self.cfg, "streaming_vad_filter", True))
-            self._streaming_transcriber = StreamingTranscriber(
-                self.asr_fast if self.asr_fast else self.asr,
-                sample_rate=self.cfg.sample_rate,
-                chunk_duration=0.85,
-                min_audio_duration=0.55,
-                partial_max_audio_seconds=streaming_max_audio,
-                beam_size=streaming_beam if streaming_beam > 1 else None,
-                vad_filter=streaming_vad,
-                on_partial=self._on_streaming_preview,
-            )
-            self._streaming_transcriber.start()
+            engine, engine_name = self._caption_engine()
 
-            # Start a thread to periodically feed audio to the streamer
-            self._streaming_thread = threading.Thread(
-                target=self._streaming_feed_loop,
-                daemon=True,
-                name="StreamingFeed",
+            def _transcribe(audio, prompt):
+                # The overrides keep caption decodes off the final pass's
+                # long-form path. VAD stays off so the caption never depends
+                # on onnxruntime; silence is gated by level and by the filler
+                # filter below instead.
+                try:
+                    return engine.transcribe(
+                        audio,
+                        initial_prompt=prompt,
+                        beam_size_override=1,
+                        vad_filter_override=False,
+                    )
+                except TypeError:
+                    # The two-process dev client takes audio only.
+                    return engine.transcribe(audio)
+
+            def _is_filler(text: str) -> bool:
+                suppress, _reason = classify_silence_artifact(
+                    text,
+                    no_speech_prob=float(getattr(engine, "last_no_speech_prob", 0.0) or 0.0),
+                )
+                return bool(suppress)
+
+            session = LiveCaptionSession(
+                _transcribe,
+                self.rec._ring_buffer.get_samples_since,
+                self._show_caption,
+                on_status=self._show_caption,
+                text_filter=_is_filler,
+                sample_rate=int(self.cfg.sample_rate),
+                interval_seconds=float(getattr(self.cfg, "live_caption_interval_seconds", 0.7)),
+                start_delay_seconds=float(getattr(self.cfg, "live_caption_start_delay_seconds", 0.6)),
+                window_seconds=float(getattr(self.cfg, "streaming_partial_max_audio_seconds", 8.0)),
+                silence_rms=float(getattr(self.cfg, "min_rms_amplitude", 5e-4)) * 2.0,
             )
-            self._streaming_thread.start()
-            logger.debug("Streaming preview started")
+            self._caption_engine_name = engine_name
+            self._caption_session = session
+            session.start()
         except Exception as e:
-            logger.warning(f"Failed to start streaming preview: {e}")
-            self._streaming_transcriber = None
+            self._caption_session = None
+            self._log.warning("live_caption_skipped reason=start_failed error=%s", e)
+            self._show_caption(f"Live caption unavailable: {e}")
 
     def _schedule_streaming_preview(self) -> None:
-        """Delay caption ASR startup so short utterances stay ultra-fast."""
-        # The live caption has four places it can quietly not happen: disabled,
-        # model not ready, the recording ends before the delay elapses, or the
-        # overlay refuses the text. Each was previously silent, which is why
-        # "the preview doesn't work" took a day to narrow down. Say which.
-        if not self.streaming_enabled or not self._model_ready:
-            self._log.info(
-                "streaming_preview_skipped enabled=%s model_ready=%s",
-                bool(self.streaming_enabled),
-                bool(self._model_ready),
-            )
+        """Start the live caption, or say on screen and in the log why not."""
+        if not self.streaming_enabled:
+            self._log.info("live_caption_skipped reason=disabled")
             return
-        delay = max(0.0, float(getattr(self.cfg, "live_caption_start_delay_seconds", 1.8)))
-        if delay <= 0.0:
-            self._start_streaming_preview()
+        if not self.is_model_ready():
+            self._log.info("live_caption_skipped reason=model_not_ready")
+            self._show_caption("Speech model still loading - no live caption yet")
             return
-        if self._streaming_start_timer and self._streaming_start_timer.is_alive():
-            return
-
-        def _delayed_start() -> None:
-            if self.rec.is_recording():
-                self._start_streaming_preview()
-            else:
-                self._log.info("streaming_preview_skipped reason=recording_ended_before_delay delay=%.2f", delay)
-
-        self._streaming_start_timer = threading.Timer(delay, _delayed_start)
-        self._streaming_start_timer.daemon = True
-        self._streaming_start_timer.start()
-
-    def _streaming_feed_loop(self) -> None:
-        """Feed audio to streaming transcriber while recording"""
-        last_sample_count = 0
-
-        while self.rec.is_recording() and self._streaming_transcriber:
-            try:
-                # Pull only new samples since last poll; avoids O(n) full-buffer copies on long dictation.
-                new_audio, current_total = self.rec._ring_buffer.get_samples_since(last_sample_count)
-                if len(new_audio) > 0:
-                    self._streaming_transcriber.add_audio(new_audio)
-                    last_sample_count = current_total
-                    if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE and len(new_audio) > 0:
-                        # Lightweight amplitude estimate for visual waveform (no ASR impact).
-                        rms = float(np.sqrt(np.mean(np.square(new_audio))))
-                        denom = max(1e-6, float(getattr(self.cfg, "min_rms_amplitude", 5e-4)) * 12.0)
-                        level = min(1.0, (rms / denom) ** 0.7)
-                        visual_update_audio_level(level)
-                else:
-                    last_sample_count = current_total
-
-                time.sleep(0.18)  # Lower-latency feed without high CPU usage.
-
-            except Exception as e:
-                logger.warning(f"Streaming feed error: {e}")
-                break
+        self._start_streaming_preview()
 
     def _start_audio_visual_monitor(self) -> None:
         """Always-on (during recording) amplitude sampler for waveform visuals."""
@@ -2121,23 +2266,41 @@ class EnhancedApp:
                 break
 
     def _stop_streaming_preview(self) -> None:
-        """Stop streaming preview"""
-        if self._streaming_start_timer and self._streaming_start_timer.is_alive():
-            self._streaming_start_timer.cancel()
-        self._streaming_start_timer = None
+        """End the live caption. Its text stays on screen until the result replaces it.
 
-        if self._streaming_transcriber:
-            try:
-                # Preview stream only; skip expensive final pass to protect long-utterance latency.
-                self._streaming_transcriber.stop(discard_final=True, join_timeout=0.2)
-            except Exception as e:
-                logger.warning(f"Error stopping streaming preview: {e}")
-            finally:
-                self._streaming_transcriber = None
-
-        # Clear visual preview
-        if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
-            visual_clear_preview()
+        Returns at once: a caption decode still in flight is dropped by the
+        session, never shown, so it cannot land on top of the final text.
+        """
+        session, self._caption_session = self._caption_session, None
+        if session is None:
+            return
+        try:
+            summary = session.stop()
+        except Exception as e:
+            self._log.warning("live_caption_stop_failed error=%s", e)
+            return
+        self._last_caption_summary = summary
+        # One line per recording, whatever happened: this is the answer to
+        # "why didn't the caption show".
+        self._log.info(
+            "live_caption_summary outcome=%s engine=%s audio_s=%.1f chars=%d passes=%d commits=%d "
+            "published=%d first_text_ms=%s max_decode_ms=%.0f errors=%d filtered=%d silent=%d "
+            "dropped_late=%d last_error=%s",
+            summary.get("outcome"),
+            getattr(self, "_caption_engine_name", "?"),
+            float(summary.get("audio_seconds", 0.0)),
+            int(summary.get("chars", 0)),
+            int(summary.get("passes", 0)),
+            int(summary.get("commits", 0)),
+            int(summary.get("published", 0)),
+            summary.get("first_text_ms"),
+            float(summary.get("max_decode_ms", 0.0)),
+            int(summary.get("errors", 0)),
+            int(summary.get("filtered", 0)),
+            int(summary.get("skipped_silent", 0)),
+            int(summary.get("dropped_after_stop", 0)),
+            summary.get("last_error") or "-",
+        )
 
     def _observe_adaptive_async(
         self,
@@ -2160,6 +2323,123 @@ class EnhancedApp:
                 logger.debug(f"Adaptive learning observe failed: {learning_error}")
 
         self.postprocess_executor.submit(_task)
+
+    def _record_tuning(
+        self,
+        raw_text: str,
+        final_text: str,
+        metadata: Dict[str, Any],
+        reconstructed_text: Optional[str] = None,
+        reconstruction: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Append one utterance to the local tuning corpus (off the hot path)."""
+        if not self.tuning_log or not getattr(self.tuning_log, "enabled", False):
+            return ""
+        import uuid
+
+        uid = uuid.uuid4().hex[:12]
+        self._recent_utterance_ids.append((final_text, uid))
+
+        def _task() -> None:
+            try:
+                self.tuning_log.append_utterance(
+                    raw_text=raw_text,
+                    final_text=final_text,
+                    reconstructed_text=reconstructed_text,
+                    reconstruction=reconstruction,
+                    metadata=metadata,
+                    utterance_id=uid,
+                )
+            except Exception as exc:
+                logger.debug(f"tuning log write failed: {exc}")
+
+        self.postprocess_executor.submit(_task)
+        return uid
+
+    def _on_async_reconstruction(self, uid: str, raw: str, pasted: str, outcome: Any, usable: bool) -> None:
+        """Runs on the reconstruction worker when a background attempt finishes."""
+        try:
+            if self.tuning_log and uid:
+                self.tuning_log.append_reconstruction(
+                    uid,
+                    reconstructed_text=(outcome.text or None),
+                    reconstruction=dict(outcome.as_log(), path="async", usable=bool(usable)),
+                )
+            self._log.info(
+                "reconstruction_async status=%s reason=%s latency_ms=%.0f usable=%s",
+                outcome.status, outcome.reason, outcome.latency_ms, usable,
+            )
+            if outcome.accepted:
+                # Feed the learner the model's repair (low weight: it is a suggestion, not a user edit).
+                self._observe_adaptive_async(raw, outcome.text, {"source": "reconstruction", "async": True})
+                self._accepted_reconstructions = getattr(self, "_accepted_reconstructions", 0) + 1
+                if (
+                    self.adaptive_learning
+                    and self.tuning_log
+                    and bool(getattr(self.cfg, "hotword_promotion_enabled", True))
+                    and self._accepted_reconstructions % 10 == 0
+                ):
+                    report = self.adaptive_learning.promote_hotwords(self.tuning_log)
+                    self._log.info(
+                        "hotword_promotion promoted=%s candidates=%s",
+                        report.get("promoted_count"), report.get("hotword_candidates"),
+                    )
+            if usable:
+                hotkey = str(getattr(self.cfg, "replace_last_paste_hotkey", "ctrl+alt+r"))
+                print(f"[AI] Better version ready - press {hotkey} to swap it in")
+                if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+                    show_complete(f"Better version ready - {hotkey}")
+        except Exception as exc:
+            self._log.debug("reconstruction_async_handler_failed error=%s", exc)
+
+    def has_pending_improvement(self) -> bool:
+        if self.reconstruction is None:
+            return False
+        return self.reconstruction.has_pending(float(getattr(self.cfg, "replace_last_paste_max_age_s", 120.0)))
+
+    def replace_last_paste(self) -> str:
+        """Swap the last paste for its reconstructed version (hotkey / tray entry)."""
+        if self.reconstruction is None:
+            return "unavailable"
+        max_age = float(getattr(self.cfg, "replace_last_paste_max_age_s", 120.0))
+        pending = self.reconstruction.take_pending(max_age)
+        if pending is None:
+            print("[AI] No improved version to swap in")
+            return "none"
+        replace = getattr(self.injector, "replace_last_paste", None)
+        if replace is None:
+            copied = bool(self.injector.copy_text_to_clipboard(pending.improved_text))
+            return "clipboard:unsupported" if copied else "failed:unsupported"
+        listener = getattr(self, "ptt_listener", None)
+        if listener is not None:
+            try:
+                listener.suppress_event_side_effects(min(3.0, 0.6 + len(pending.pasted_text) / 200.0))
+            except Exception:
+                pass
+        result = str(replace(pending.pasted_text, pending.improved_text, max_age_s=max_age))
+        self._log.info("replace_last_paste result=%s chars=%d", result, len(pending.improved_text))
+        if result == "replaced":
+            self.reconstruction.clear_pending()
+            self.reconstruction.remember(pending.improved_text)
+        message = {
+            "replaced": "Replaced with improved version",
+        }.get(result, "Improved version copied - paste it manually (" + result.split(":", 1)[-1] + ")")
+        print(f"[AI] {message}")
+        if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+            try:
+                show_complete(message)
+            except Exception:
+                pass
+        if self.tuning_log and pending.utterance_id:
+            try:
+                self.tuning_log.append_reconstruction(
+                    pending.utterance_id,
+                    reconstructed_text=pending.improved_text,
+                    reconstruction={"status": "accepted", "applied": result, "path": "async"},
+                )
+            except Exception:
+                pass
+        return result
 
     def handle_manual_correction_feedback(
         self,
@@ -2196,9 +2476,204 @@ class EnhancedApp:
             except Exception as exc:
                 self._log.warning("correction_persist_failed error=%s", exc)
 
+        if self.tuning_log:
+            for pasted, uid in reversed(self._recent_utterance_ids):
+                if pasted.strip() == raw:
+                    try:
+                        self.tuning_log.append_user_edit(uid, corrected)
+                    except Exception as exc:
+                        self._log.debug("tuning_user_edit_failed error=%s", exc)
+                    break
+
         if not self.adaptive_learning:
             return
         self._observe_adaptive_async(raw, corrected, meta)
+
+    # ------------------------------------------------------------------ VF-12 history / cancel
+
+    def _history_add(self, text: str) -> int:
+        if self.history is None:
+            return 0
+        try:
+            ctx = self.injector.get_target_context()
+            target = str((ctx or {}).get("process_name", "") or "")
+            return self.history.add(text, target=target)
+        except Exception as exc:
+            self._log.warning("history_add_failed error=%s", exc)
+            return 0
+
+    #: A hold shorter than this that yields nothing is a stray Ctrl+Shift, not a
+    #: dictation; it is logged but kept out of the history and off the screen.
+    _FAILURE_MIN_AUDIO_SECONDS = 1.0
+    #: Holding the key and saying nothing is not an error. These leave the screen
+    #: alone, and reach the history only when the hold was long enough to have
+    #: been a real attempt.
+    _QUIET_FAILURES = frozenset({"silent", "empty", "non_speech", "no_audio"})
+    _QUIET_FAILURE_MIN_AUDIO_SECONDS = 3.0
+
+    def _history_fail(
+        self,
+        reason: str,
+        *,
+        detail: str = "",
+        text: str = "",
+        audio_seconds: float = 0.0,
+        always: bool = False,
+    ) -> None:
+        """Record a dictation that produced no paste: why, and any text it did produce.
+
+        Until this existed every such path returned to idle without a trace, so
+        a discarded dictation could be neither explained nor recovered.
+        """
+        try:
+            self._log.info(
+                "dictation_failed reason=%s audio_s=%.2f chars=%d detail=%s",
+                reason, float(audio_seconds or 0.0), len(text or ""), detail or "-",
+            )
+            if not always and float(audio_seconds or 0.0) < self._FAILURE_MIN_AUDIO_SECONDS:
+                return
+            quiet = reason in self._QUIET_FAILURES
+            if quiet and not always and float(audio_seconds or 0.0) < self._QUIET_FAILURE_MIN_AUDIO_SECONDS:
+                return
+            entry = {"reason": reason, "detail": detail, "audio_seconds": audio_seconds}
+            summary = failure_summary(entry)
+            if self.history is not None:
+                try:
+                    target = str(self.injector.get_target_context().get("process_name", "") or "")
+                except Exception:
+                    target = ""
+                self.history.add_failure(
+                    reason, detail=detail, text=text, audio_seconds=audio_seconds, target=target
+                )
+            if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+                visual_record_transcription_event(
+                    text or "",
+                    float(audio_seconds or 0.0),
+                    0.0,
+                    metadata={"outcome": "failed", "failure_reason": reason, "failure_summary": summary},
+                )
+                if not quiet:
+                    show_error(f"Nothing pasted: {FAILURE_REASONS.get(reason, reason)} - see Recent")
+        except Exception as exc:
+            self._log.warning("history_fail_record_failed error=%s", exc)
+
+    def _history_mark(self, entry_id: int, status: str) -> None:
+        if self.history is None or not entry_id:
+            return
+        try:
+            self.history.set_status(entry_id, status)
+        except Exception as exc:
+            self._log.warning("history_mark_failed error=%s", exc)
+
+    def recent_history(self, limit: int = 10) -> list:
+        return self.history.recent(limit) if self.history is not None else []
+
+    def clear_history(self) -> None:
+        if self.history is not None:
+            self.history.clear()
+
+    def _overlay_message(self, message: str, *, error: bool = False) -> None:
+        if not (self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE):
+            return
+        try:
+            (show_error if error else show_complete)(message)
+        except Exception:
+            pass
+
+    def copy_history_entry(self, entry_id: int) -> bool:
+        """Put a past transcript on the clipboard (tray: Recent -> item)."""
+        entry = self.history.get(entry_id) if self.history is not None else None
+        if not entry:
+            return False
+        ok = bool(self.injector.copy_text_to_clipboard(history_copy_text(entry)))
+        self._overlay_message("Copied to clipboard" if ok else "Copy failed", error=not ok)
+        return ok
+
+    @staticmethod
+    def _wait_for_modifiers_released(timeout: float = 1.5) -> None:
+        """A hotkey fires while its modifiers are still down; pasting then would send
+        Ctrl+Alt+Shift+V to the target instead of Ctrl+V."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                if not any(keyboard.is_pressed(k) for k in ("alt", "shift", "ctrl", "windows")):
+                    return
+            except Exception:
+                return
+            time.sleep(0.02)
+
+    def repaste_last(self) -> bool:
+        """Paste the most recent transcript again into the window that has focus now."""
+        entry = self.history.last() if self.history is not None else None
+        if not entry:
+            self._overlay_message("No transcript to re-paste", error=True)
+            return False
+        self._wait_for_modifiers_released()
+        try:
+            self.injector.capture_target_window()   # re-paste where the user is now
+        except Exception:
+            pass
+        text = entry["text"]
+        ok = bool(self.injector.inject(text))
+        if ok:
+            words = int(entry.get("words", len(text.split())))
+            self._overlay_message("Re-pasted " + str(words) + (" word" if words == 1 else " words"))
+        else:
+            clip = bool(self.injector.copy_text_to_clipboard(text))
+            self._overlay_message(
+                "Could not paste - copied to clipboard" if clip else "Could not paste", error=True
+            )
+        return ok
+
+    def _arm_cancel_key(self) -> None:
+        key = str(getattr(self.cfg, "cancel_recording_key", "esc") or "").strip()
+        if not key or self._cancel_hook is not None:
+            return
+        try:
+            # Armed only while recording. suppress=True also keeps Ctrl+Shift+Esc (Task
+            # Manager) from opening when Esc is pressed with the default Ctrl+Shift hold.
+            self._cancel_hook = keyboard.on_press_key(
+                key,
+                lambda _event: threading.Thread(target=self.cancel_recording, daemon=True).start(),
+                suppress=True,
+            )
+        except Exception as exc:
+            self._cancel_hook = None
+            self._log.warning("cancel_key_arm_failed key=%s error=%s", key, exc)
+
+    def _disarm_cancel_key(self) -> None:
+        hook, self._cancel_hook = self._cancel_hook, None
+        if hook is None:
+            return
+        try:
+            keyboard.unhook(hook)
+        except Exception as exc:
+            self._log.warning("cancel_key_disarm_failed error=%s", exc)
+
+    def cancel_recording(self) -> bool:
+        """Throw the current recording away (Esc while recording). Nothing is transcribed."""
+        if self._cancel_pending or not self.rec.is_recording():
+            return False
+        self._cancel_pending = True
+        self._disarm_cancel_key()
+        try:
+            self._stop_streaming_preview()
+            if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+                visual_clear_preview()
+            self._stop_audio_visual_monitor()
+            self._stop_live_checkpoint_monitor()
+            self.rec.stop()          # audio is discarded
+            self._reset_checkpoint_state()
+            self._log.info("recording_cancelled")
+            print("[MIC] Recording cancelled (Esc) - discarded")
+            mark_idle()
+            if self.visual_indicators_enabled:
+                update_tray_status(self.tray_controller, "idle", False)
+                if VISUAL_INDICATORS_AVAILABLE:
+                    show_complete("Recording discarded")
+        except Exception as exc:
+            self._log.exception("cancel_recording_failed error=%s", exc)
+        return True
 
     def start_recording(self):
         """Enhanced recording start with better error handling"""
@@ -2206,8 +2681,9 @@ class EnhancedApp:
             if not self.rec.is_recording():
                 print("[MIC] Listening...")
                 self._log.info("recording_started")
+                _t_press = time.perf_counter()
                 self._reset_checkpoint_state()
-                self.injector.capture_target_window()
+                self._release_target_noted = False
 
                 # Mark state as recording for idle-aware monitoring
                 mark_recording()
@@ -2216,13 +2692,29 @@ class EnhancedApp:
                 if self.visual_indicators_enabled:
                     update_tray_status(self.tray_controller, "listening", True)
                     if VISUAL_INDICATORS_AVAILABLE:
+                        visual_clear_preview()  # the previous result may still be showing
                         show_listening()
 
                 # Audio feedback: high-pitched ping confirms hotkey was registered
                 if getattr(self.cfg, "audio_feedback_beeps", True):
                     _play_beep(880, 60)
 
+                _t_overlay = time.perf_counter()
                 self.rec.start()
+                _t_rec = time.perf_counter()
+                # After the overlay and the microphone, not before them: looking up
+                # the target window's process and title is the slow step here, and
+                # nothing the user sees or says should wait for it. The overlay never
+                # takes focus, so the foreground window is still the one dictated into.
+                self.injector.capture_target_window()
+                self._log.info(
+                    "recording_start_timing overlay_ms=%.1f mic_ms=%.1f target_ms=%.1f",
+                    (_t_overlay - _t_press) * 1000.0,
+                    (_t_rec - _t_overlay) * 1000.0,
+                    (time.perf_counter() - _t_rec) * 1000.0,
+                )
+                self._cancel_pending = False
+                self._arm_cancel_key()
                 try:
                     self._maybe_prewarm_on_press()
                 except Exception as prewarm_error:
@@ -2268,9 +2760,52 @@ class EnhancedApp:
             update_tray_status(self.tray_controller, "idle", False)
             if VISUAL_INDICATORS_AVAILABLE:
                 hide_status()
+    def sample_release_target(self):
+        """Handle of the window focused right now. Runs synchronously on the key-release
+        thread, so it must stay a single cheap OS call; the heavier retarget happens later in
+        ``note_release_target`` on the callback thread."""
+        if str(getattr(self.cfg, "inject_target_policy", "release")).strip().lower() != "release":
+            return None
+        snap = getattr(self.injector, "foreground_snapshot", None)
+        if not callable(snap):
+            return None
+        try:
+            return snap()
+        except Exception as exc:
+            self._log.debug("foreground_snapshot_failed error=%s", exc)
+            return None
+
+    def note_release_target(self, hwnd=None) -> None:
+        """Pin the window focused at key release as the paste target (policy "release").
+
+        Called by the hotkey listener as soon as a release is confirmed, i.e. before the
+        post-key-up audio tail, so a focus change during the tail cannot redirect the text.
+        ``hwnd`` is the handle the listener sampled synchronously at the moment of release;
+        without it (backends with no sampler) the foreground window at call time is used.
+        """
+        self._release_target_noted = True
+        if str(getattr(self.cfg, "inject_target_policy", "release")).strip().lower() != "release":
+            return
+        retarget = getattr(self.injector, "retarget_to_foreground", None)
+        if callable(retarget):
+            try:
+                retarget(hwnd) if hwnd else retarget()
+            except Exception as exc:
+                self._log.debug("retarget_to_foreground_failed error=%s", exc)
 
     def stop_recording(self):
         """Enhanced recording stop with improved transcription handling"""
+        self._disarm_cancel_key()
+        if self._cancel_pending:
+            # Esc already discarded this recording; the key release that follows is a no-op.
+            self._cancel_pending = False
+            return
+        # VF-12: the "release" target is sampled when the key release is confirmed (before the
+        # post-key-up tail), via note_release_target. Only backends that never report a release
+        # (no on_release hook) are sampled here, at stop time.
+        if not getattr(self, "_release_target_noted", False):
+            self.note_release_target()
+        self._release_target_noted = False
         try:
             # Stop streaming preview first
             self._stop_streaming_preview()
@@ -2291,6 +2826,7 @@ class EnhancedApp:
 
             if audio.size == 0:
                 print("[MIC] No audio captured")
+                self._history_fail("no_audio", detail="check the input device", always=True)
                 # Return to idle state
                 mark_idle()
                 # Update visual indicators - back to idle
@@ -2316,6 +2852,11 @@ class EnhancedApp:
                 # Both conditions must be true - energy AND peak must be below thresholds
                 if audio_energy < silence_threshold and max_amplitude < peak_threshold:
                     print(f"[MIC] Silent audio detected (energy: {audio_energy:.6f}, max: {max_amplitude:.6f}) - skipping transcription")
+                    self._history_fail(
+                        "silent",
+                        detail=f"peak level {max_amplitude:.4f}; check the microphone or its mute switch",
+                        audio_seconds=audio_duration,
+                    )
                     # Return to idle state
                     mark_idle()
                     # Update visual indicators - back to idle
@@ -2369,6 +2910,7 @@ class EnhancedApp:
 
     def _perform_transcription(self, audio_data: np.ndarray) -> str:
         """Perform actual transcription with enhanced error handling and timeout protection"""
+        self._keep_dictation_audio(audio_data)
         # Ensure logger is available (fix for scoping issue)
         logger = logging.getLogger(__name__)
         stage_ms: Dict[str, float] = {}
@@ -2383,6 +2925,7 @@ class EnhancedApp:
         second_pass_mode = "none"
         second_pass_chars_delta = 0
         idle_resume_force_primary = False
+        raw_transcript = ""  # bound on every path (was guarded with locals())
 
         def _capture_model_metadata(engine: Any) -> None:
             nonlocal asr_model_id, asr_model_name, asr_device, asr_compute
@@ -2462,7 +3005,14 @@ class EnhancedApp:
                 compaction_overrides["max_reduction_pct"] = float(
                     getattr(self.cfg, "idle_resume_compaction_max_reduction_pct", 68.0)
                 )
-            if skip_pause_compaction:
+            if should_segment(raw_audio_duration, self.cfg):
+                # VF-12: long recordings are cut at their own pauses and decoded piece
+                # by piece (core/segmenter.py), which replaces pause compaction.
+                skip_pause_compaction = True
+                compacted_audio = audio_data
+                stage_ms["pause_compaction"] = 0.0
+                self._log.info("pause_compaction_replaced_by_segmentation raw_duration=%.2f", raw_audio_duration)
+            elif skip_pause_compaction:
                 compacted_audio = audio_data
                 stage_ms["pause_compaction"] = 0.0
                 self._log.info(
@@ -2513,6 +3063,7 @@ class EnhancedApp:
                 )
                 if not bool(getattr(self.cfg, "non_speech_guard_soft_mode", True)):
                     print("[TRANSCRIPTION] Filtered likely non-speech audio burst.")
+                    self._history_fail("non_speech", audio_seconds=raw_audio_duration)
                     mark_idle()
                     if self.visual_indicators_enabled:
                         update_tray_status(self.tray_controller, "idle", False)
@@ -2705,7 +3256,7 @@ class EnhancedApp:
                                     raw_audio_duration,
                                     force_primary=idle_resume_force_primary,
                                 )
-                            retry_text = retry_asr.transcribe(audio_data)
+                            retry_text = decode_for_duration(retry_asr, audio_data, self.cfg, self._log)
 
                         stage_ms["asr_retry"] = (time.perf_counter() - stage_start) * 1000.0
                         retry_words = len((retry_text or "").split())
@@ -2790,6 +3341,12 @@ class EnhancedApp:
                             transcription_no_speech_prob,
                         )
                         self._return_to_idle()
+                        self._history_fail(
+                            "filtered",
+                            detail=f"{suppress_reason}, no-speech {transcription_no_speech_prob:.2f}",
+                            text=text,
+                            audio_seconds=raw_audio_duration,
+                        )
                         self._last_transcription_completed_at = time.time()
                         return ""
 
@@ -2798,6 +3355,7 @@ class EnhancedApp:
                         print("[TRANSCRIPTION] Content too short - skipping")
                         self._log.info("transcription_filtered reason=too_short")
                         self._return_to_idle()
+                        self._history_fail("too_short", text=text, audio_seconds=raw_audio_duration)
                         self._last_transcription_completed_at = time.time()
                         return ""
 
@@ -2807,6 +3365,9 @@ class EnhancedApp:
                 self._log.error("transcription_timeout duration=%.2f timeout=%.2f", audio_duration, timeout_seconds)
                 # Return to idle state after timeout
                 self._return_to_idle()
+                self._history_fail(
+                    "timeout", detail=f"gave up after {timeout_seconds:.0f}s", audio_seconds=raw_audio_duration, always=True
+                )
                 self._last_transcription_completed_at = time.time()
                 return ""
 
@@ -2819,12 +3380,21 @@ class EnhancedApp:
             if effective_code_mode:
                 text = apply_code_mode(text, lowercase=self.cfg.code_mode_lowercase)
             else:
+                # VF-12: spoken "new line"/"new paragraph"/"bullet", ums/uhs, stutters and
+                # false starts -- conservative, code-ish tokens untouched.
+                text = prepare_prompt_text(
+                    text,
+                    spoken_commands=bool(getattr(self.cfg, "spoken_formatting_commands", True)),
+                    cleanup=bool(getattr(self.cfg, "prompt_cleanup_enabled", True)),
+                )
                 if self.adaptive_learning and text.strip():
                     text = self.adaptive_learning.apply(text)
-                text = format_transcript_for_destination(
+                text = self._format_lists(text, destination_profile)
+                text = format_transcript_preserving_breaks(
                     text,
                     destination=destination_context,
                     audio_duration=audio_duration,
+                    keep_chat_newlines=self._keep_chat_newlines(text),
                 )
                 self._log.info(
                     "format_profile profile=%s process=%s width=%s",
@@ -2892,10 +3462,11 @@ class EnhancedApp:
             if text and not effective_code_mode:
                 try:
                     final_destination = destination_context or self._destination_format_context()
-                    text = format_transcript_for_destination(
+                    text = format_transcript_preserving_breaks(
                         text,
                         destination=final_destination,
                         audio_duration=audio_duration,
+                        keep_chat_newlines=self._keep_chat_newlines(text),
                     )
                 except Exception:
                     text = format_transcript_text(text)
@@ -2923,6 +3494,35 @@ class EnhancedApp:
                     stage_ms.get("second_pass_heavy", 0.0),
                 )
             stage_ms["postprocess"] = (time.perf_counter() - postprocess_start) * 1000.0
+
+            # VF-17 reconstruction pass. Runs on the finished text; its output is
+            # only used if every guard passes, so the worst case is today's text.
+            # In `auto` mode this is asynchronous unless the model has proven it
+            # fits the budget, so the paste is not delayed (see
+            # voiceflow.ai.reconstruction_runtime).
+            recon_job = None
+            recon_outcome = None
+            recon_synchronous = False
+            if text.strip() and self.reconstruction is not None and not effective_code_mode:
+                try:
+                    stage_start = time.perf_counter()
+                    recon_job = self.reconstruction.begin(
+                        text,
+                        raw_transcript or text,
+                        code_mode=effective_code_mode,
+                        destination_profile=destination_profile,
+                    )
+                    if recon_job is not None:
+                        wait_s = self.reconstruction.sync_wait_s()
+                        recon_outcome = recon_job.wait(wait_s) if wait_s > 0 else None
+                        if recon_outcome is not None and recon_outcome.accepted:
+                            text = recon_outcome.text
+                            recon_synchronous = True
+                    stage_ms["reconstruction_wait"] = (time.perf_counter() - stage_start) * 1000.0
+                    self.reconstruction.added_latency.record(stage_ms["reconstruction_wait"])
+                except Exception as recon_exc:
+                    self._log.warning("reconstruction_stage_failed error=%s", recon_exc)
+                    recon_job = None
 
             # Performance tracking
             transcription_time = time.perf_counter() - start_time
@@ -2966,6 +3566,7 @@ class EnhancedApp:
                 perf_snapshot["status"],
             )
             final_transcription_path = retry_strategy if retry_used else asr_path
+            text = self._auto_paragraphs(text, destination_profile)
             if self.visual_indicators_enabled and text.strip():
                 visual_record_transcription_event(
                     text,
@@ -2983,20 +3584,31 @@ class EnhancedApp:
 
             # Inject text
             inject_start = time.perf_counter()
+            inject_ok = False
             if text.strip():
                 # Mark as injecting
                 mark_injecting()
 
+                # VF-12: the text is on disk before the paste is attempted, so a miss never loses it.
+                history_id = self._history_add(text)
+                word_count = len(text.split())
                 inject_ok = bool(self.injector.inject(text))
-                if not inject_ok:
+                if inject_ok:
+                    self._history_mark(history_id, STATUS_PASTED)
+                else:
+                    failure_reason = str(getattr(self.injector, "last_failure_reason", "") or "")
                     clipboard_ok = bool(self.injector.copy_text_to_clipboard(text))
+                    self._history_mark(history_id, STATUS_CLIPBOARD if clipboard_ok else STATUS_SAVED)
                     target_context = self.injector.get_target_context()
                     target_name = (
                         str(target_context.get("process_name", "") or "").strip()
                         or str(target_context.get("window_title", "") or "").strip()
                         or "target window"
                     )
-                    if clipboard_ok:
+                    overlay_msg = inject_failure_message(failure_reason, clipboard_ok)
+                    if failure_reason == "target_closed":
+                        print(f"[INJECT] {overlay_msg} ({target_name}); copy it from the tray's Recent list.")
+                    elif clipboard_ok:
                         print(
                             f"[INJECT] Focus changed before paste. Transcript copied to clipboard for manual paste in {target_name}."
                         )
@@ -3005,23 +3617,16 @@ class EnhancedApp:
                             f"[INJECT] Focus changed before paste and clipboard fallback failed. Verify focus and retry in {target_name}."
                         )
                     self._log.warning(
-                        "inject_failed clipboard_fallback=%s target=%s chars=%d",
+                        "inject_failed reason=%s clipboard_fallback=%s target=%s chars=%d",
+                        failure_reason or "unknown",
                         str(clipboard_ok),
                         target_name,
                         len(text),
                     )
                     if self.visual_indicators_enabled:
-                        update_tray_status(
-                            self.tray_controller,
-                            "error",
-                            False,
-                            "Focus changed; transcript copied to clipboard" if clipboard_ok else "Focus changed; injection failed",
-                        )
+                        update_tray_status(self.tray_controller, "error", False, overlay_msg)
                         if VISUAL_INDICATORS_AVAILABLE:
-                            if clipboard_ok:
-                                show_error("Focus changed; copied to clipboard")
-                            else:
-                                show_error("Focus changed; injection failed")
+                            show_error(overlay_msg)
 
                 self._log.info("transcribed chars=%d words=%d seconds=%.3f",
                              len(text), len(text.split()), transcription_time)
@@ -3034,7 +3639,7 @@ class EnhancedApp:
                         # Show the final corrected text in preview during the COMPLETE window
                         # so the user can see what was actually injected (post-cleanup version)
                         visual_show_preview(text)
-                        show_complete("Complete")
+                        show_complete(paste_success_message(word_count))
 
                     # CRITICAL: Schedule delayed reset to idle via tray auto-reset timer
                     # Don't immediately go to idle - let the tray controller handle the 2s auto-reset
@@ -3075,11 +3680,52 @@ class EnhancedApp:
             )
 
             if text.strip():
+                tuning_meta = {
+                    "source": "runtime_transcription",
+                    "model_tier": getattr(self.cfg, "model_tier", ""),
+                    "code_mode": bool(self.code_mode),
+                    "course_corrected": course_corrected,
+                    "correction_type": correction_type,
+                    "audio_duration": round(audio_duration, 3),
+                    "raw_audio_duration": round(raw_audio_duration, 3),
+                    "compacted_audio_duration": round(compacted_audio_duration, 3),
+                    "compaction_reduction_pct": round(compaction_reduction_pct, 2),
+                    "retry_used": bool(retry_used),
+                    "retry_strategy": retry_strategy,
+                    "transcription_path": final_transcription_path,
+                    "processing_time": round(transcription_time, 3),
+                    "second_pass_mode": second_pass_mode,
+                }
+                recon_log: Optional[Dict[str, Any]] = None
+                recon_text: Optional[str] = None
+                if recon_job is not None:
+                    if recon_outcome is not None:
+                        recon_log = dict(recon_outcome.as_log(), path="sync")
+                        recon_text = recon_outcome.text or None
+                    else:
+                        recon_log = {"status": "pending", "path": "async"}
+                    recon_log["wait_ms"] = round(stage_ms.get("reconstruction_wait", 0.0), 1)
+                uid = self._record_tuning(
+                    raw_transcript or text, text, tuning_meta,
+                    reconstructed_text=recon_text, reconstruction=recon_log,
+                )
+                if self.reconstruction is not None:
+                    self.reconstruction.remember(text)
+                    if recon_job is not None and recon_outcome is None:
+                        self.reconstruction.attach_async(
+                            recon_job,
+                            utterance_id=uid,
+                            pasted_text=text,
+                            replaceable=inject_ok,
+                            on_done=lambda outcome, usable, _uid=uid, _raw=(raw_transcript or text), _pasted=text: (
+                                self._on_async_reconstruction(_uid, _raw, _pasted, outcome, usable)
+                            ),
+                        )
                 self._observe_adaptive_async(
-                    raw_transcript if 'raw_transcript' in locals() else text,
+                    raw_transcript or text,
                     text,
                     {
-                        "source": "runtime_transcription",
+                        "source": "reconstruction" if recon_synchronous else "runtime_transcription",
                         "model_tier": getattr(self.cfg, "model_tier", ""),
                         "code_mode": bool(self.code_mode),
                         "course_corrected": course_corrected,
@@ -3106,6 +3752,8 @@ class EnhancedApp:
                 update_tray_status(self.tray_controller, "idle", False)
                 if VISUAL_INDICATORS_AVAILABLE:
                     hide_status()
+            if not text.strip():
+                self._history_fail("empty", audio_seconds=raw_audio_duration)
 
             self._last_transcription_completed_at = time.time()
             return text
@@ -3114,6 +3762,7 @@ class EnhancedApp:
             print(f"[TRANSCRIPTION] Error: {e}")
             traceback.print_exc()
             self._log.exception("transcription_error: %s", e)
+            self._history_fail("error", detail=f"{type(e).__name__}: {e}", always=True)
 
             # Mark error state
             mark_error(f"Transcription error: {e}")
@@ -3491,6 +4140,29 @@ def main(argv=None):
     _register_hotkey('ctrl+alt+c', toggle_code_mode, "toggle_code_mode")
     _register_hotkey('ctrl+alt+p', toggle_injection, "toggle_injection")
     _register_hotkey('ctrl+alt+enter', toggle_enter, "toggle_enter")
+    # VF-12: re-paste the last transcript. Default Alt+Shift+V -- not Ctrl+Shift (VoiceFlow's
+    # hold-to-talk) and not Ctrl+Alt (Wispr Flow / the toggles above). Empty string disables.
+    _repaste_chord = str(getattr(cfg, "repaste_hotkey", "") or "").strip()
+    if _repaste_chord and app.history is not None:
+        _register_hotkey(
+            _repaste_chord,
+            lambda: threading.Thread(target=app.repaste_last, daemon=True).start(),
+            "repaste_last",
+        )
+
+    def _replace_last_paste_hotkey() -> None:
+        # Never do keyboard work inside the keyboard-hook callback.
+        threading.Thread(target=app.replace_last_paste, daemon=True, name="ReplaceLastPaste").start()
+
+    if app.reconstruction is not None:
+        enable_tracking = getattr(app.injector, "enable_replace_tracking", None)
+        if enable_tracking is not None:
+            runtime_log.info("replace_last_paste_tracking live=%s", bool(enable_tracking()))
+        _register_hotkey(
+            str(getattr(cfg, "replace_last_paste_hotkey", "ctrl+alt+r") or "ctrl+alt+r"),
+            _replace_last_paste_hotkey,
+            "replace_last_paste",
+        )
 
     # Enhanced PTT listener with tail-end buffer
     listener = create_hotkey_backend(
@@ -3500,6 +4172,10 @@ def main(argv=None):
         platform_name=current_platform,
     )
     app.ptt_listener = listener
+    if hasattr(listener, "on_release"):
+        listener.on_release = app.note_release_target
+        if hasattr(listener, "release_sampler"):
+            listener.release_sampler = app.sample_release_target
 
     # Final bootstrap guard: if this process spawned an identical child, yield to child.
     # This avoids dual hotkey listeners in parent+child launch environments.

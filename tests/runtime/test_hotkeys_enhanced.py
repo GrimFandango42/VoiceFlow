@@ -130,11 +130,10 @@ def test_real_chord_still_starts_recording(monkeypatch):
     state["shift"] = True
     listener._on_event(SimpleNamespace(name="left shift", event_type="down"))
 
-    # on_start runs on the listener's callback thread, not inline on the hook thread.
-    deadline = time.time() + 1.5
-    while time.time() < deadline and not starts:
+    # on_start runs on the ordered PTT callback thread (VF-12), not inline.
+    deadline = time.time() + 2.0
+    while not starts and time.time() < deadline:
         time.sleep(0.01)
-
     assert starts == [1]
     assert listener._recording
 

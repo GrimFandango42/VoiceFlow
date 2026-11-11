@@ -125,6 +125,9 @@ def extract_learning_pairs(
     return matches
 
 
+_EXPLICIT_CORRECTION_SOURCES = frozenset({"manual_correction", "correction_feedback", "daily_user_correction"})
+
+
 class AdaptiveLearningManager:
     """Local temporary pattern learner with retention-based purging."""
 
@@ -138,6 +141,7 @@ class AdaptiveLearningManager:
         self.max_rules = int(getattr(cfg, "adaptive_max_rules", 200))
         self.max_phrase_tokens = int(getattr(cfg, "adaptive_max_phrase_tokens", 4))
         self._max_preview_len = int(getattr(cfg, "adaptive_snippet_chars", 200))
+        self._hotword_min_count = int(getattr(cfg, "hotword_promotion_min_count", 3))
 
         base = config_dir()
         self.audit_path = base / "adaptive_audit.jsonl"
@@ -147,6 +151,21 @@ class AdaptiveLearningManager:
             "token_counts": {},
             "updated_at": int(time.time()),
         }
+
+        # VF-12: explicit user corrections also feed a durable hotword store, so a term
+        # fixed repeatedly keeps being recognised after its replacement rule has expired.
+        self._hotword_store = None
+        if bool(getattr(cfg, "learned_hotwords_enabled", True)):
+            try:
+                from voiceflow.ai.hotword_learning import LearnedHotwords
+
+                self._hotword_store = LearnedHotwords(
+                    base / "learned_hotwords.json",
+                    min_count=int(getattr(cfg, "learned_hotword_min_count", 2)),
+                    max_terms=int(getattr(cfg, "learned_hotwords_max", 24)),
+                )
+            except Exception as exc:
+                logger.warning(f"Learned hotword store unavailable: {exc}")
 
         self._load_patterns()
         self._purge_expired()
@@ -159,7 +178,7 @@ class AdaptiveLearningManager:
         output = text
         now = int(time.time())
         replacements = self._patterns.get("replacements", {})
-        active_rules: List[Tuple[int, int, re.Pattern[str], str]] = []
+        active_rules: List[Tuple[int, int, re.Pattern[str], str, bool]] = []
 
         for entry in replacements.values():
             score = float(entry.get("score", entry.get("count", 0)))
@@ -187,10 +206,24 @@ class AdaptiveLearningManager:
 
             pattern = re.compile(rf"\b{re.escape(src)}\b", re.IGNORECASE)
             token_count = max(1, len(_tokenize(src)))
-            active_rules.append((token_count, len(src), pattern, dst))
+            # VF-12: a proper noun the USER corrected ("Ollama", "Madison") must come back
+            # capitalised. _match_case lower-cases a replacement whenever the misheard word
+            # was lowercase, so such corrections never stuck. Auto-detected rules keep the
+            # old casing behaviour.
+            keep_case = False
+            if has_user_correction and dst[:1].isupper():
+                from voiceflow.ai.hotword_learning import is_term_like
 
-        for _, _, pattern, dst in sorted(active_rules, key=lambda item: (item[0], item[1]), reverse=True):
-            output = pattern.sub(lambda m, replacement=dst: self._match_case(m.group(0), replacement), output)
+                keep_case = is_term_like(dst)
+            active_rules.append((token_count, len(src), pattern, dst, keep_case))
+
+        for _, _, pattern, dst, keep_case in sorted(active_rules, key=lambda item: (item[0], item[1]), reverse=True):
+            output = pattern.sub(
+                lambda m, replacement=dst, keep=keep_case: (
+                    replacement if keep and not m.group(0).isupper() else self._match_case(m.group(0), replacement)
+                ),
+                output,
+            )
 
         return output
 
@@ -214,6 +247,17 @@ class AdaptiveLearningManager:
         source_key = self._normalize_source(meta)
         weight = self._observation_weight(source_key)
         learned_pairs = self._extract_replacements(raw, final)
+        if source_key == "reconstruction":
+            # A model's rewrite must not become a global find/replace rule unless it is a
+            # phonetic miss of a term (grammar and word-choice edits stay one-offs).
+            from voiceflow.ai.hotword_promotion import is_hotword_candidate
+
+            learned_pairs = [pair for pair in learned_pairs if is_hotword_candidate(*pair)]
+        if self._hotword_store is not None and source_key in _EXPLICIT_CORRECTION_SOURCES:
+            try:
+                self._hotword_store.observe_pairs(learned_pairs)
+            except Exception as exc:
+                logger.warning(f"Learned hotword update failed: {exc}")
         replacements = self._patterns.setdefault("replacements", {})
 
         for src, dst in learned_pairs:
@@ -278,6 +322,9 @@ class AdaptiveLearningManager:
             "daily_instruction_pass": 1.0,
             "runtime_transcription": 1.0,
             "daily_auto_analysis": 0.5,
+            # VF-17: the reconstruction pass proposes word changes; it is a
+            # suggestion (not a user edit), so it counts like auto-analysis.
+            "reconstruction": 0.5,
         }
         return float(weighted_sources.get(str(source or "").strip().lower(), 1.0))
 
@@ -414,6 +461,17 @@ class AdaptiveLearningManager:
         if source_word[:1].isupper():
             return replacement[:1].upper() + replacement[1:]
         return replacement.lower()
+
+    def promote_hotwords(self, tuning_log: Any = None, *, min_count: int | None = None, write: bool = True) -> Dict[str, Any]:
+        """Promote repeated phonetic misses from the tuning log to the vocabulary (VF-17 item 6)."""
+        from voiceflow.ai.hotword_promotion import promote
+
+        if tuning_log is None:
+            from voiceflow.ai.tuning_log import TuningLog
+
+            tuning_log = TuningLog(self.audit_path.with_name('tuning_log.jsonl'))
+        threshold = int(min_count if min_count is not None else self._hotword_min_count)
+        return promote(tuning_log.load_utterances(), min_count=threshold, write=write).as_dict()
 
     def snapshot(self, *, max_rules: int = 12, max_tokens: int = 20) -> Dict[str, Any]:
         replacements = []

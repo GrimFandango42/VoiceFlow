@@ -284,6 +284,50 @@ def _apply_single_model_migration(cfg: Config) -> bool:
     return True
 
 
+VF19_MIGRATION_VERSION = 2
+
+
+def _apply_vf19_migration(cfg: Config) -> bool:
+    """One-time changes for existing installs (``save_config`` persists every field).
+
+    * Pause compaction off on a working GPU. It cuts silence out of the audio
+      before decoding to save time; at ~60x real time on CUDA that saves about
+      50 ms and costs splices in the audio the model hears.
+    * Reconstruction limited to short dictations. The local model runs on CPU;
+      on anything long it held half the cores for ~50 s and then timed out.
+    * The caption shows what fits its two lines.
+    """
+    try:
+        seen = int(getattr(cfg, "vf19_migration_version", 0) or 0)
+    except Exception:
+        seen = 0
+    if seen >= VF19_MIGRATION_VERSION:
+        return False
+    cfg.vf19_migration_version = VF19_MIGRATION_VERSION
+    # v2: the background reconstruction pass off. Measured on 2026-11-10: it ran
+    # a local 8B model on every CPU core for 13-52 s after each dictation, 16 of
+    # 17 results were unusable, and dictations made meanwhile decoded up to 80x
+    # slower. It stays available as an opt-in.
+    cfg.reconstruction_enabled = False
+    if seen >= 1:
+        return True
+    if int(getattr(cfg, "reconstruction_max_chars", 2000) or 2000) > 400:
+        cfg.reconstruction_max_chars = 400
+    if int(getattr(cfg, "live_caption_max_chars", 150) or 150) > 150:
+        cfg.live_caption_max_chars = 150
+    device = str(getattr(cfg, "device", "") or "").strip().lower()
+    gpu_setup = bool(getattr(cfg, "enable_gpu_acceleration", False)) and device in {"cuda", "auto"}
+    if gpu_setup and bool(getattr(cfg, "enable_pause_compaction", True)):
+        try:
+            from voiceflow.core.asr_engine import _cuda_runtime_ready
+
+            if _cuda_runtime_ready():
+                cfg.enable_pause_compaction = False
+        except Exception:
+            pass
+    return True
+
+
 CLOUD_LEARNING_CONSENT_VERSION = 1
 
 
@@ -353,6 +397,7 @@ def load_config(defaults: Config) -> Config:
 
     changed = _apply_performance_migrations(defaults)
     changed = _apply_single_model_migration(defaults) or changed
+    changed = _apply_vf19_migration(defaults) or changed
     changed = _apply_cloud_learning_consent_migration(defaults) or changed
     try:
         changed = _apply_model_key_migration(defaults) or changed

@@ -1,0 +1,50 @@
+# id|text   (ids: e* = end-of-utterance set, l* = long dictation, g* = general)
+e01|when will that happen
+e02|what time does the meeting start
+e03|can you fix it
+e04|is this the right file
+e05|who is going to review the change
+e06|why did the build fail
+e07|where did you put the config
+e08|how long will it take
+e09|which branch should I use
+e10|do you want me to retry
+e11|I will send it tomorrow
+e12|please review the settings
+e13|that is all for now
+e14|let us ship it today
+e15|what changed since yesterday
+e16|does it work on windows
+e17|can we try again
+e18|I think that was the problem
+e19|should we merge it now
+e20|how many tests are failing
+e21|tell me what happened
+e22|when does the next release go out
+e23|are you sure about that
+e24|that sounds good to me
+e25|what is the status of the plan
+l01|I want you to look at the transcription pipeline and tell me where words get dropped at the end of a sentence
+l02|The first thing to check is how the recording stops when I let go of the hotkey
+l03|After that look at how the audio is split into chunks before it goes to the model
+l04|I am worried that the last chunk gets decoded with less context than the earlier ones
+l05|Please keep the changes small and add a test for every fix you make
+l06|Also make sure the history keeps the last fifty transcripts and that nothing is uploaded anywhere
+l07|When you are done write a short summary of what changed and what I should retest
+l08|One more thing about the overlay it should say how many words were pasted
+l09|And if the window I was dictating into has closed the text must not be lost
+l10|Finally compare the new build against the old one on the same recordings
+g01|The quick brown fox jumps over the lazy dog near the river bank
+g02|Please schedule a meeting with the team for Thursday afternoon at three
+g03|The new model is faster but it uses more memory than the previous one
+g04|I need to renew my passport before the trip in the summer
+g05|She asked whether the report could be finished by the end of the week
+g06|The server returned an error because the request timed out
+g07|We should refactor the module so that each function does one thing
+g08|Ollama runs the model locally and Claude handles the longer reasoning tasks
+g09|Please add a note to the file explaining why the setting is disabled by default
+g10|The marathon training plan has a long run every Sunday morning
+g11|Veeva makes software for the life sciences industry in Madison and beyond
+g12|Gemini and Codex gave different answers so I asked Claude to compare them
+# t* clips are genuine short spoken filler phrases (used by the silence-gate scenarios, not scored as sentences)
+t01|Thank you.

@@ -230,39 +230,15 @@ Output ONLY the cleaned text, nothing else. Do not add quotes or explanations.""
         return None
 
     def _rule_based_correct(self, text: str) -> str:
-        """Apply rule-based corrections"""
-        result = text
+        """Rule-based cleanup, via the conservative VF-12 implementation.
 
-        # Handle self-corrections: keep text after correction phrase
-        for pattern in self._correction_re:
-            match = pattern.search(result)
-            if match:
-                # Keep text after the correction phrase
-                after = result[match.end():].strip()
-                if after:
-                    # Also check if there's meaningful content before
-                    before = result[:match.start()].strip()
-                    # If the correction is in the middle, keep what comes after
-                    if after and len(after) > 3:
-                        result = after
-                        break
+        The previous version kept only the text AFTER any "I mean"/"actually,"/"no wait",
+        deleting everything before it, deleted "you know"/"I guess" wherever they stood and
+        collapsed every repeated word ("had had", "that that"). Real words were lost.
+        """
+        from voiceflow.core.dictation_format import clean_dictation
 
-        # Remove filler words
-        for pattern in self._filler_re:
-            result = pattern.sub(" ", result)
-
-        # Fix word repetitions
-        for pattern in self._repetition_re:
-            result = pattern.sub(r"\1", result)
-
-        # Clean up extra whitespace
-        result = re.sub(r'\s+', ' ', result).strip()
-
-        # Capitalize first letter
-        if result:
-            result = result[0].upper() + result[1:]
-
-        return result
+        return clean_dictation(text)
 
 
 # Global instance for easy access
