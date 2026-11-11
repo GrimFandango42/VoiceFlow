@@ -276,6 +276,10 @@ function Assert-BundleBehaves {
     $proc = $null
     try {
         $env:LOCALAPPDATA = $sandbox
+        # A fresh profile opens the first-run setup wizard, which blocks before
+        # logging starts; the smoke test then saw "no log" from a healthy bundle.
+        $savedSkipSetup = $env:VOICEFLOW_SKIP_SETUP_UI
+        $env:VOICEFLOW_SKIP_SETUP_UI = '1'
         $proc = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
 
         $deadline = (Get-Date).AddSeconds(90)
@@ -324,6 +328,7 @@ function Assert-BundleBehaves {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
         }
         $env:LOCALAPPDATA = $savedLocal
+        $env:VOICEFLOW_SKIP_SETUP_UI = $savedSkipSetup
         Remove-Item $sandbox -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

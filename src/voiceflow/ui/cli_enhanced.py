@@ -70,6 +70,7 @@ from voiceflow.core.silence_artifacts import classify as classify_silence_artifa
 from voiceflow.core.live_caption import LiveCaptionSession
 from voiceflow.core.textproc import (
     apply_code_mode,
+    auto_paragraphs,
     apply_second_pass_cleanup,
     format_transcript_for_destination,
     format_transcript_preserving_breaks,
@@ -1844,6 +1845,57 @@ class EnhancedApp:
         context["destination_editor_chars"] = int(getattr(self.cfg, "destination_editor_chars", 94))
         return context
 
+    def _auto_paragraphs(self, text: str, destination_profile: str) -> str:
+        """Paragraph a long one-block dictation where line breaks are safe to deliver."""
+        try:
+            if not bool(getattr(self.cfg, "auto_paragraphs_enabled", True)) or "\n" in (text or ""):
+                return text
+            if destination_profile == "terminal" or bool(self.code_mode):
+                return text  # a multi-line paste into a shell can run commands
+            if bool(getattr(self.cfg, "press_enter_after_paste", False)):
+                return text
+            if not self._keep_chat_newlines(text):
+                return text  # typed injection would send each break as Enter
+            shaped = auto_paragraphs(text, min_words=int(getattr(self.cfg, "auto_paragraph_min_words", 60)))
+            if shaped != text:
+                self._log.info("auto_paragraphs paragraphs=%d words=%d", shaped.count("\n\n") + 1, len(text.split()))
+            return shaped
+        except Exception as exc:
+            self._log.warning("auto_paragraphs_failed error=%s", exc)
+            return text
+
+    def _keep_dictation_audio(self, audio_data: np.ndarray) -> None:
+        """Save this dictation's audio (16-bit WAV, local only), keeping the newest N.
+
+        Without the audio a wrong word cannot be reproduced, so no change to the
+        model or its settings can be checked against what was actually said.
+        """
+        keep = int(getattr(self.cfg, "keep_audio_last_n", 0) or 0)
+        if keep <= 0 or audio_data is None or len(audio_data) < int(self.cfg.sample_rate):
+            return
+        samples = np.asarray(audio_data, dtype=np.float32).copy()
+        rate = int(self.cfg.sample_rate)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+
+        def _write() -> None:
+            try:
+                import wave
+
+                folder = config_dir() / "audio"
+                folder.mkdir(parents=True, exist_ok=True)
+                pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2")
+                with wave.open(str(folder / f"dictation-{stamp}.wav"), "wb") as out:
+                    out.setnchannels(1)
+                    out.setsampwidth(2)
+                    out.setframerate(rate)
+                    out.writeframes(pcm.tobytes())
+                for old in sorted(folder.glob("dictation-*.wav"))[:-keep]:
+                    old.unlink(missing_ok=True)
+            except Exception as exc:
+                self._log.warning("keep_audio_failed error=%s", exc)
+
+        threading.Thread(target=_write, name="KeepAudio", daemon=True).start()
+
     def _keep_chat_newlines(self, text: str) -> bool:
         """May explicit line breaks reach a chat window?
 
@@ -2816,6 +2868,7 @@ class EnhancedApp:
 
     def _perform_transcription(self, audio_data: np.ndarray) -> str:
         """Perform actual transcription with enhanced error handling and timeout protection"""
+        self._keep_dictation_audio(audio_data)
         # Ensure logger is available (fix for scoping issue)
         logger = logging.getLogger(__name__)
         stage_ms: Dict[str, float] = {}
@@ -3470,6 +3523,7 @@ class EnhancedApp:
                 perf_snapshot["status"],
             )
             final_transcription_path = retry_strategy if retry_used else asr_path
+            text = self._auto_paragraphs(text, destination_profile)
             if self.visual_indicators_enabled and text.strip():
                 visual_record_transcription_event(
                     text,

@@ -626,6 +626,62 @@ def format_transcript_for_destination(
     return _wrap_transcript_blocks(formatted, wrap_width, profile)
 
 
+# Sentence openers that mark a change of subject in spoken prompts.
+_TOPIC_SHIFT = re.compile(
+    r"^(?:so yeah|so,|okay|ok\b|alright|all right|also|another thing|the other thing|one more thing|"
+    r"next|now,|finally|lastly|first(?:ly)?,|second(?:ly)?,|third(?:ly)?,|separately|additionally|"
+    r"in addition|anyway|remember|on another note|beyond that|as for|and then|the (?:second|third|last|next) "
+    r"(?:thing|piece|part|item|one)|moving on|going forward|to summarize|in summary)",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[\"'(\[]?[A-Z0-9])")
+
+
+def auto_paragraphs(
+    text: str,
+    *,
+    min_words: int = 60,
+    max_sentences: int = 5,
+    max_words: int = 90,
+) -> str:
+    """Break a long single-block dictation into paragraphs. Words are never changed.
+
+    A minute of dictation used to arrive as one block. Breaks go where the
+    speaker changed subject (a sentence opening with "So yeah", "Also", "The
+    other thing", ...) once the paragraph has at least two sentences, and
+    otherwise when it reaches ``max_sentences`` or ``max_words``. Text that is
+    short, or already has line breaks (spoken "new paragraph", a long pause),
+    is returned untouched. Pure string work: tens of microseconds.
+    """
+    source = (text or "").strip()
+    if not source or "\n" in source:
+        return text
+    if len(source.split()) < max(1, int(min_words)):
+        return text
+    sentences = [part.strip() for part in _SENTENCE_SPLIT.split(source) if part.strip()]
+    if len(sentences) < 4:
+        return text
+
+    paragraphs: list[list[str]] = [[]]
+    for sentence in sentences:
+        current = paragraphs[-1]
+        words = sum(len(item.split()) for item in current)
+        shift = bool(_TOPIC_SHIFT.match(sentence)) and len(current) >= 2
+        full = len(current) >= max_sentences or (words >= max_words and len(current) >= 2)
+        if current and (shift or full):
+            paragraphs.append([sentence])
+        else:
+            current.append(sentence)
+
+    # A sign-off or stray fragment should not stand alone as a paragraph.
+    if len(paragraphs) > 1 and sum(len(item.split()) for item in paragraphs[-1]) < 6:
+        tail = paragraphs.pop()
+        paragraphs[-1].extend(tail)
+    if len(paragraphs) < 2:
+        return text
+    return "\n\n".join(" ".join(items) for items in paragraphs)
+
+
 def format_transcript_preserving_breaks(
     text: str,
     destination: Optional[Mapping[str, Any]] = None,

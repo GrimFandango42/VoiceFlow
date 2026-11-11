@@ -400,6 +400,13 @@ class Config:
     # configs saved while the fast path defaulted to on get it switched off once
     # on GPU setups, after which the user's own choice is never overridden.
     single_model_migration_version: int = 0
+    vf19_migration_version: int = 0
+    # Long single-block dictations are split into paragraphs at subject changes.
+    auto_paragraphs_enabled: bool = True
+    auto_paragraph_min_words: int = 60
+    # Keep the audio of the most recent dictations (local only) so a bad
+    # transcription can be replayed against other settings. 0 keeps none.
+    keep_audio_last_n: int = 30
     adaptive_ai_analysis_max_items: int = 8  # Max samples sent to the cloud model when enabled
     adaptive_ai_analysis_max_suggestions: int = 8  # Bound AI-proposed phrase/protected-term suggestions
     longrun_housekeeping_enabled: bool = True  # periodic long-run health telemetry and cleanup hooks
