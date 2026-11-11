@@ -627,6 +627,33 @@ class EnhancedApp:
                 print(f"[AI] Adaptive learning unavailable: {e}")
                 self.adaptive_learning = None
 
+        # VF-17: full-fidelity, local-only tuning corpus (raw -> final -> reconstructed).
+        self.tuning_log = None
+        self._recent_utterance_ids: Deque[Tuple[str, str]] = deque(maxlen=50)  # (pasted text, tuning id)
+        try:
+            from voiceflow.ai.tuning_log import TuningLog
+
+            self.tuning_log = TuningLog.from_config(cfg)
+        except Exception as e:
+            print(f"[AI] Tuning log unavailable: {e}")
+            self.tuning_log = None
+
+        # VF-17: reconstruction pass (form repair; guarded; sync-in-budget or async).
+        self.reconstruction = None
+        if bool(getattr(cfg, "reconstruction_enabled", True)) and str(getattr(cfg, "reconstruction_mode", "auto")) != "off":
+            try:
+                from voiceflow.ai.reconstruction import Reconstructor
+                from voiceflow.ai.reconstruction_runtime import ReconstructionCoordinator
+                from voiceflow.core import vocab as _vocab
+
+                self.reconstruction = ReconstructionCoordinator(
+                    cfg,
+                    Reconstructor(cfg, vocab_provider=lambda: _vocab.known_terms(60)),
+                )
+            except Exception as e:
+                print(f"[AI] Reconstruction pass unavailable: {e}")
+                self.reconstruction = None
+
         # Long conversation tracking
         self._session_start_time = time.time()
         self._total_transcription_time = 0.0
@@ -1504,6 +1531,20 @@ class EnhancedApp:
                 else:
                     i += 1
             speech = filtered
+        # VF-17: the blip filter above exists to drop clicks in the MIDDLE of a
+        # pause. At the end of the clip it deletes real speech: a short, soft,
+        # unstressed last word ("... end of the") that follows a pause is both
+        # quieter than ``dyn_thr`` and shorter than ``min_speech_frames``, so it
+        # was classified as a blip and cut. Re-admit anything above a relaxed
+        # threshold in the final ``tail_protect_ms`` (blip filter bypassed).
+        tail_protect_ms = max(
+            0,
+            int(options.get("tail_protect_ms", getattr(self.cfg, "pause_compaction_tail_protect_ms", 1500))),
+        )
+        tail_frames = min(len(speech), int(np.ceil(tail_protect_ms / float(frame_ms)))) if tail_protect_ms else 0
+        if tail_frames:
+            relaxed_thr = max(base_thr * 1.1, noise_floor * 1.5)
+            speech[-tail_frames:] |= rms[-tail_frames:] >= relaxed_thr
         if not np.any(speech):
             return audio_data
 
@@ -1525,9 +1566,11 @@ class EnhancedApp:
         if (len(compacted) / len(audio_data)) < min_keep_ratio:
             # Over-compaction guardrail: preserve more context for recognition quality.
             return audio_data
-        # Keep any tail samples if original ends with speech-like energy.
+        # Keep any tail samples if original ends with speech-like energy. With
+        # tail protection on, the sub-frame remainder is always kept: it is the
+        # last <30 ms of what the user said, and costs nothing.
         tail = audio_data[usable:]
-        if tail.size > 0 and np.sqrt(np.mean(tail * tail)) >= dyn_thr:
+        if tail.size > 0 and (tail_frames or np.sqrt(np.mean(tail * tail)) >= dyn_thr):
             compacted = np.concatenate((compacted, tail))
         return compacted
 
@@ -2115,6 +2158,123 @@ class EnhancedApp:
 
         self.postprocess_executor.submit(_task)
 
+    def _record_tuning(
+        self,
+        raw_text: str,
+        final_text: str,
+        metadata: Dict[str, Any],
+        reconstructed_text: Optional[str] = None,
+        reconstruction: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Append one utterance to the local tuning corpus (off the hot path)."""
+        if not self.tuning_log or not getattr(self.tuning_log, "enabled", False):
+            return ""
+        import uuid
+
+        uid = uuid.uuid4().hex[:12]
+        self._recent_utterance_ids.append((final_text, uid))
+
+        def _task() -> None:
+            try:
+                self.tuning_log.append_utterance(
+                    raw_text=raw_text,
+                    final_text=final_text,
+                    reconstructed_text=reconstructed_text,
+                    reconstruction=reconstruction,
+                    metadata=metadata,
+                    utterance_id=uid,
+                )
+            except Exception as exc:
+                logger.debug(f"tuning log write failed: {exc}")
+
+        self.postprocess_executor.submit(_task)
+        return uid
+
+    def _on_async_reconstruction(self, uid: str, raw: str, pasted: str, outcome: Any, usable: bool) -> None:
+        """Runs on the reconstruction worker when a background attempt finishes."""
+        try:
+            if self.tuning_log and uid:
+                self.tuning_log.append_reconstruction(
+                    uid,
+                    reconstructed_text=(outcome.text or None),
+                    reconstruction=dict(outcome.as_log(), path="async", usable=bool(usable)),
+                )
+            self._log.info(
+                "reconstruction_async status=%s reason=%s latency_ms=%.0f usable=%s",
+                outcome.status, outcome.reason, outcome.latency_ms, usable,
+            )
+            if outcome.accepted:
+                # Feed the learner the model's repair (low weight: it is a suggestion, not a user edit).
+                self._observe_adaptive_async(raw, outcome.text, {"source": "reconstruction", "async": True})
+                self._accepted_reconstructions = getattr(self, "_accepted_reconstructions", 0) + 1
+                if (
+                    self.adaptive_learning
+                    and self.tuning_log
+                    and bool(getattr(self.cfg, "hotword_promotion_enabled", True))
+                    and self._accepted_reconstructions % 10 == 0
+                ):
+                    report = self.adaptive_learning.promote_hotwords(self.tuning_log)
+                    self._log.info(
+                        "hotword_promotion promoted=%s candidates=%s",
+                        report.get("promoted_count"), report.get("hotword_candidates"),
+                    )
+            if usable:
+                hotkey = str(getattr(self.cfg, "replace_last_paste_hotkey", "ctrl+alt+r"))
+                print(f"[AI] Better version ready - press {hotkey} to swap it in")
+                if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+                    show_complete(f"Better version ready - {hotkey}")
+        except Exception as exc:
+            self._log.debug("reconstruction_async_handler_failed error=%s", exc)
+
+    def has_pending_improvement(self) -> bool:
+        if self.reconstruction is None:
+            return False
+        return self.reconstruction.has_pending(float(getattr(self.cfg, "replace_last_paste_max_age_s", 120.0)))
+
+    def replace_last_paste(self) -> str:
+        """Swap the last paste for its reconstructed version (hotkey / tray entry)."""
+        if self.reconstruction is None:
+            return "unavailable"
+        max_age = float(getattr(self.cfg, "replace_last_paste_max_age_s", 120.0))
+        pending = self.reconstruction.take_pending(max_age)
+        if pending is None:
+            print("[AI] No improved version to swap in")
+            return "none"
+        replace = getattr(self.injector, "replace_last_paste", None)
+        if replace is None:
+            copied = bool(self.injector.copy_text_to_clipboard(pending.improved_text))
+            return "clipboard:unsupported" if copied else "failed:unsupported"
+        listener = getattr(self, "ptt_listener", None)
+        if listener is not None:
+            try:
+                listener.suppress_event_side_effects(min(3.0, 0.6 + len(pending.pasted_text) / 200.0))
+            except Exception:
+                pass
+        result = str(replace(pending.pasted_text, pending.improved_text, max_age_s=max_age))
+        self._log.info("replace_last_paste result=%s chars=%d", result, len(pending.improved_text))
+        if result == "replaced":
+            self.reconstruction.clear_pending()
+            self.reconstruction.remember(pending.improved_text)
+        message = {
+            "replaced": "Replaced with improved version",
+        }.get(result, "Improved version copied - paste it manually (" + result.split(":", 1)[-1] + ")")
+        print(f"[AI] {message}")
+        if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+            try:
+                show_complete(message)
+            except Exception:
+                pass
+        if self.tuning_log and pending.utterance_id:
+            try:
+                self.tuning_log.append_reconstruction(
+                    pending.utterance_id,
+                    reconstructed_text=pending.improved_text,
+                    reconstruction={"status": "accepted", "applied": result, "path": "async"},
+                )
+            except Exception:
+                pass
+        return result
+
     def handle_manual_correction_feedback(
         self,
         original_text: str,
@@ -2149,6 +2309,15 @@ class EnhancedApp:
                 )
             except Exception as exc:
                 self._log.warning("correction_persist_failed error=%s", exc)
+
+        if self.tuning_log:
+            for pasted, uid in reversed(self._recent_utterance_ids):
+                if pasted.strip() == raw:
+                    try:
+                        self.tuning_log.append_user_edit(uid, corrected)
+                    except Exception as exc:
+                        self._log.debug("tuning_user_edit_failed error=%s", exc)
+                    break
 
         if not self.adaptive_learning:
             return
@@ -2333,6 +2502,7 @@ class EnhancedApp:
         second_pass_mode = "none"
         second_pass_chars_delta = 0
         idle_resume_force_primary = False
+        raw_transcript = ""  # bound on every path (was guarded with locals())
 
         def _capture_model_metadata(engine: Any) -> None:
             nonlocal asr_model_id, asr_model_name, asr_device, asr_compute
@@ -2872,6 +3042,35 @@ class EnhancedApp:
                 )
             stage_ms["postprocess"] = (time.perf_counter() - postprocess_start) * 1000.0
 
+            # VF-17 reconstruction pass. Runs on the finished text; its output is
+            # only used if every guard passes, so the worst case is today's text.
+            # In `auto` mode this is asynchronous unless the model has proven it
+            # fits the budget, so the paste is not delayed (see
+            # voiceflow.ai.reconstruction_runtime).
+            recon_job = None
+            recon_outcome = None
+            recon_synchronous = False
+            if text.strip() and self.reconstruction is not None and not effective_code_mode:
+                try:
+                    stage_start = time.perf_counter()
+                    recon_job = self.reconstruction.begin(
+                        text,
+                        raw_transcript or text,
+                        code_mode=effective_code_mode,
+                        destination_profile=destination_profile,
+                    )
+                    if recon_job is not None:
+                        wait_s = self.reconstruction.sync_wait_s()
+                        recon_outcome = recon_job.wait(wait_s) if wait_s > 0 else None
+                        if recon_outcome is not None and recon_outcome.accepted:
+                            text = recon_outcome.text
+                            recon_synchronous = True
+                    stage_ms["reconstruction_wait"] = (time.perf_counter() - stage_start) * 1000.0
+                    self.reconstruction.added_latency.record(stage_ms["reconstruction_wait"])
+                except Exception as recon_exc:
+                    self._log.warning("reconstruction_stage_failed error=%s", recon_exc)
+                    recon_job = None
+
             # Performance tracking
             transcription_time = time.perf_counter() - start_time
             self._total_transcription_time += transcription_time
@@ -2931,6 +3130,7 @@ class EnhancedApp:
 
             # Inject text
             inject_start = time.perf_counter()
+            inject_ok = False
             if text.strip():
                 # Mark as injecting
                 mark_injecting()
@@ -3023,11 +3223,52 @@ class EnhancedApp:
             )
 
             if text.strip():
+                tuning_meta = {
+                    "source": "runtime_transcription",
+                    "model_tier": getattr(self.cfg, "model_tier", ""),
+                    "code_mode": bool(self.code_mode),
+                    "course_corrected": course_corrected,
+                    "correction_type": correction_type,
+                    "audio_duration": round(audio_duration, 3),
+                    "raw_audio_duration": round(raw_audio_duration, 3),
+                    "compacted_audio_duration": round(compacted_audio_duration, 3),
+                    "compaction_reduction_pct": round(compaction_reduction_pct, 2),
+                    "retry_used": bool(retry_used),
+                    "retry_strategy": retry_strategy,
+                    "transcription_path": final_transcription_path,
+                    "processing_time": round(transcription_time, 3),
+                    "second_pass_mode": second_pass_mode,
+                }
+                recon_log: Optional[Dict[str, Any]] = None
+                recon_text: Optional[str] = None
+                if recon_job is not None:
+                    if recon_outcome is not None:
+                        recon_log = dict(recon_outcome.as_log(), path="sync")
+                        recon_text = recon_outcome.text or None
+                    else:
+                        recon_log = {"status": "pending", "path": "async"}
+                    recon_log["wait_ms"] = round(stage_ms.get("reconstruction_wait", 0.0), 1)
+                uid = self._record_tuning(
+                    raw_transcript or text, text, tuning_meta,
+                    reconstructed_text=recon_text, reconstruction=recon_log,
+                )
+                if self.reconstruction is not None:
+                    self.reconstruction.remember(text)
+                    if recon_job is not None and recon_outcome is None:
+                        self.reconstruction.attach_async(
+                            recon_job,
+                            utterance_id=uid,
+                            pasted_text=text,
+                            replaceable=inject_ok,
+                            on_done=lambda outcome, usable, _uid=uid, _raw=(raw_transcript or text), _pasted=text: (
+                                self._on_async_reconstruction(_uid, _raw, _pasted, outcome, usable)
+                            ),
+                        )
                 self._observe_adaptive_async(
-                    raw_transcript if 'raw_transcript' in locals() else text,
+                    raw_transcript or text,
                     text,
                     {
-                        "source": "runtime_transcription",
+                        "source": "reconstruction" if recon_synchronous else "runtime_transcription",
                         "model_tier": getattr(self.cfg, "model_tier", ""),
                         "code_mode": bool(self.code_mode),
                         "course_corrected": course_corrected,
@@ -3431,6 +3672,20 @@ def main(argv=None):
     _register_hotkey('ctrl+alt+c', toggle_code_mode, "toggle_code_mode")
     _register_hotkey('ctrl+alt+p', toggle_injection, "toggle_injection")
     _register_hotkey('ctrl+alt+enter', toggle_enter, "toggle_enter")
+
+    def _replace_last_paste_hotkey() -> None:
+        # Never do keyboard work inside the keyboard-hook callback.
+        threading.Thread(target=app.replace_last_paste, daemon=True, name="ReplaceLastPaste").start()
+
+    if app.reconstruction is not None:
+        enable_tracking = getattr(app.injector, "enable_replace_tracking", None)
+        if enable_tracking is not None:
+            runtime_log.info("replace_last_paste_tracking live=%s", bool(enable_tracking()))
+        _register_hotkey(
+            str(getattr(cfg, "replace_last_paste_hotkey", "ctrl+alt+r") or "ctrl+alt+r"),
+            _replace_last_paste_hotkey,
+            "replace_last_paste",
+        )
 
     # Enhanced PTT listener with tail-end buffer
     listener = create_hotkey_backend(

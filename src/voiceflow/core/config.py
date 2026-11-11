@@ -62,6 +62,9 @@ class Config:
     pause_compaction_frame_ms: int = 30  # frame size for pause detection
     pause_compaction_keep_silence_ms: int = 80  # tighter silence retention for better medium/long latency
     pause_compaction_max_reduction_pct: float = 82.0  # allow stronger dead-air removal in long conversations
+    pause_compaction_tail_protect_ms: int = 1500  # VF-17: never blip-filter/cut soft speech in the last N ms (0 = legacy behaviour)
+    asr_tail_pad_ms: int = 0  # VF-17: trailing silence appended before ASR (0 = off; see docs/FAITHFUL_DICTATION.md for measurements)
+    asr_tail_lift_db: float = 9.0  # VF-17: max gain (dB) applied to a clearly-spoken but faded trailing word before ASR (0 = off)
     pause_compaction_retry_on_short_output: bool = True  # Retry raw audio when compaction result looks clipped
     pause_compaction_retry_min_reduction_pct: float = 38.0  # Trigger raw retry only after heavy compaction
     pause_compaction_retry_max_words: int = 8  # Treat very short result as likely clipped output
@@ -294,6 +297,26 @@ class Config:
     adaptive_max_rules: int = 200  # Cap learned replacements to bound memory
     adaptive_max_phrase_tokens: int = 4  # Allow short phrase learning, not just single-token swaps
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
+
+    # VF-17 reconstruction pass (form repair, never meaning change). Local Ollama, CPU only.
+    reconstruction_enabled: bool = True
+    reconstruction_mode: str = "auto"  # auto | sync | async | off  (auto stays async unless p95 fits the budget)
+    reconstruction_model: str = ""  # "" = pick a small instruct model from what Ollama has installed
+    reconstruction_budget_ms: int = 800  # max the paste may wait for the reconstruction (sync path)
+    reconstruction_timeout_s: float = 45.0  # hard timeout for the model call (cold model load can be ~40 s)
+    reconstruction_min_words: int = 4
+    reconstruction_max_chars: int = 2000
+    reconstruction_num_threads: int = 0  # 0 = half the logical cores (leaves CPU for the foreground app and ASR)
+    replace_last_paste_hotkey: str = "ctrl+alt+r"
+    replace_last_paste_max_age_s: float = 120.0
+    hotword_promotion_enabled: bool = True
+    hotword_promotion_min_count: int = 3
+
+    # VF-17 full-fidelity tuning log: local-only, never uploaded (VF-03).
+    tuning_log_enabled: bool = True
+    tuning_log_max_chars: int = 8000
+    tuning_log_max_entries: int = 2000
+    tuning_log_max_age_days: int = 30
     # OFF by default: when on, the nightly learning batch sends up to
     # adaptive_ai_analysis_max_items verbatim transcripts (plus correction pairs)
     # to a CLOUD model — Anthropic via the Claude CLI, or Google Gemini as

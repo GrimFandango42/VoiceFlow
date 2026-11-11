@@ -506,6 +506,68 @@ def resolve_tier_model_key(tier: ModelTier, device: str = "cpu") -> str:
     return TIER_MODELS.get(tier, "tiny.en")
 
 
+def lift_quiet_tail(
+    audio: np.ndarray,
+    sample_rate: int = 16000,
+    *,
+    window_ms: int = 1800,
+    max_gain_db: float = 9.0,
+    frame_ms: int = 20,
+) -> np.ndarray:
+    """Level a trailing word the speaker let fade (VF-17 item 1).
+
+    People drop their voice on the last word or two ("...by the end of the"), and
+    a decoder that heard the sentence at one level then treats the quiet tail as
+    noise and either drops it or invents a continuation ("of the video"). Within
+    the last ``window_ms`` only, frames that are clearly speech (well above this
+    clip's own noise floor) but much quieter than the clip's speech level are
+    lifted toward that level, by at most ``max_gain_db``. Gain is smoothed so it
+    cannot click and a lifted frame never clips. Anything at or near the noise floor is left alone, so a noisy
+    clip is never amplified into a louder noisy clip, and every sample outside the lifted frames is bit-identical to
+    the input. Returns ``audio`` itself
+    when there is nothing to do (``max_gain_db <= 0`` included).
+    """
+    if max_gain_db <= 0 or audio is None or audio.size == 0:
+        return audio
+    frame = max(1, int(sample_rate * frame_ms / 1000.0))
+    n_frames = audio.size // frame
+    win_frames = min(n_frames, max(1, int(window_ms / frame_ms)))
+    if n_frames < 8 or win_frames < 2:
+        return audio
+    body = audio[: n_frames * frame].astype(np.float32, copy=False).reshape(n_frames, frame)
+    rms = np.sqrt(np.mean(body * body, axis=1) + 1e-12)
+    floor = max(float(np.percentile(rms, 10)), 1e-4)
+    speech_gate = max(floor * 4.0, 1.5e-3)  # >= ~12 dB over the noise floor
+    speech = rms > speech_gate
+    if int(speech.sum()) < 6:
+        return audio
+    reference = float(np.percentile(rms[speech], 70))
+    tail = np.arange(n_frames) >= n_frames - win_frames
+    loud = np.where(speech & (rms >= reference * 0.5))[0]
+    after_last_loud = np.arange(n_frames) > (int(loud[-1]) if loud.size else -1)  # only what trails the last full-level speech
+    quiet = tail & speech & after_last_loud & (rms < reference * 0.5)  # more than ~6 dB under the clip's speech level
+    if not quiet.any():
+        return audio
+    max_gain = 10.0 ** (max_gain_db / 20.0)
+    peaks = np.max(np.abs(body), axis=1)
+    headroom = np.maximum(1.0, 0.98 / np.maximum(peaks, 1e-6))  # a lifted frame may not clip
+    gain = np.ones(n_frames, dtype=np.float32)
+    gain[quiet] = np.minimum(np.minimum(max_gain, (reference * 0.8) / rms[quiet]), headroom[quiet])
+    # Smooth (about 140 ms) so the lift ramps in and out, and never let it drop below unity.
+    k = 7
+    padded = np.pad(gain, (k // 2, k // 2), mode="edge")
+    gain = np.maximum(1.0, np.convolve(padded, np.ones(k, dtype=np.float32) / k, mode="valid"))
+    per_sample = np.repeat(gain, frame)
+    out = audio.astype(np.float32, copy=True)
+    out[: per_sample.size] *= per_sample
+    # Smoothing can leak a little gain onto a neighbouring loud frame: clip only where gain was applied, and never
+    # rescale the clip as a whole (a 2% global change was enough to flip a decode in the evaluator).
+    lifted = np.zeros(out.size, dtype=bool)
+    lifted[: per_sample.size] = per_sample > 1.0
+    out[lifted] = np.clip(out[lifted], -0.98, 0.98)
+    return out.astype(audio.dtype, copy=False)
+
+
 @dataclass
 class TranscriptionSegment:
     """Rich transcription segment with metadata"""
@@ -1389,8 +1451,27 @@ class ASREngine:
             self.last_no_speech_prob = 1.0
             return TranscriptionResult(text="", duration=audio_duration, processing_time=0.0)
 
+        # Optional trailing-silence pad (VF-17). Off by default: measured on
+        # TTS speech it did not recover any dropped final word and on one clip
+        # it made the decoder invent a continuation ("... next week or so").
+        # Kept as a knob so the eval harness can show pad=0 vs pad=N.
+        backend_audio = audio
+        lift_db = float(getattr(self, "tail_lift_db", 0.0) or 0.0)
+        if lift_db > 0:
+            try:
+                backend_audio = lift_quiet_tail(audio, self.sample_rate, max_gain_db=lift_db)
+            except Exception as exc:  # a leveler must never be able to break dictation
+                logger.debug("tail lift skipped: %s", exc)
+                backend_audio = audio
+        pad_ms = int(getattr(self, "tail_pad_ms", 0) or 0)
+        if pad_ms > 0:
+            pad = np.zeros(int(self.sample_rate * pad_ms / 1000.0), dtype=audio.dtype)
+            backend_audio = np.concatenate([backend_audio, pad])
+
         # Transcribe
-        result = self._backend.transcribe(audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
+        result = self._backend.transcribe(backend_audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
+        if backend_audio is not audio and result.duration:
+            result.duration = float(audio_duration)
 
         # Expose the decoder's silence evidence to callers that only receive a
         # string. Set on every path, including the early returns above, so a
@@ -1597,6 +1678,8 @@ class ModernWhisperASR(ASREngine):
                 condition_on_previous_text=condition_on_previous_text,
             )
         self.cfg = cfg
+        self.tail_pad_ms = max(0, int(getattr(cfg, "asr_tail_pad_ms", 0) or 0))
+        self.tail_lift_db = max(0.0, float(getattr(cfg, "asr_tail_lift_db", 0.0) or 0.0))
 
         # Session tracking for legacy compatibility
         self.session_start_time = time.time()
