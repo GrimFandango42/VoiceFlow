@@ -112,6 +112,7 @@ def test_stale_modifier_cannot_start_recording_on_single_key_tap(monkeypatch):
     state["ctrl"] = True
     listener._on_event(SimpleNamespace(name="left ctrl", event_type="down"))
 
+    time.sleep(0.1)  # on_start is dispatched asynchronously; give it the chance to (wrongly) fire
     assert not starts, "Ctrl-only tap started a recording from stale Shift state"
     assert not listener._recording
     # The bogus Shift should have been scrubbed on the way out.

@@ -252,6 +252,12 @@ def _apply_single_model_migration(cfg: Config) -> bool:
     CPU setups keep it: there it saves about a second per clip. The version
     marker makes this run once, so a user who later turns the fast path back on
     keeps it.
+
+    On a GPU-configured install the marker is recorded only once the migration
+    has really happened (CUDA confirmed and the fast path off). A launch where
+    CUDA is unavailable (CPU fallback, forced CPU, runtime check failure) leaves
+    the marker unset, so the next launch with a working GPU still migrates
+    instead of keeping tiny.en loaded forever.
     """
     try:
         seen = int(getattr(cfg, "single_model_migration_version", 0) or 0)
@@ -259,19 +265,22 @@ def _apply_single_model_migration(cfg: Config) -> bool:
         seen = 0
     if seen >= SINGLE_MODEL_MIGRATION_VERSION:
         return False
-    cfg.single_model_migration_version = SINGLE_MODEL_MIGRATION_VERSION
     device = str(getattr(cfg, "device", "") or "").strip().lower()
     gpu_setup = bool(getattr(cfg, "enable_gpu_acceleration", False)) and device in {"cuda", "auto"}
     if gpu_setup and bool(getattr(cfg, "latency_boost_enabled", False)):
         # Only where CUDA actually works here; a GPU-configured machine that
-        # runs on CPU keeps the fast path that makes short clips tolerable.
+        # runs on CPU keeps the fast path that makes short clips tolerable,
+        # and is looked at again on the next launch.
         try:
             from voiceflow.core.asr_engine import _cuda_runtime_ready
 
-            if _cuda_runtime_ready():
-                cfg.latency_boost_enabled = False
+            cuda_ok = bool(_cuda_runtime_ready())
         except Exception:
-            pass
+            cuda_ok = False
+        if not cuda_ok:
+            return False
+        cfg.latency_boost_enabled = False
+    cfg.single_model_migration_version = SINGLE_MODEL_MIGRATION_VERSION
     return True
 
 

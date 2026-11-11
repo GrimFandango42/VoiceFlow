@@ -28,7 +28,7 @@ import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, List, Optional, Sequence
+from typing import Any, Callable, Deque, List, Optional
 
 from voiceflow.ai.reconstruction import ReconstructionOutcome, Reconstructor, percentile
 
