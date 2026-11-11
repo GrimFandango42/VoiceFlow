@@ -11,6 +11,7 @@ import math
 import os
 import random
 import re
+import sys
 import threading
 import time
 import tkinter as tk
@@ -95,6 +96,7 @@ _HISTORY_FILTER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("live", "Live"),
     ("corrections", "Corrections"),
     ("retries", "Retries"),
+    ("failed", "Failed"),
 )
 _CORRECTION_FEEDBACK_HANDLER: Optional[Callable[[str, str, Dict[str, Any]], None]] = None
 
@@ -199,6 +201,23 @@ def _emit_correction_feedback_learning(original_text: str, corrected_text: str, 
         handler(str(original_text or ""), str(corrected_text or ""), dict(metadata or {}))
     except Exception as exc:
         logger.debug("Correction feedback learning dispatch failed: %s", exc)
+
+def caption_tail(text: str, max_chars: int) -> str:
+    """The end of ``text`` that fits in ``max_chars``, starting on a whole word.
+
+    The live caption is the whole dictation so far; the overlay shows where the
+    speaker is now. A leading ellipsis marks that earlier text exists.
+    """
+    text = " ".join(str(text or "").split())
+    limit = max(8, int(max_chars))
+    if len(text) <= limit:
+        return text
+    tail = text[-(limit - 1):]
+    space = tail.find(" ")
+    if 0 <= space < len(tail) - 1:
+        tail = tail[space + 1:]
+    return "\u2026" + tail
+
 
 def format_elapsed(seconds: float) -> str:
     """Recording timer text: whole seconds ("7s") for the first minute, then m:ss ("1:05").
@@ -368,7 +387,7 @@ class BottomScreenIndicator:
         self._last_preview_words: list[str] = []
         self._preview_correction_tokens: Dict[str, float] = {}
         self.live_caption_words = 20
-        self.live_caption_max_chars = 380
+        self.live_caption_max_chars = 150
         self.live_caption_font_size = 14
         self.live_caption_correction_window_seconds = 2.0
 
@@ -433,7 +452,7 @@ class BottomScreenIndicator:
             return max(min_value, min(max_value, parsed))
 
         self.live_caption_words = _bounded_int("live_caption_words", 20, min_value=1, max_value=50)
-        self.live_caption_max_chars = _bounded_int("live_caption_max_chars", 380, min_value=40, max_value=800)
+        self.live_caption_max_chars = _bounded_int("live_caption_max_chars", 150, min_value=40, max_value=800)
         self.live_caption_font_size = _bounded_int("live_caption_font_size", 14, min_value=10, max_value=32)
         self.live_caption_correction_window_seconds = _bounded_float(
             "live_caption_correction_window_seconds",
@@ -683,6 +702,7 @@ class BottomScreenIndicator:
 
             # Create UI elements
             self._create_ui()
+            self._fit_overlay_height()
             self._setup_dock_window(screen_width, screen_height)
             self._setup_history_panel(screen_width, screen_height)
             self._position_overlay(screen_width, screen_height)
@@ -697,6 +717,27 @@ class BottomScreenIndicator:
         except Exception as e:
             print(f"[VisualIndicator] Unexpected error during window setup: {type(e).__name__}: {e}")
             self.window = None
+
+    def _fit_overlay_height(self) -> None:
+        """Grow the overlay to fit its content, and record what was measured.
+
+        The height was a fixed 130 px while the text rows are sized in points,
+        which scale with display DPI. On a scaled display the caption card,
+        the last row, is what fell off the bottom of the window.
+        """
+        try:
+            self.window.update_idletasks()
+            needed = max(int(child.winfo_reqheight()) for child in self.window.winfo_children())
+            label_h = int(self.preview_label.winfo_reqheight()) if self.preview_label else 0
+            fixed = int(self.height)
+            if needed > fixed:
+                self.height = needed + 2
+            logger.info(
+                "overlay_geometry width=%d fixed_height=%d content_height=%d height=%d caption_label_height=%d",
+                int(self.width), fixed, needed, int(self.height), label_h,
+            )
+        except Exception as exc:
+            logger.warning("overlay_geometry_unmeasured error=%s", exc)
 
     def _position_overlay(self, screen_width: int, screen_height: int):
         """Position overlay safely above tray/dock region.
@@ -826,7 +867,10 @@ class BottomScreenIndicator:
             font=("Segoe UI", 9),
             wraplength=self.wave_w - 24,
             justify=tk.LEFT,
-            anchor="nw",
+            # Bottom-anchored: when the caption is taller than the label, Tk
+            # clips the far side from the anchor. Anchored top-left, that was
+            # the newest words, so a long caption looked frozen.
+            anchor="sw",
             height=2,
         )
         self.preview_label.pack(fill=tk.BOTH, expand=True)
@@ -986,7 +1030,6 @@ class BottomScreenIndicator:
                 glow_x0, bottom, glow_x1, bottom,
                 fill=self._bar_colors[i],
                 outline="",
-                stipple="gray50",
             )
             self._bar_glow.append(glow)
             # Main bar
@@ -1028,11 +1071,26 @@ class BottomScreenIndicator:
             self._idle_wave_job = None
         self._idle_wave_tick()
 
+    _WAVE_MODES = {
+        TranscriptionStatus.LISTENING: "listening",
+        TranscriptionStatus.PROCESSING: "processing",
+        TranscriptionStatus.TRANSCRIBING: "transcribing",
+    }
+
     def _idle_wave_tick(self):
+        """The single waveform clock: one physics step per frame, mode follows the status."""
         if not self.window or not self.wave_canvas:
             return
-        self._animate_waveform(mode="idle")
-        self._idle_wave_job = self.window.after(35, self._idle_wave_tick)
+        status = getattr(self, "current_status", None)
+        mode = self._WAVE_MODES.get(status, "idle")
+        self._animate_waveform(mode=mode)
+        interval = 35
+        if mode != "idle":
+            try:
+                interval = self._resolve_animation_interval(status)
+            except Exception:
+                interval = 33
+        self._idle_wave_job = self.window.after(interval, self._idle_wave_tick)
 
     def _animate_waveform(self, mode: str = "listening"):
         if not self.wave_canvas or not self.wave_bars:
@@ -1574,6 +1632,20 @@ class BottomScreenIndicator:
         version_label.pack(side=tk.RIGHT, padx=(0, 2), pady=2)
         self.dock_version_label = version_label
 
+        # Recording duration: counts while listening, then holds the last
+        # recording's length until the next one starts. Empty until first use.
+        self.dock_elapsed_var = tk.StringVar(value="")
+        self.dock_elapsed_label = tk.Label(
+            dock_frame,
+            textvariable=self.dock_elapsed_var,
+            bg=self._ui("panel_bg"),
+            fg=self._ui("text_primary"),
+            font=("Segoe UI", 8, "bold"),
+            anchor="e",
+            padx=4,
+        )
+        self.dock_elapsed_label.pack(side=tk.RIGHT, padx=(0, 2), pady=2)
+
         if not self.dock_enabled:
             self.dock_window.withdraw()
 
@@ -2047,7 +2119,6 @@ class BottomScreenIndicator:
             for bar in self.status_audio_bars:
                 self.status_icon_canvas.coords(bar, -10, -10, -10, -10)
         self._animate_geometric_strip(mode="idle")
-        self._animate_waveform(mode="idle")
 
     def _animate_geometric_strip(self, mode: str = "listening"):
         if not self.geo_canvas or not self.geo_nodes:
@@ -2086,15 +2157,12 @@ class BottomScreenIndicator:
         if status == TranscriptionStatus.LISTENING:
             if not self.reduced_motion:
                 self._animate_geometric_strip(mode="listening")
-            self._animate_waveform(mode="listening")
         elif status == TranscriptionStatus.PROCESSING:
             if not self.reduced_motion:
                 self._animate_geometric_strip(mode="processing")
-            self._animate_waveform(mode="processing")
         elif status == TranscriptionStatus.TRANSCRIBING:
             if not self.reduced_motion:
                 self._animate_geometric_strip(mode="transcribing")
-            self._animate_waveform(mode="transcribing")
         else:
             self._set_icon_idle()
             return
@@ -2281,6 +2349,9 @@ class BottomScreenIndicator:
                     "full_text": full_text,
                     "retry_used": bool(payload.get("retry_used", False)),
                     "source_kind": source_kind,
+                    "outcome": str(payload.get("outcome", "ok") or "ok"),
+                    "failure_reason": str(payload.get("failure_reason", "") or ""),
+                    "failure_summary": str(payload.get("failure_summary", "") or ""),
                 }
             )
 
@@ -2296,6 +2367,8 @@ class BottomScreenIndicator:
             return [row for row in rows if str(row.get("source_kind", "")) == "correction"]
         if selected == "retries":
             return [row for row in rows if bool(row.get("retry_used", False))]
+        if selected == "failed":
+            return [row for row in rows if str(row.get("outcome", "ok")) == "failed"]
         return list(rows)
 
     @staticmethod
@@ -2305,6 +2378,12 @@ class BottomScreenIndicator:
         live_count = sum(1 for row in rows if str(row.get("source_kind", "live")) == "live")
         correction_count = sum(1 for row in rows if str(row.get("source_kind", "")) == "correction")
         retry_count = sum(1 for row in rows if bool(row.get("retry_used", False)))
+
+        failed_count = sum(1 for row in rows if str(row.get("outcome", "ok")) == "failed")
+        if selected == "failed":
+            if failed_count <= 0:
+                return "No failed dictations."
+            return f"Showing {failed_count} failed dictation{'s' if failed_count != 1 else ''}. Copy keeps any text that was recognised."
 
         if total <= 0:
             if selected == "corrections":
@@ -2325,10 +2404,13 @@ class BottomScreenIndicator:
         return (
             f"{total} item{'s' if total != 1 else ''}: "
             f"{live_count} live, {correction_count} correction{'s' if correction_count != 1 else ''}, "
-            f"{retry_count} retr{'ies' if retry_count != 1 else 'y'}."
+            f"{retry_count} retr{'ies' if retry_count != 1 else 'y'}"
+            + (f", {failed_count} failed." if failed_count else ".")
         )
 
     def _history_source_badge(self, item: Dict[str, Any]) -> tuple[str, str, str]:
+        if str(item.get("outcome", "ok")) == "failed":
+            return "Failed", self._ui("panel_surface"), self.error_color
         if str(item.get("source_kind", "live")) == "correction":
             return "Correction", self._ui("badge_correction_bg"), self._ui("badge_correction_fg")
         if bool(item.get("retry_used", False)):
@@ -2430,15 +2512,39 @@ class BottomScreenIndicator:
                 "retry_used": bool(item.get("retry_used", False)),
                 "source_kind": str(item.get("source_kind", "live")),
             }
-            append_jsonl_bounded(
+            # append_jsonl_bounded refuses rows over max_line_chars, so a long
+            # dictation used to vanish from history. Keep the row, shorten the
+            # text, and say so.
+            while (
+                len(json.dumps(payload, ensure_ascii=True)) > 8000
+                and len(payload["full_text"]) > 200
+            ):
+                payload["full_text"] = payload["full_text"][: int(len(payload["full_text"]) * 0.8)]
+                payload["truncated"] = True
+                payload["preview"] = payload["preview"][:400]
+            written = append_jsonl_bounded(
                 self.history_store_path,
                 payload,
                 max_file_bytes=1048576,
                 keep_lines=1200,
                 max_line_chars=8192,
             )
+            if not written:
+                # Returns False for an oversized row or an I/O error. This used
+                # to be ignored, so history could stop being recorded with
+                # nothing in the log (VF-18).
+                _report_history_failure(
+                    self.history_store_path,
+                    "append refused or failed (row too large, or the file is not writable)",
+                )
+                return
+            tail = read_text_tail_lines(
+                self.history_store_path, max_lines=1, max_bytes=65536, max_line_chars=8192
+            )
+            if not tail or str(payload["event_epoch"]) not in tail[-1]:
+                _report_history_failure(self.history_store_path, "row written but not found on read-back")
         except Exception as e:
-            logger.debug(f"Failed to append history store: {e}")
+            _report_history_failure(self.history_store_path, f"{type(e).__name__}: {e}")
 
     def _sync_history_from_store(self) -> None:
         history_lines = list(
@@ -2665,11 +2771,18 @@ class BottomScreenIndicator:
 
             meta = tk.Label(
                 header,
-                text="[{ts}] dur={dur:.1f}s proc={proc:.2f}s rtf={rtf:.2f}x".format(
-                    ts=item["ts"],
-                    dur=item["audio_duration"],
-                    proc=item["processing_time"],
-                    rtf=item["rtf"],
+                text=(
+                    "[{ts}] {why}".format(
+                        ts=item["ts"],
+                        why=str(item.get("failure_summary", "") or "not transcribed"),
+                    )
+                    if str(item.get("outcome", "ok")) == "failed"
+                    else "[{ts}] dur={dur:.1f}s proc={proc:.2f}s rtf={rtf:.2f}x".format(
+                        ts=item["ts"],
+                        dur=item["audio_duration"],
+                        proc=item["processing_time"],
+                        rtf=item["rtf"],
+                    )
                 ),
                 bg=self._ui("panel_surface_alt"),
                 fg=self._ui("text_muted"),
@@ -2891,6 +3004,10 @@ class BottomScreenIndicator:
     ):
         """Record summary for always-on dock/history panel."""
         safe_text = (text or "").strip()
+        failed = str((metadata or {}).get("outcome", "")) == "failed"
+        if not safe_text and failed:
+            # A failure with no recognised text still gets a row; its text is the reason.
+            safe_text = "Not transcribed: " + str((metadata or {}).get("failure_summary", "unknown reason"))
         if not safe_text:
             return
         event_epoch = time.time()
@@ -2918,6 +3035,9 @@ class BottomScreenIndicator:
                 "retry_used": bool(event_meta.get("retry_used", False)),
                 "transcription_path": str(event_meta.get("transcription_path", "")),
                 "idle_resume_active": bool(event_meta.get("idle_resume_active", False)),
+                "outcome": "failed" if failed else "ok",
+                "failure_reason": str(event_meta.get("failure_reason", "")),
+                "failure_summary": str(event_meta.get("failure_summary", "")),
             }
         )
 
@@ -2982,7 +3102,8 @@ class BottomScreenIndicator:
                 "full_text": safe_text,
             }
         )
-        merge_target = self._get_active_correction_target()
+        failed = str(event_meta.get("outcome", "")) == "failed"
+        merge_target = None if failed else self._get_active_correction_target()
         if merge_target:
             self._remember_history_fingerprint(incoming_fingerprint)
             item = self._merge_history_item(
@@ -3016,6 +3137,9 @@ class BottomScreenIndicator:
             "rtf": float(rtf),
             "preview": preview,
             "full_text": safe_text,
+            "outcome": "failed" if failed else "ok",
+            "failure_reason": str(event_meta.get("failure_reason", "")),
+            "failure_summary": str(event_meta.get("failure_summary", "")),
             "segments": 1,
             "raw_audio_duration": float(event_meta.get("raw_audio_duration", audio_duration) or audio_duration),
             "compacted_audio_duration": float(
@@ -3139,6 +3263,7 @@ class BottomScreenIndicator:
                     pb.start(10)
                 self._start_animation(status)
                 self._start_elapsed_timer()
+                self._set_hires_timer(True)
             elif status in (TranscriptionStatus.PROCESSING, TranscriptionStatus.TRANSCRIBING):
                 self._stop_elapsed_timer()
                 # Keep overlay visible — user needs feedback that work is happening
@@ -3160,6 +3285,7 @@ class BottomScreenIndicator:
             else:
                 # IDLE — fade out and hide
                 self._stop_elapsed_timer()
+                self._set_hires_timer(False)
                 self._fade_out()
                 self._stop_animation()
                 if pb:
@@ -3175,12 +3301,32 @@ class BottomScreenIndicator:
         except Exception as e:
             print(f"[VisualIndicator] UI update error: {e}")
 
+    def _set_hires_timer(self, enabled: bool) -> None:
+        """Balanced timeBeginPeriod/timeEndPeriod(1) on Windows; no-op elsewhere."""
+        if bool(getattr(self, "_hires_timer_on", False)) == bool(enabled):
+            return
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            winmm = ctypes.WinDLL("winmm")
+            if enabled:
+                winmm.timeBeginPeriod(1)
+            else:
+                winmm.timeEndPeriod(1)
+            self._hires_timer_on = bool(enabled)
+        except Exception as exc:
+            logger.debug("hi-res timer toggle failed: %s", exc)
+
     def _start_elapsed_timer(self) -> None:
         """Tick the recording timer ~4x/s on the GUI thread until the status leaves LISTENING."""
         self._stop_elapsed_timer(clear=False)
         started = getattr(self, "_listening_started_at", None) or time.monotonic()
         self._elapsed_generation = getattr(self, "_elapsed_generation", 0) + 1
         generation = self._elapsed_generation
+
+        self._elapsed_running_since = started
 
         def _tick() -> None:
             if generation != self._elapsed_generation:
@@ -3189,7 +3335,12 @@ class BottomScreenIndicator:
             if var is None or not self.window:
                 return
             try:
-                var.set(format_elapsed(time.monotonic() - started))
+                label = format_elapsed(time.monotonic() - started)
+                dock_var = getattr(self, "dock_elapsed_var", None)
+                dock_shown = dock_var is not None and bool(getattr(self, "dock_enabled", False))
+                if dock_var is not None:
+                    dock_var.set(label)
+                var.set("" if dock_shown else label)
                 self._elapsed_after_id = self.window.after(250, _tick)
             except Exception:
                 self._elapsed_after_id = None
@@ -3197,6 +3348,15 @@ class BottomScreenIndicator:
         _tick()
 
     def _stop_elapsed_timer(self, clear: bool = True) -> None:
+        # Freeze the dock counter on the exact final length (the last tick may be ~250 ms stale).
+        running_since = getattr(self, "_elapsed_running_since", None)
+        self._elapsed_running_since = None
+        dock_var = getattr(self, "dock_elapsed_var", None)
+        if running_since is not None and dock_var is not None:
+            try:
+                dock_var.set(format_elapsed(time.monotonic() - running_since))
+            except Exception:
+                pass
         self._elapsed_generation = getattr(self, "_elapsed_generation", 0) + 1
         after_id = getattr(self, "_elapsed_after_id", None)
         self._elapsed_after_id = None
@@ -3334,10 +3494,7 @@ class BottomScreenIndicator:
                     self._preview_correction_tokens.clear()
                     return
 
-                caption_tokens = words[-max(1, int(self.live_caption_words)) :]
-                caption = " ".join(caption_tokens)
-                if len(caption) > int(self.live_caption_max_chars):
-                    caption = "..." + caption[-int(self.live_caption_max_chars):]
+                caption = caption_tail(" ".join(words), int(self.live_caption_max_chars))
                 self.preview_var.set(caption)
                 self._last_preview_words = list(words)
         except Exception as e:
@@ -3417,6 +3574,7 @@ class BottomScreenIndicator:
 
     def _destroy_window(self):
         """Destroy window on main thread"""
+        self._set_hires_timer(False)
         try:
             if self._idle_wave_job and self.window:
                 self.window.after_cancel(self._idle_wave_job)
@@ -3438,6 +3596,35 @@ class BottomScreenIndicator:
 # Global indicator instance
 _indicator: Optional[BottomScreenIndicator] = None
 _indicator_lock = threading.Lock()
+
+# Told when a history row cannot be saved (VF-18). Set by the app so the failure
+# reaches the tray; without a handler it still lands in the log as an error.
+_history_failure_handler: Optional[Callable[[str, str], None]] = None
+_history_failure_last_report = 0.0
+
+
+def set_history_failure_handler(handler: Optional[Callable[[str, str], None]]) -> None:
+    global _history_failure_handler
+    _history_failure_handler = handler
+
+
+def _report_history_failure(path: Any, reason: str) -> None:
+    """Log (and surface) a history write failure, at most once a minute."""
+    global _history_failure_last_report
+    now = time.monotonic()
+    if _history_failure_last_report and now - _history_failure_last_report < 60.0:
+        return
+    _history_failure_last_report = now
+    try:
+        logging.getLogger("voiceflow").error("history_append_failed path=%s reason=%s", path, reason)
+    except Exception:
+        pass
+    handler = _history_failure_handler
+    if handler is not None:
+        try:
+            handler(str(path), reason)
+        except Exception:
+            pass
 
 def get_indicator() -> BottomScreenIndicator:
     """Get or create the global status indicator"""

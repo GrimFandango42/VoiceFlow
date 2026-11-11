@@ -90,6 +90,46 @@ def _pyz_module_names(exe: Path) -> set[str]:
     return names
 
 
+def _top_level_stamp(exe: Path) -> tuple[list[str], dict[str, str]]:
+    """Names in the executable's own archive that contain ``_build_stamp``, and the constants of the first one.
+
+    The order's rebuild gate reads exactly this table (``CArchiveReader(exe).toc``). The stamp module inside the PYZ
+    is invisible to it, so the build also ships the stamp as a runtime hook, which PyInstaller lists by file name.
+    """
+    import marshal
+
+    from PyInstaller.archive.readers import CArchiveReader
+
+    pkg = CArchiveReader(str(exe))
+    names = [n for n in pkg.toc if "_build_stamp" in n]
+    constants: dict[str, str] = {}
+    if names:
+        # Constants only: no builtins, so nothing but `NAME = literal` assignments can run.
+        namespace: dict[str, object] = {"__builtins__": {}}
+        exec(marshal.loads(pkg.extract(names[0])), namespace)  # noqa: S102
+        constants = {k: str(v) for k, v in namespace.items() if k.isupper()}
+    return names, constants
+
+
+def _check_stamp_entry(exe: Path, expected_commit: str | None, report: Report) -> None:
+    try:
+        names, constants = _top_level_stamp(exe)
+    except Exception as exc:  # noqa: BLE001
+        report.add("build_stamp_entry", False, f"cannot read the executable's archive: {type(exc).__name__}: {exc}")
+        return
+    if not names:
+        report.add("build_stamp_entry", False, "no _build_stamp entry in the executable's top-level archive")
+        return
+    commit = constants.get("COMMIT", "")
+    if not commit or commit == "unknown":
+        report.add("build_stamp_entry", False, f"{names[0]} carries no commit ({constants})")
+        return
+    if expected_commit and not (expected_commit.startswith(commit) or commit.startswith(expected_commit)):
+        report.add("build_stamp_entry", False, f"stamp commit {commit} != expected {expected_commit}")
+        return
+    report.add("build_stamp_entry", True, f"{names[0]} commit={commit} built={constants.get('BUILT_AT', '?')}")
+
+
 def _check_vad(internal: Path, report: Report) -> None:
     vad = internal / VAD_RELATIVE
     if not vad.is_file() or vad.stat().st_size == 0:
@@ -117,15 +157,34 @@ def _check_native(internal: Path, report: Report) -> None:
     report.add("ctranslate2_native", bool(ct2), ", ".join(p.name for p in ct2) or "ctranslate2.dll missing")
 
 
-def _check_cuda(internal: Path, required: tuple[str, ...], allow_cpu_only: bool, report: Report) -> None:
-    lib = internal / CUDA_RELATIVE
+#: Upper bound for the throwaway interpreter that loads each CUDA DLL. A hung native load must fail the check, not the verifier.
+CUDA_LOAD_TIMEOUT_S = 120.0
+
+
+def _check_cuda(
+    internal: Path,
+    required: tuple[str, ...],
+    allow_cpu_only: bool,
+    report: Report,
+    timeout: float | None = None,
+) -> None:
+    if timeout is None:
+        timeout = CUDA_LOAD_TIMEOUT_S
     wanted = list(required) + list(_literal_tuple(EXE_ENTRY, "CUDA_COMPANION_DLLS"))
+    # The build puts the CUDA runtime at the bundle root (_internal), the only
+    # place Windows searches before our code runs; older bundles had it under
+    # torch/lib. Accept a complete set in either place, root first.
+    lib = internal / CUDA_RELATIVE
+    for candidate in (internal, internal / CUDA_RELATIVE):
+        if all((candidate / d).is_file() for d in wanted):
+            lib = candidate
+            break
     missing = [d for d in wanted if not (lib / d).is_file()]
     if missing:
         report.add(
             "cuda_runtime_dlls",
             False,
-            f"missing under {CUDA_RELATIVE}: {', '.join(missing)}"
+            f"missing under {CUDA_RELATIVE} and the bundle root: {', '.join(missing)}"
             + (" (accepted: --allow-cpu-only; this build runs CPU int8 only)" if allow_cpu_only else ""),
             warn_only=allow_cpu_only,
         )
@@ -140,17 +199,30 @@ def _check_cuda(internal: Path, required: tuple[str, ...], allow_cpu_only: bool,
         "    ctypes.WinDLL(os.path.join(lib, name))\n"
         "print('loaded', len(sys.argv) - 2)\n"
     )
-    proc = subprocess.run(
-        [sys.executable, "-I", "-c", code, str(lib), *wanted],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-I", "-c", code, str(lib), *wanted],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        report.add(
+            "cuda_runtime_dlls",
+            False,
+            f"DLL load check did not finish within {timeout:.0f}s (a DLL or its dependency hangs on load)",
+            warn_only=allow_cpu_only,
+        )
+        return
+    except OSError as exc:
+        report.add("cuda_runtime_dlls", False, f"cannot run DLL load check: {exc}", warn_only=allow_cpu_only)
+        return
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:] or ["no output"]
         report.add("cuda_runtime_dlls", False, f"present but failed to load: {tail[0]}", warn_only=allow_cpu_only)
         return
-    report.add("cuda_runtime_dlls", True, f"{', '.join(wanted)} present and load from {CUDA_RELATIVE}")
+    where = CUDA_RELATIVE if lib != internal else "the bundle root"
+    report.add("cuda_runtime_dlls", True, f"{', '.join(wanted)} present and load from {where}")
 
 
 def _has_extension_module(internal: Path, module: str) -> bool:
@@ -434,6 +506,7 @@ def verify(
     _check_native(internal, report)
     _check_cuda(internal, required, allow_cpu_only, report)
     _check_modules(exe, internal, modules, report)
+    _check_stamp_entry(exe, os.environ.get("VOICEFLOW_EXPECT_COMMIT") or None, report)
     if run_frozen:
         report.frozen_report = run_frozen_self_check(exe, work_dir, allow_cpu_only, report)
     else:

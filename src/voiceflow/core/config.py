@@ -54,6 +54,7 @@ class Config:
     silence_vad_threshold: float = 0.5
     silence_vad_min_chunk_ms: int = 100          # shorter VAD chunks are ignored
     silence_vad_min_speech_seconds: float = 0.25  # total speech needed to decode a whole recording
+    silence_vad_short_gate_max_seconds: float = 12.0  # recordings up to this long are VAD-checked before decoding
     paragraph_pause_seconds: float = 2.5     # pause that becomes a paragraph break
 
     # VF-12 formatting for AI prompts (core/dictation_format.py)
@@ -123,6 +124,9 @@ class Config:
     pause_compaction_keep_silence_ms: int = 250
     pause_compaction_tail_keep_ms: int = 450  # always keep this much of the recording's real end
     pause_compaction_max_reduction_pct: float = 82.0  # allow stronger dead-air removal in long conversations
+    pause_compaction_tail_protect_ms: int = 1500  # VF-17: never blip-filter/cut soft speech in the last N ms (0 = legacy behaviour)
+    asr_tail_pad_ms: int = 0  # VF-17: trailing silence appended before ASR (0 = off; see docs/FAITHFUL_DICTATION.md for measurements)
+    asr_tail_lift_db: float = 9.0  # VF-17: max gain (dB) applied to a clearly-spoken but faded trailing word before ASR (0 = off)
     pause_compaction_retry_on_short_output: bool = True  # Retry raw audio when compaction result looks clipped
     pause_compaction_retry_min_reduction_pct: float = 38.0  # Trigger raw retry only after heavy compaction
     pause_compaction_retry_max_words: int = 8  # Treat very short result as likely clipped output
@@ -199,7 +203,13 @@ class Config:
     compression_ratio_threshold: float = 2.4  # Quality threshold
     log_prob_threshold: float = -1.0  # Confidence threshold
     no_speech_threshold: float = 0.9  # Silence detection sensitivity
-    latency_boost_enabled: bool = True  # Use a smaller model for short utterances
+    # Short-utterance fast path (tiny.en alongside the main model). Off by default
+    # (VF-18 item 7): on a GPU the main model decodes a 2-4 s clip in ~90 ms vs
+    # ~25 ms for tiny.en, so the second model saves ~65 ms and costs a second
+    # preload thread, a second warmup and a less accurate transcript. On CPU it
+    # still saves ~1 s per clip over small.en, so the CPU setup profile turns it
+    # on explicitly.
+    latency_boost_enabled: bool = False
     latency_boost_model_tier: str = "tiny"  # Fast-path model tier for short utterances
     latency_boost_max_audio_seconds: float = 10.0  # Keep ultra-fast path short; preserve accuracy on longer utterances
     # VF-12: 3.0 -> 1.2 s. Suspected contributor to end-of-sentence errors: a ~1.5 s
@@ -356,6 +366,26 @@ class Config:
     adaptive_max_rules: int = 200  # Cap learned replacements to bound memory
     adaptive_max_phrase_tokens: int = 4  # Allow short phrase learning, not just single-token swaps
     adaptive_snippet_chars: int = 200  # Max raw snippet chars stored per event
+
+    # VF-17 reconstruction pass (form repair, never meaning change). Local Ollama, CPU only.
+    reconstruction_enabled: bool = False  # opt-in: a local LLM pass after each paste; costs every CPU core for tens of seconds
+    reconstruction_mode: str = "auto"  # auto | sync | async | off  (auto stays async unless p95 fits the budget)
+    reconstruction_model: str = ""  # "" = pick a small instruct model from what Ollama has installed
+    reconstruction_budget_ms: int = 800  # max the paste may wait for the reconstruction (sync path)
+    reconstruction_timeout_s: float = 45.0  # hard timeout for the model call (cold model load can be ~40 s)
+    reconstruction_min_words: int = 4
+    reconstruction_max_chars: int = 2000
+    reconstruction_num_threads: int = 0  # 0 = half the logical cores (leaves CPU for the foreground app and ASR)
+    replace_last_paste_hotkey: str = "ctrl+alt+r"
+    replace_last_paste_max_age_s: float = 120.0
+    hotword_promotion_enabled: bool = True
+    hotword_promotion_min_count: int = 3
+
+    # VF-17 full-fidelity tuning log: local-only, never uploaded (VF-03).
+    tuning_log_enabled: bool = True
+    tuning_log_max_chars: int = 8000
+    tuning_log_max_entries: int = 2000
+    tuning_log_max_age_days: int = 30
     # OFF by default: when on, the nightly learning batch sends up to
     # adaptive_ai_analysis_max_items verbatim transcripts (plus correction pairs)
     # to a CLOUD model — Anthropic via the Claude CLI, or Google Gemini as
@@ -367,6 +397,18 @@ class Config:
     # old default); load_config resets the flag to False once and bumps this to
     # 1. The wizard writes 1 when the user saves the setting themselves.
     cloud_learning_consent_version: int = 0
+    # One-time record that the GPU single-model migration (VF-18 item 7) has run:
+    # configs saved while the fast path defaulted to on get it switched off once
+    # on GPU setups, after which the user's own choice is never overridden.
+    single_model_migration_version: int = 0
+    vf19_migration_version: int = 0
+    # Long single-block dictations are split into paragraphs at subject changes.
+    auto_paragraphs_enabled: bool = True
+    auto_lists_enabled: bool = True  # "point one ..." / "first ... second ..." become list lines
+    auto_paragraph_min_words: int = 60
+    # Keep the audio of the most recent dictations (local only) so a bad
+    # transcription can be replayed against other settings. 0 keeps none.
+    keep_audio_last_n: int = 30
     adaptive_ai_analysis_max_items: int = 8  # Max samples sent to the cloud model when enabled
     adaptive_ai_analysis_max_suggestions: int = 8  # Bound AI-proposed phrase/protected-term suggestions
     longrun_housekeeping_enabled: bool = True  # periodic long-run health telemetry and cleanup hooks

@@ -36,7 +36,7 @@ class TestPriorityWins:
         # A multi-word term at the end of a full file is crowded out; the same
         # term pinned always gets in. Position stops mattering, which is the
         # whole point.
-        long_term = "Veeva LIMS validation workflow"
+        long_term = "Acme Telemetry ingestion pipeline"
         crowd = [f"Filler Term Number {i}" for i in range(200)]
 
         monkeypatch.setattr(vocab, "_read_corrections", lambda p: (

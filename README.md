@@ -34,9 +34,9 @@ pip install -e ".[dev]"
 python _app_entry.py            # run from the repo root, not from src/
 ```
 
-For a GPU, create `.venv-gpu` instead (`scripts\setup\bootstrap_windows.ps1 -GpuVenv`), then add a CUDA 12 PyTorch (see the GPU note) and start with `.venv-gpu\Scripts\python.exe dev.py`: it runs the model in its own process and restarts only the app when you save a `.py` file. See [How to launch](docs/HOW_TO_LAUNCH.md).
+For a GPU, create `.venv-gpu` instead (`scripts\setup\bootstrap_windows.ps1 -GpuVenv`), then install the NVIDIA runtime wheels (see the GPU note) and start with `.venv-gpu\Scripts\python.exe dev.py`: it runs the model in its own process and restarts only the app when you save a `.py` file. See [How to launch](docs/HOW_TO_LAUNCH.md).
 
-> **GPU note.** The CUDA path needs `cublas64_12.dll` and `cudnn_ops64_9.dll` (CUDA 12 / cuDNN 9). VoiceFlow finds them in the active environment's `torch\lib` (install a CUDA 12 build of PyTorch there), in a folder named by `VOICEFLOW_TORCH_LIB_DIR`, or on `PATH`. If they are missing it runs on the CPU (`int8`) — slower, still local. The log line `asr_engine_initialized` shows the device actually in use (`device=cuda compute=float16`). The packaged build bundles these DLLs and refuses to build without them ([Build guide](docs/BUILD_GUIDE.md)).
+> **GPU note.** The CUDA path needs cuBLAS 12 and cuDNN 9 (`cublas64_12.dll`, `cudnn_ops64_9.dll`). Install them directly with `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12` (a few hundred MB; a CUDA build of PyTorch also works but is several GB and is not used for transcription). A CPU-only `torch` satisfies the install and then silently gives no GPU, and a CUDA 11.8 / cuDNN 8 stack is the wrong major version for ctranslate2 4.x. VoiceFlow also finds the DLLs in the active environment's `torch\lib`, in a folder named by `VOICEFLOW_TORCH_LIB_DIR`, or on `PATH`. Verify with `python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"`: `0` means VoiceFlow will fall back to CPU `int8` (roughly 85x slower). The log line `asr_engine_initialized` shows the device actually in use (`device=cuda compute=float16`). The packaged build bundles these DLLs and refuses to build without them ([Build guide](docs/BUILD_GUIDE.md)).
 
 **Dictate.** Focus any text field, hold **Ctrl+Shift**, speak, release. Everything else is optional:
 

@@ -218,6 +218,62 @@ def initial_prompt(max_chars: int = INITIAL_PROMPT_MAX_CHARS) -> str:
     return prompt
 
 
+def known_terms(max_terms: int = 60) -> List[str]:
+    """Canonical vocabulary terms (user priority first), for the reconstruction pass.
+
+    Same sources and precedence as ``initial_prompt`` but returned as a list so
+    callers can compare against it rather than parse a prompt string.
+    """
+    priority_terms = _read_corrections(_priority_vocab_path())
+    user_terms = _read_corrections(_user_vocab_path())
+    canonical = {t.strip().lower(): t.strip() for t in INITIAL_PROMPT_TERMS}
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for term in (*priority_terms, *user_terms, *INITIAL_PROMPT_TERMS):
+        normalized = term.strip()
+        key = normalized.lower()
+        if not normalized or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(canonical.get(key, normalized))
+    return ordered[: max(1, int(max_terms))]
+
+
+def append_promoted_terms(pairs: List[Tuple[str, str]], *, header: str = "# VF-17 promoted from repeated misses") -> List[Tuple[str, str]]:
+    """Append ``wrong -> correct`` rules to the user vocabulary file.
+
+    Skips pairs whose rule (or canonical term, for a case-insensitive repeat)
+    is already present. Returns the pairs actually written. Never raises.
+    """
+    written: List[Tuple[str, str]] = []
+    try:
+        path = _user_vocab_path()
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        existing_rules = {
+            line.strip().lower()
+            for line in existing.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        }
+        new_lines: List[str] = []
+        for wrong, right in pairs:
+            wrong, right = wrong.strip(), right.strip()
+            rule = f"{wrong} -> {right}"
+            if not wrong or not right or rule.lower() in existing_rules:
+                continue
+            new_lines.append(rule)
+            existing_rules.add(rule.lower())
+            written.append((wrong, right))
+        if new_lines:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            block = ("" if existing.endswith("\n") or not existing else "\n") + header + "\n" + "\n".join(new_lines) + "\n"
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(block)
+            invalidate_cache()
+    except Exception as exc:
+        logger.warning("append_promoted_terms failed: %s", exc)
+    return written
+
+
 def invalidate_cache() -> None:
     """Force the next ``initial_prompt`` call to re-read from disk.
 

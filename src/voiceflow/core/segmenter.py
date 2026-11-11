@@ -484,10 +484,55 @@ def _decode_plans(
         if not piece.text:
             continue
         if out:
-            out.append("\n\n" if pending_gap >= paragraph_gap else " ")
-        out.append(piece.text)
+            if pending_gap >= paragraph_gap:
+                out.append("\n\n")
+                out.append(piece.text)
+            else:
+                out[-1], joined = join_across_pause(out[-1], piece.text)
+                out.append(" ")
+                out.append(joined)
+        else:
+            out.append(piece.text)
         pending_gap = 0.0
     return SegmentedTranscript(text="".join(out).strip(), pieces=list(pieces))
+
+
+# Words a sentence does not end on. A piece that ends with one was cut by a
+# pause in mid-sentence, whatever full stop the model put after it. Kept
+# narrow on purpose: "you", "it", "that", "is" and stranded prepositions all
+# end real sentences ("I'll send it to you."), and joining those would be worse
+# than the stray full stop.
+_DANGLING = frozenset(
+    "a an the and or but to my your our their because if than which while".split()
+)
+
+
+def join_across_pause(before: str, after: str) -> Tuple[str, str]:
+    """Repair the seam between two pieces that a short pause split mid-sentence.
+
+    Each piece is decoded on its own, so the model closes it with a full stop
+    and opens the next with a capital even when the speaker only paused for
+    breath: "seems to. Work well". Two cases are safe to mend without changing
+    a word: the next piece starts in lower case (the model itself heard a
+    continuation), or the first piece ends on a word no sentence ends on.
+    """
+    left, right = (before or "").rstrip(), (after or "").lstrip()
+    if not left or not right or not left.endswith("."):
+        return before, after
+    if left.endswith("..") or left.endswith("\u2026"):
+        return before, after
+    first = right.split()[0]
+    last_word = left[:-1].split()[-1].strip("\"'()[],;:").lower() if left[:-1].split() else ""
+    if first[:1].islower():
+        return left[:-1] + ",", right
+    if last_word in _DANGLING:
+        lowered = right
+        bare = first.strip("\"'()[],.;:!?")
+        # Keep "I", acronyms and anything with an inner capital (names, product names).
+        if bare not in {"I", "I'm", "I'll", "I've", "I'd"} and bare[:1].isupper() and bare[1:].islower():
+            lowered = right[0].lower() + right[1:]
+        return left[:-1], lowered
+    return before, after
 
 
 def decode_for_duration(engine, audio: np.ndarray, cfg=None, log: Optional[logging.Logger] = None) -> str:
@@ -504,6 +549,20 @@ def decode_for_duration(engine, audio: np.ndarray, cfg=None, log: Optional[loggi
             result.fallback_reason or "none",
         )
         return result.text
+    # Short recordings never went through the VAD gate, so holding the key in a
+    # quiet room pasted whatever the model invents for room tone. Short clips
+    # only: Silero costs about 1% of the audio's length, which a long dictation
+    # already pays in the segmented path above.
+    gate_max = float(getattr(cfg, "silence_vad_short_gate_max_seconds", 12.0))
+    if 0.0 < duration <= gate_max:
+        regions = vad_speech_regions(audio, sample_rate, cfg)
+        if regions is not None:
+            speech_s = sum(b - a for a, b in regions) / float(sample_rate)
+            if speech_s < float(getattr(cfg, "silence_vad_min_speech_seconds", 0.25)):
+                (log or logger).info(
+                    "short_decode_skipped reason=vad_no_speech duration=%.2f vad_speech_s=%.2f", duration, speech_s
+                )
+                return ""
     return decode_audio(engine, audio, cfg)
 
 
@@ -518,6 +577,7 @@ __all__: Sequence[str] = (
     "room_tone",
     "pad_right_context",
     "decode_audio",
+    "join_across_pause",
     "decode_for_duration",
     "should_segment",
     "transcribe_segmented",

@@ -6,6 +6,7 @@ import os
 import queue
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -20,6 +21,12 @@ class AsyncLogger:
         self.queue: queue.Queue = queue.Queue(maxsize=1000)
         self.logger = logging.getLogger("voiceflow")
         self.logger.setLevel(logging.INFO)
+        self.async_delivery = True
+
+        # Re-initialising would otherwise stack a second set of handlers on the
+        # module-level logger and double every line.
+        for existing in list(self.logger.handlers):
+            self.logger.removeHandler(existing)
 
         file_handler, selected_path = self._build_file_handler()
         if selected_path is not None:
@@ -36,6 +43,7 @@ class AsyncLogger:
         self.listener = logging.handlers.QueueListener(self.queue, file_handler)
         self.listener.start()
         self._write_active_log_marker()
+        self._verify_delivery_or_fall_back(file_handler)
 
         if self.active_log_path != self.log_path:
             self.logger.warning(
@@ -43,6 +51,67 @@ class AsyncLogger:
                 self.log_path,
                 self.active_log_path,
             )
+
+    def _verify_delivery_or_fall_back(self, file_handler: logging.Handler) -> None:
+        """
+        Prove a record actually reaches disk, or stop going through the queue.
+
+        The QueueHandler/QueueListener pair moves disk I/O off the calling
+        thread, which matters on the audio path. But when the listener thread
+        does not drain, nothing says so: the handler has the file open, every
+        log call succeeds, the queue fills to its 1000-record cap and
+        QueueHandler then discards records through handleError. The app looks
+        healthy and writes nothing.
+
+        That is not hypothetical. VoiceFlow ran for days at a time with an open
+        voiceflow.log and no output, but only when started by
+        Win32_Process::Create -- the watchdog, Task Scheduler and the Startup
+        shortcut, so in practice every real launch. Started from a shell it
+        logged normally. The underlying cause is still unknown, and that is the
+        point of checking rather than assuming: a diagnostic channel that fails
+        silently is worse than none, because it is trusted.
+
+        So emit one record and watch the file grow. If it does not, drop the
+        queue and let the file handler take writes directly -- slower per call,
+        and still a working log.
+        """
+        try:
+            before = self.active_log_path.stat().st_size if self.active_log_path.exists() else 0
+        except Exception:
+            before = 0
+
+        self.logger.info("logging_delivery_check pid=%d", os.getpid())
+
+        deadline = time.monotonic() + 2.0
+        delivered = False
+        while time.monotonic() < deadline:
+            try:
+                if self.active_log_path.exists() and self.active_log_path.stat().st_size > before:
+                    delivered = True
+                    break
+            except Exception:
+                pass
+            time.sleep(0.05)
+
+        if delivered:
+            return
+
+        try:
+            self.listener.stop()
+        except Exception:
+            pass
+        try:
+            self.logger.removeHandler(self.queue_handler)
+        except Exception:
+            pass
+
+        self.logger.addHandler(file_handler)
+        self.queue_handler = None
+        self.async_delivery = False
+        self.logger.warning(
+            "logging_queue_listener_not_delivering fallback=direct_file_handler pid=%d",
+            os.getpid(),
+        )
 
     def _write_active_log_marker(self) -> None:
         marker_text = str(self.active_log_path)

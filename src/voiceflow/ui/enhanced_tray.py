@@ -317,6 +317,16 @@ class EnhancedTrayController(ITrayManager):
 
             threading.Thread(target=_run, daemon=True).start()
 
+        def replace_last_paste(icon, item):  # noqa: ARG001
+            """VF-17: swap the last paste for its reconstructed version."""
+            threading.Thread(target=self.app.replace_last_paste, daemon=True, name="ReplaceLastPaste").start()
+
+        def _has_improvement(item):  # noqa: ARG001
+            try:
+                return bool(self.app.has_pending_improvement())
+            except Exception:
+                return False
+
         def show_recent_history(icon, item):
             """Open recent history panel from tray."""
             try:
@@ -494,6 +504,11 @@ class EnhancedTrayController(ITrayManager):
             ),
             pystray.MenuItem("Reset Dock Position", reset_positions),
             pystray.MenuItem("Setup & Defaults", open_setup_defaults),
+            pystray.MenuItem(
+                "Replace last paste with improved version",
+                replace_last_paste,
+                enabled=_has_improvement,
+            ),
             pystray.MenuItem("Recent", pystray.Menu(_recent_items)),
             pystray.MenuItem("Recent History", show_recent_history),
             pystray.MenuItem("Correction Review", show_correction_review),
@@ -613,6 +628,23 @@ class EnhancedTrayController(ITrayManager):
 
         if self._icon and hasattr(self._icon, 'title'):
             self._icon.title = text
+
+    _BASE_TOOLTIP = "VoiceFlow - Enhanced"
+
+    def show_warning(self, message: str, notify: bool = True) -> None:
+        """Show a standing warning in the tray tooltip (and once as a balloon).
+
+        Used for conditions the user would otherwise never notice, such as the
+        speech model running on the CPU or logging not working (VF-18). The
+        tooltip keeps the warning until ``clear_warning`` is called.
+        """
+        self.set_tooltip(f"VoiceFlow - {message}")
+        if notify:
+            self._notify("VoiceFlow warning", message)
+
+    def clear_warning(self) -> None:
+        """Restore the normal tooltip after a warning has cleared."""
+        self.set_tooltip(self._BASE_TOOLTIP)
 
     def get_current_status(self):
         """Get current tray status

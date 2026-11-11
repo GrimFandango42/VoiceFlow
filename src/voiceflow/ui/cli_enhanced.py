@@ -30,7 +30,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Deque, Dict, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -54,14 +54,24 @@ import keyboard
 
 from voiceflow.core.preloader import ModelPreloader, PreloadState
 from voiceflow.core.dictation_format import prepare_prompt_text
-from voiceflow.core.history import STATUS_CLIPBOARD, STATUS_PASTED, STATUS_SAVED, TranscriptHistory
+from voiceflow.core.history import (
+    FAILURE_REASONS,
+    STATUS_CLIPBOARD,
+    STATUS_PASTED,
+    STATUS_SAVED,
+    TranscriptHistory,
+    failure_summary,
+)
+from voiceflow.core.history import copy_text as history_copy_text
 from voiceflow.core.segmenter import decode_audio, decode_for_duration, should_segment
 from voiceflow.core.silence_artifacts import classify as classify_silence_artifact
 
 # Streaming preview
-from voiceflow.core.streaming import StreamingResult, StreamingTranscriber
+from voiceflow.core.live_caption import LiveCaptionSession
+from voiceflow.core.list_format import format_lists
 from voiceflow.core.textproc import (
     apply_code_mode,
+    auto_paragraphs,
     apply_second_pass_cleanup,
     format_transcript_for_destination,
     format_transcript_preserving_breaks,
@@ -572,7 +582,13 @@ class EnhancedApp:
 
         # Cold start elimination: Create ASR and start background preloading
         print("[STARTUP] Creating ASR engine...")
+        # Registered before any engine loads so a CPU fallback during preload is
+        # announced too (VF-18).
+        self._device_warning = ""
+        self._cuda_restore_thread: Optional[threading.Thread] = None
+        self._register_device_listener()
         self.asr = WhisperASR(cfg)
+        self._log_model_selection(cfg)
         self._preloader = ModelPreloader(self.asr, on_progress=self._on_preload_progress)
         self._model_ready = False
         self.asr_fast: Optional[WhisperASR] = None
@@ -649,6 +665,33 @@ class EnhancedApp:
                 print(f"[AI] Adaptive learning unavailable: {e}")
                 self.adaptive_learning = None
 
+        # VF-17: full-fidelity, local-only tuning corpus (raw -> final -> reconstructed).
+        self.tuning_log = None
+        self._recent_utterance_ids: Deque[Tuple[str, str]] = deque(maxlen=50)  # (pasted text, tuning id)
+        try:
+            from voiceflow.ai.tuning_log import TuningLog
+
+            self.tuning_log = TuningLog.from_config(cfg)
+        except Exception as e:
+            print(f"[AI] Tuning log unavailable: {e}")
+            self.tuning_log = None
+
+        # VF-17: reconstruction pass (form repair; guarded; sync-in-budget or async).
+        self.reconstruction = None
+        if bool(getattr(cfg, "reconstruction_enabled", True)) and str(getattr(cfg, "reconstruction_mode", "auto")) != "off":
+            try:
+                from voiceflow.ai.reconstruction import Reconstructor
+                from voiceflow.ai.reconstruction_runtime import ReconstructionCoordinator
+                from voiceflow.core import vocab as _vocab
+
+                self.reconstruction = ReconstructionCoordinator(
+                    cfg,
+                    Reconstructor(cfg, vocab_provider=lambda: _vocab.known_terms(60)),
+                )
+            except Exception as e:
+                print(f"[AI] Reconstruction pass unavailable: {e}")
+                self.reconstruction = None
+
         # Long conversation tracking
         self._session_start_time = time.time()
         self._total_transcription_time = 0.0
@@ -662,9 +705,9 @@ class EnhancedApp:
         # Streaming preview (VoiceFlow 3.0)
         self.live_caption_enabled = bool(getattr(cfg, "live_caption_enabled", True))
         self.streaming_enabled = bool(getattr(cfg, 'enable_streaming', True)) and self.live_caption_enabled
-        self._streaming_transcriber: Optional[StreamingTranscriber] = None
-        self._streaming_start_timer: Optional[threading.Timer] = None
-        self._last_preview_text = ""
+        self._caption_session: Optional[LiveCaptionSession] = None
+        self._caption_engine_name = "main"
+        self._last_caption_summary: Dict[str, Any] = {}
         self._audio_visual_thread: Optional[threading.Thread] = None
         self._audio_visual_stop = threading.Event()
         self._audio_noise_floor = 0.0
@@ -717,6 +760,7 @@ class EnhancedApp:
         elif progress.state == PreloadState.READY:
             self._model_ready = True
             print(f"[MODEL] Ready! {progress.message}")
+            self._log_runtime_device("model_ready", self.asr)
         elif progress.state == PreloadState.FAILED:
             print(f"[MODEL] FAILED: {progress.message}")
 
@@ -724,6 +768,7 @@ class EnhancedApp:
         if progress.state == PreloadState.READY:
             self._fast_model_ready = True
             print(f"[MODEL] Fast path ready ({getattr(self.cfg, 'latency_boost_model_tier', 'tiny')})")
+            self._log_runtime_device("fast_model_ready", self.asr_fast)
         elif progress.state == PreloadState.FAILED:
             self._fast_model_ready = False
             self._fast_preloader = None
@@ -757,6 +802,138 @@ class EnhancedApp:
             self.asr_fast = None
             self._fast_preloader = None
             self._fast_model_ready = False
+
+    # ------------------------------------------------------------------
+    # Device visibility (VF-18): a fall back to CPU is never silent.
+    # ------------------------------------------------------------------
+    _CPU_WARNING = "Running on CPU - dictation will be slow. Retrying the GPU when idle."
+
+    def _register_device_listener(self) -> None:
+        try:
+            from voiceflow.core.asr_engine import add_device_listener
+
+            add_device_listener(self._on_asr_device_event)
+        except Exception:
+            logging.getLogger("voiceflow").exception("device_listener_register_failed")
+
+    def _log_model_selection(self, cfg: Config) -> None:
+        """One line saying what was asked for, what was resolved, and what loads."""
+        try:
+            engine = self.asr
+            key = str(getattr(engine, "model_key", "") or "")
+            model_cfg = getattr(engine, "model_config", None)
+            from voiceflow.core.asr_engine import canonical_model_key
+
+            configured = str(getattr(cfg, "model_name", "") or "")
+            tier = str(getattr(cfg, "model_tier", "") or "")
+            agrees = (not configured) or canonical_model_key(configured) == key
+            logging.getLogger("voiceflow").log(
+                logging.INFO if agrees else logging.WARNING,
+                "model_selection tier=%s config_model_name=%s loaded_key=%s weights=%s agrees=%s%s",
+                tier or "none",
+                configured or "none",
+                key or "unknown",
+                getattr(model_cfg, "model_id", "unknown"),
+                agrees,
+                "" if agrees else " (model_name is ignored while model_tier is set)",
+            )
+        except Exception:
+            logging.getLogger("voiceflow").debug("model_selection_log_failed", exc_info=True)
+
+    def _log_runtime_device(self, event: str, engine: Optional[Any]) -> None:
+        """Log where a model actually runs: the line to check for 'GPU every time'."""
+        try:
+            status_fn = getattr(engine, "device_status", None)
+            if not callable(status_fn):
+                return
+            status = status_fn()
+            logging.getLogger("voiceflow").info(
+                "%s key=%s weights=%s device=%s compute=%s fell_back_to_cpu=%s",
+                event,
+                status.get("model_key"),
+                status.get("model_id"),
+                status.get("device"),
+                status.get("compute_type"),
+                status.get("fell_back_to_cpu"),
+            )
+        except Exception:
+            logging.getLogger("voiceflow").debug("runtime_device_log_failed", exc_info=True)
+
+    def _fallen_back_engines(self) -> List[Any]:
+        engines = [getattr(self, "asr", None), getattr(self, "asr_fast", None)]
+        fallen = []
+        for engine in engines:
+            status_fn = getattr(engine, "device_status", None)
+            if callable(status_fn):
+                try:
+                    if status_fn().get("fell_back_to_cpu"):
+                        fallen.append(engine)
+                except Exception:
+                    continue
+        return fallen
+
+    def _on_asr_device_event(self, event: str, detail: str) -> None:
+        """Called from preload/transcribe threads when an engine changes device."""
+        log = logging.getLogger("voiceflow")
+        if event == "cpu_fallback":
+            # The engine is mid-load, so it may not report fell_back_to_cpu yet;
+            # trust the event.
+            self._device_warning = self._CPU_WARNING
+            log.warning("device_event event=cpu_fallback detail=%s", detail)
+            self._apply_device_warning(announce=True)
+        elif event == "cuda_restored":
+            log.warning("device_event event=cuda_restored detail=%s", detail)
+            self._device_warning = self._CPU_WARNING if self._fallen_back_engines() else ""
+            self._apply_device_warning(announce=False)
+
+    def _apply_device_warning(self, announce: bool = False) -> None:
+        """Show (or clear) the standing CPU warning in the tray and, once, the overlay."""
+        message = self._device_warning
+        tray = getattr(self, "tray_controller", None)
+        try:
+            if tray is not None:
+                if message and hasattr(tray, "show_warning"):
+                    tray.show_warning(message, notify=announce)
+                elif not message and hasattr(tray, "clear_warning"):
+                    tray.clear_warning()
+        except Exception:
+            logging.getLogger("voiceflow").debug("device_warning_tray_failed", exc_info=True)
+        if announce and message and VISUAL_INDICATORS_AVAILABLE and getattr(self, "visual_indicators_enabled", False):
+            try:
+                show_error(message)
+            except Exception:
+                logging.getLogger("voiceflow").debug("device_warning_overlay_failed", exc_info=True)
+
+    def _start_cuda_restore_thread(self) -> None:
+        if self._cuda_restore_thread and self._cuda_restore_thread.is_alive():
+            return
+        self._cuda_restore_thread = threading.Thread(
+            target=self._cuda_restore_loop, name="CudaRestore", daemon=True
+        )
+        self._cuda_restore_thread.start()
+
+    def _is_idle_for_restore(self) -> bool:
+        try:
+            if self.rec.is_recording():
+                return False
+            if self.transcription_manager.active_jobs:
+                return False
+            # Let a dictation that just finished clear before taking the GPU.
+            return (time.time() - float(self._last_transcription_completed_at or 0.0)) > 5.0
+        except Exception:
+            return False
+
+    def _cuda_restore_loop(self) -> None:
+        """While idle, try to move a CPU-fallback model back onto the GPU."""
+        while not self._housekeeping_stop.wait(30.0):
+            try:
+                fallen = self._fallen_back_engines()
+                if not fallen or not self._is_idle_for_restore():
+                    continue
+                for engine in fallen:
+                    engine.retry_cuda_if_fallen_back()
+            except Exception:
+                logging.getLogger("voiceflow").debug("cuda_restore_loop_error", exc_info=True)
 
     def swap_model_tier(self, new_tier: str, on_complete=None) -> None:
         """Hot-swap the primary ASR engine to a different model tier.
@@ -924,6 +1101,7 @@ class EnhancedApp:
         self._background_services_started = True
         self._start_daily_learning_guardrail()
         self._start_longrun_housekeeping_thread()
+        self._start_cuda_restore_thread()
         self._log.info(
             "background_services_started daily_learning=%s housekeeping=%s",
             bool(getattr(self.cfg, "daily_learning_autorun_enabled", True)),
@@ -1443,6 +1621,20 @@ class EnhancedApp:
                 else:
                     i += 1
             speech = filtered
+        # VF-17: the blip filter above exists to drop clicks in the MIDDLE of a
+        # pause. At the end of the clip it deletes real speech: a short, soft,
+        # unstressed last word ("... end of the") that follows a pause is both
+        # quieter than ``dyn_thr`` and shorter than ``min_speech_frames``, so it
+        # was classified as a blip and cut. Re-admit anything above a relaxed
+        # threshold in the final ``tail_protect_ms`` (blip filter bypassed).
+        tail_protect_ms = max(
+            0,
+            int(options.get("tail_protect_ms", getattr(self.cfg, "pause_compaction_tail_protect_ms", 1500))),
+        )
+        tail_frames = min(len(speech), int(np.ceil(tail_protect_ms / float(frame_ms)))) if tail_protect_ms else 0
+        if tail_frames:
+            relaxed_thr = max(base_thr * 1.1, noise_floor * 1.5)
+            speech[-tail_frames:] |= rms[-tail_frames:] >= relaxed_thr
         if not np.any(speech):
             return audio_data
 
@@ -1471,7 +1663,9 @@ class EnhancedApp:
         if (len(compacted) / len(audio_data)) < min_keep_ratio:
             # Over-compaction guardrail: preserve more context for recognition quality.
             return audio_data
-        # Keep any tail samples if original ends with speech-like energy.
+        # Keep any tail samples if original ends with speech-like energy. With
+        # tail protection on, the sub-frame remainder is always kept: it is the
+        # last <30 ms of what the user said, and costs nothing.
         tail = audio_data[usable:]
         if tail.size > 0:
             compacted = np.concatenate((compacted, tail))
@@ -1652,6 +1846,76 @@ class EnhancedApp:
         context["destination_editor_chars"] = int(getattr(self.cfg, "destination_editor_chars", 94))
         return context
 
+    def _line_breaks_deliverable(self, text: str, destination_profile: str) -> bool:
+        """Can structure (paragraphs, list lines) reach this destination intact?"""
+        if destination_profile == "terminal" or bool(self.code_mode):
+            return False  # a multi-line paste into a shell can run commands
+        if bool(getattr(self.cfg, "press_enter_after_paste", False)):
+            return False
+        return bool(self._keep_chat_newlines(text))  # typed injection sends each break as Enter
+
+    def _format_lists(self, text: str, destination_profile: str) -> str:
+        """Spoken lists ("point one ...", "first ... second ...") as one item per line."""
+        try:
+            if not bool(getattr(self.cfg, "auto_lists_enabled", True)) or not text:
+                return text
+            if not self._line_breaks_deliverable(text, destination_profile):
+                return text
+            shaped = format_lists(text)
+            if shaped != text:
+                self._log.info("auto_lists items=%d", len(re.findall(r"(?m)^(?:-|\d{1,2}\.) ", shaped)))
+            return shaped
+        except Exception as exc:
+            self._log.warning("auto_lists_failed error=%s", exc)
+            return text
+
+    def _auto_paragraphs(self, text: str, destination_profile: str) -> str:
+        """Paragraph long prose where line breaks are safe to deliver."""
+        try:
+            if not bool(getattr(self.cfg, "auto_paragraphs_enabled", True)) or not text:
+                return text
+            if not self._line_breaks_deliverable(text, destination_profile):
+                return text
+            shaped = auto_paragraphs(text, min_words=int(getattr(self.cfg, "auto_paragraph_min_words", 60)))
+            if shaped != text:
+                self._log.info("auto_paragraphs paragraphs=%d words=%d", shaped.count("\n\n") + 1, len(text.split()))
+            return shaped
+        except Exception as exc:
+            self._log.warning("auto_paragraphs_failed error=%s", exc)
+            return text
+
+    def _keep_dictation_audio(self, audio_data: np.ndarray) -> None:
+        """Save this dictation's audio (16-bit WAV, local only), keeping the newest N.
+
+        Without the audio a wrong word cannot be reproduced, so no change to the
+        model or its settings can be checked against what was actually said.
+        """
+        keep = int(getattr(self.cfg, "keep_audio_last_n", 0) or 0)
+        if keep <= 0 or audio_data is None or len(audio_data) < int(self.cfg.sample_rate):
+            return
+        samples = np.asarray(audio_data, dtype=np.float32).copy()
+        rate = int(self.cfg.sample_rate)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+
+        def _write() -> None:
+            try:
+                import wave
+
+                folder = config_dir() / "audio"
+                folder.mkdir(parents=True, exist_ok=True)
+                pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2")
+                with wave.open(str(folder / f"dictation-{stamp}.wav"), "wb") as out:
+                    out.setnchannels(1)
+                    out.setsampwidth(2)
+                    out.setframerate(rate)
+                    out.writeframes(pcm.tobytes())
+                for old in sorted(folder.glob("dictation-*.wav"))[:-keep]:
+                    old.unlink(missing_ok=True)
+            except Exception as exc:
+                self._log.warning("keep_audio_failed error=%s", exc)
+
+        threading.Thread(target=_write, name="KeepAudio", daemon=True).start()
+
     def _keep_chat_newlines(self, text: str) -> bool:
         """May explicit line breaks reach a chat window?
 
@@ -1809,106 +2073,81 @@ class EnhancedApp:
             with self._checkpoint_lock:
                 self._checkpoint_in_flight = False
 
-    def _on_streaming_preview(self, result: StreamingResult) -> None:
-        """Handle streaming preview update"""
-        if result.text and result.text != self._last_preview_text:
-            self._last_preview_text = result.text
-            # Apply a cheap cleanup so live preview text reads as naturally as
-            # the final output — strip leading fillers, fix punctuation spacing.
-            preview_text = result.text.strip()
-            preview_text = re.sub(r"(?i)^(uh+[,.]?\s+|um+[,.]?\s+|er+[,.]?\s+)+", "", preview_text)
-            preview_text = apply_second_pass_cleanup(preview_text, heavy=False)
+    def _caption_engine(self):
+        """The model the live caption decodes on, and what to call it in the log.
 
-            # Caption-style preview: keep latest N words for readable live feedback.
-            words = re.findall(r"\S+", preview_text)
-            keep_words = max(1, int(getattr(self.cfg, "live_caption_words", 6)))
-            caption_text = " ".join(words[-keep_words:]) if words else preview_text
-            display_cap = max(40, int(getattr(self.cfg, "live_caption_max_chars", 110)))
-            preview_display = caption_text[:display_cap] + "..." if len(caption_text) > display_cap else caption_text
-            print(f"[PREVIEW] {preview_display}")
+        The fast model only if it has finished loading. Handing the caption an
+        engine that is still loading makes its first decode trigger a second,
+        concurrent model load from the caption thread.
+        """
+        if self.asr_fast is not None and self._fast_model_ready:
+            return self.asr_fast, "fast"
+        return self.asr, "main"
 
-            # Update visual overlay preview
-            if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
-                # Send cleaned partial text to UI for flowing word bubbles.
-                visual_show_preview(preview_text)
+    def _show_caption(self, text: str) -> None:
+        if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+            visual_show_preview(text)
 
     def _start_streaming_preview(self) -> None:
-        """Start streaming preview for real-time transcription feedback"""
+        """Start the live caption for the recording that has just begun."""
+        if self._caption_session is not None:
+            return
         try:
-            if self._streaming_transcriber is not None:
-                return
-            self._last_preview_text = ""
-            streaming_beam = int(getattr(self.cfg, "streaming_beam_size", 2))
-            streaming_max_audio = float(getattr(self.cfg, "streaming_partial_max_audio_seconds", 8.0))
-            streaming_vad = bool(getattr(self.cfg, "streaming_vad_filter", True))
-            self._streaming_transcriber = StreamingTranscriber(
-                self.asr_fast if self.asr_fast else self.asr,
-                sample_rate=self.cfg.sample_rate,
-                chunk_duration=0.85,
-                min_audio_duration=0.55,
-                partial_max_audio_seconds=streaming_max_audio,
-                beam_size=streaming_beam if streaming_beam > 1 else None,
-                vad_filter=streaming_vad,
-                on_partial=self._on_streaming_preview,
-            )
-            self._streaming_transcriber.start()
+            engine, engine_name = self._caption_engine()
 
-            # Start a thread to periodically feed audio to the streamer
-            self._streaming_thread = threading.Thread(
-                target=self._streaming_feed_loop,
-                daemon=True,
-                name="StreamingFeed",
+            def _transcribe(audio, prompt):
+                # The overrides keep caption decodes off the final pass's
+                # long-form path. VAD stays off so the caption never depends
+                # on onnxruntime; silence is gated by level and by the filler
+                # filter below instead.
+                try:
+                    return engine.transcribe(
+                        audio,
+                        initial_prompt=prompt,
+                        beam_size_override=1,
+                        vad_filter_override=False,
+                    )
+                except TypeError:
+                    # The two-process dev client takes audio only.
+                    return engine.transcribe(audio)
+
+            def _is_filler(text: str) -> bool:
+                suppress, _reason = classify_silence_artifact(
+                    text,
+                    no_speech_prob=float(getattr(engine, "last_no_speech_prob", 0.0) or 0.0),
+                )
+                return bool(suppress)
+
+            session = LiveCaptionSession(
+                _transcribe,
+                self.rec._ring_buffer.get_samples_since,
+                self._show_caption,
+                on_status=self._show_caption,
+                text_filter=_is_filler,
+                sample_rate=int(self.cfg.sample_rate),
+                interval_seconds=float(getattr(self.cfg, "live_caption_interval_seconds", 0.7)),
+                start_delay_seconds=float(getattr(self.cfg, "live_caption_start_delay_seconds", 0.6)),
+                window_seconds=float(getattr(self.cfg, "streaming_partial_max_audio_seconds", 8.0)),
+                silence_rms=float(getattr(self.cfg, "min_rms_amplitude", 5e-4)) * 2.0,
             )
-            self._streaming_thread.start()
-            logger.debug("Streaming preview started")
+            self._caption_engine_name = engine_name
+            self._caption_session = session
+            session.start()
         except Exception as e:
-            logger.warning(f"Failed to start streaming preview: {e}")
-            self._streaming_transcriber = None
+            self._caption_session = None
+            self._log.warning("live_caption_skipped reason=start_failed error=%s", e)
+            self._show_caption(f"Live caption unavailable: {e}")
 
     def _schedule_streaming_preview(self) -> None:
-        """Delay caption ASR startup so short utterances stay ultra-fast."""
-        if not self.streaming_enabled or not self._model_ready:
+        """Start the live caption, or say on screen and in the log why not."""
+        if not self.streaming_enabled:
+            self._log.info("live_caption_skipped reason=disabled")
             return
-        delay = max(0.0, float(getattr(self.cfg, "live_caption_start_delay_seconds", 1.8)))
-        if delay <= 0.0:
-            self._start_streaming_preview()
+        if not self.is_model_ready():
+            self._log.info("live_caption_skipped reason=model_not_ready")
+            self._show_caption("Speech model still loading - no live caption yet")
             return
-        if self._streaming_start_timer and self._streaming_start_timer.is_alive():
-            return
-
-        def _delayed_start() -> None:
-            if self.rec.is_recording():
-                self._start_streaming_preview()
-
-        self._streaming_start_timer = threading.Timer(delay, _delayed_start)
-        self._streaming_start_timer.daemon = True
-        self._streaming_start_timer.start()
-
-    def _streaming_feed_loop(self) -> None:
-        """Feed audio to streaming transcriber while recording"""
-        last_sample_count = 0
-
-        while self.rec.is_recording() and self._streaming_transcriber:
-            try:
-                # Pull only new samples since last poll; avoids O(n) full-buffer copies on long dictation.
-                new_audio, current_total = self.rec._ring_buffer.get_samples_since(last_sample_count)
-                if len(new_audio) > 0:
-                    self._streaming_transcriber.add_audio(new_audio)
-                    last_sample_count = current_total
-                    if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE and len(new_audio) > 0:
-                        # Lightweight amplitude estimate for visual waveform (no ASR impact).
-                        rms = float(np.sqrt(np.mean(np.square(new_audio))))
-                        denom = max(1e-6, float(getattr(self.cfg, "min_rms_amplitude", 5e-4)) * 12.0)
-                        level = min(1.0, (rms / denom) ** 0.7)
-                        visual_update_audio_level(level)
-                else:
-                    last_sample_count = current_total
-
-                time.sleep(0.18)  # Lower-latency feed without high CPU usage.
-
-            except Exception as e:
-                logger.warning(f"Streaming feed error: {e}")
-                break
+        self._start_streaming_preview()
 
     def _start_audio_visual_monitor(self) -> None:
         """Always-on (during recording) amplitude sampler for waveform visuals."""
@@ -2027,23 +2266,41 @@ class EnhancedApp:
                 break
 
     def _stop_streaming_preview(self) -> None:
-        """Stop streaming preview"""
-        if self._streaming_start_timer and self._streaming_start_timer.is_alive():
-            self._streaming_start_timer.cancel()
-        self._streaming_start_timer = None
+        """End the live caption. Its text stays on screen until the result replaces it.
 
-        if self._streaming_transcriber:
-            try:
-                # Preview stream only; skip expensive final pass to protect long-utterance latency.
-                self._streaming_transcriber.stop(discard_final=True, join_timeout=0.2)
-            except Exception as e:
-                logger.warning(f"Error stopping streaming preview: {e}")
-            finally:
-                self._streaming_transcriber = None
-
-        # Clear visual preview
-        if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
-            visual_clear_preview()
+        Returns at once: a caption decode still in flight is dropped by the
+        session, never shown, so it cannot land on top of the final text.
+        """
+        session, self._caption_session = self._caption_session, None
+        if session is None:
+            return
+        try:
+            summary = session.stop()
+        except Exception as e:
+            self._log.warning("live_caption_stop_failed error=%s", e)
+            return
+        self._last_caption_summary = summary
+        # One line per recording, whatever happened: this is the answer to
+        # "why didn't the caption show".
+        self._log.info(
+            "live_caption_summary outcome=%s engine=%s audio_s=%.1f chars=%d passes=%d commits=%d "
+            "published=%d first_text_ms=%s max_decode_ms=%.0f errors=%d filtered=%d silent=%d "
+            "dropped_late=%d last_error=%s",
+            summary.get("outcome"),
+            getattr(self, "_caption_engine_name", "?"),
+            float(summary.get("audio_seconds", 0.0)),
+            int(summary.get("chars", 0)),
+            int(summary.get("passes", 0)),
+            int(summary.get("commits", 0)),
+            int(summary.get("published", 0)),
+            summary.get("first_text_ms"),
+            float(summary.get("max_decode_ms", 0.0)),
+            int(summary.get("errors", 0)),
+            int(summary.get("filtered", 0)),
+            int(summary.get("skipped_silent", 0)),
+            int(summary.get("dropped_after_stop", 0)),
+            summary.get("last_error") or "-",
+        )
 
     def _observe_adaptive_async(
         self,
@@ -2066,6 +2323,123 @@ class EnhancedApp:
                 logger.debug(f"Adaptive learning observe failed: {learning_error}")
 
         self.postprocess_executor.submit(_task)
+
+    def _record_tuning(
+        self,
+        raw_text: str,
+        final_text: str,
+        metadata: Dict[str, Any],
+        reconstructed_text: Optional[str] = None,
+        reconstruction: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Append one utterance to the local tuning corpus (off the hot path)."""
+        if not self.tuning_log or not getattr(self.tuning_log, "enabled", False):
+            return ""
+        import uuid
+
+        uid = uuid.uuid4().hex[:12]
+        self._recent_utterance_ids.append((final_text, uid))
+
+        def _task() -> None:
+            try:
+                self.tuning_log.append_utterance(
+                    raw_text=raw_text,
+                    final_text=final_text,
+                    reconstructed_text=reconstructed_text,
+                    reconstruction=reconstruction,
+                    metadata=metadata,
+                    utterance_id=uid,
+                )
+            except Exception as exc:
+                logger.debug(f"tuning log write failed: {exc}")
+
+        self.postprocess_executor.submit(_task)
+        return uid
+
+    def _on_async_reconstruction(self, uid: str, raw: str, pasted: str, outcome: Any, usable: bool) -> None:
+        """Runs on the reconstruction worker when a background attempt finishes."""
+        try:
+            if self.tuning_log and uid:
+                self.tuning_log.append_reconstruction(
+                    uid,
+                    reconstructed_text=(outcome.text or None),
+                    reconstruction=dict(outcome.as_log(), path="async", usable=bool(usable)),
+                )
+            self._log.info(
+                "reconstruction_async status=%s reason=%s latency_ms=%.0f usable=%s",
+                outcome.status, outcome.reason, outcome.latency_ms, usable,
+            )
+            if outcome.accepted:
+                # Feed the learner the model's repair (low weight: it is a suggestion, not a user edit).
+                self._observe_adaptive_async(raw, outcome.text, {"source": "reconstruction", "async": True})
+                self._accepted_reconstructions = getattr(self, "_accepted_reconstructions", 0) + 1
+                if (
+                    self.adaptive_learning
+                    and self.tuning_log
+                    and bool(getattr(self.cfg, "hotword_promotion_enabled", True))
+                    and self._accepted_reconstructions % 10 == 0
+                ):
+                    report = self.adaptive_learning.promote_hotwords(self.tuning_log)
+                    self._log.info(
+                        "hotword_promotion promoted=%s candidates=%s",
+                        report.get("promoted_count"), report.get("hotword_candidates"),
+                    )
+            if usable:
+                hotkey = str(getattr(self.cfg, "replace_last_paste_hotkey", "ctrl+alt+r"))
+                print(f"[AI] Better version ready - press {hotkey} to swap it in")
+                if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+                    show_complete(f"Better version ready - {hotkey}")
+        except Exception as exc:
+            self._log.debug("reconstruction_async_handler_failed error=%s", exc)
+
+    def has_pending_improvement(self) -> bool:
+        if self.reconstruction is None:
+            return False
+        return self.reconstruction.has_pending(float(getattr(self.cfg, "replace_last_paste_max_age_s", 120.0)))
+
+    def replace_last_paste(self) -> str:
+        """Swap the last paste for its reconstructed version (hotkey / tray entry)."""
+        if self.reconstruction is None:
+            return "unavailable"
+        max_age = float(getattr(self.cfg, "replace_last_paste_max_age_s", 120.0))
+        pending = self.reconstruction.take_pending(max_age)
+        if pending is None:
+            print("[AI] No improved version to swap in")
+            return "none"
+        replace = getattr(self.injector, "replace_last_paste", None)
+        if replace is None:
+            copied = bool(self.injector.copy_text_to_clipboard(pending.improved_text))
+            return "clipboard:unsupported" if copied else "failed:unsupported"
+        listener = getattr(self, "ptt_listener", None)
+        if listener is not None:
+            try:
+                listener.suppress_event_side_effects(min(3.0, 0.6 + len(pending.pasted_text) / 200.0))
+            except Exception:
+                pass
+        result = str(replace(pending.pasted_text, pending.improved_text, max_age_s=max_age))
+        self._log.info("replace_last_paste result=%s chars=%d", result, len(pending.improved_text))
+        if result == "replaced":
+            self.reconstruction.clear_pending()
+            self.reconstruction.remember(pending.improved_text)
+        message = {
+            "replaced": "Replaced with improved version",
+        }.get(result, "Improved version copied - paste it manually (" + result.split(":", 1)[-1] + ")")
+        print(f"[AI] {message}")
+        if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+            try:
+                show_complete(message)
+            except Exception:
+                pass
+        if self.tuning_log and pending.utterance_id:
+            try:
+                self.tuning_log.append_reconstruction(
+                    pending.utterance_id,
+                    reconstructed_text=pending.improved_text,
+                    reconstruction={"status": "accepted", "applied": result, "path": "async"},
+                )
+            except Exception:
+                pass
+        return result
 
     def handle_manual_correction_feedback(
         self,
@@ -2102,6 +2476,15 @@ class EnhancedApp:
             except Exception as exc:
                 self._log.warning("correction_persist_failed error=%s", exc)
 
+        if self.tuning_log:
+            for pasted, uid in reversed(self._recent_utterance_ids):
+                if pasted.strip() == raw:
+                    try:
+                        self.tuning_log.append_user_edit(uid, corrected)
+                    except Exception as exc:
+                        self._log.debug("tuning_user_edit_failed error=%s", exc)
+                    break
+
         if not self.adaptive_learning:
             return
         self._observe_adaptive_async(raw, corrected, meta)
@@ -2118,6 +2501,61 @@ class EnhancedApp:
         except Exception as exc:
             self._log.warning("history_add_failed error=%s", exc)
             return 0
+
+    #: A hold shorter than this that yields nothing is a stray Ctrl+Shift, not a
+    #: dictation; it is logged but kept out of the history and off the screen.
+    _FAILURE_MIN_AUDIO_SECONDS = 1.0
+    #: Holding the key and saying nothing is not an error. These leave the screen
+    #: alone, and reach the history only when the hold was long enough to have
+    #: been a real attempt.
+    _QUIET_FAILURES = frozenset({"silent", "empty", "non_speech", "no_audio"})
+    _QUIET_FAILURE_MIN_AUDIO_SECONDS = 3.0
+
+    def _history_fail(
+        self,
+        reason: str,
+        *,
+        detail: str = "",
+        text: str = "",
+        audio_seconds: float = 0.0,
+        always: bool = False,
+    ) -> None:
+        """Record a dictation that produced no paste: why, and any text it did produce.
+
+        Until this existed every such path returned to idle without a trace, so
+        a discarded dictation could be neither explained nor recovered.
+        """
+        try:
+            self._log.info(
+                "dictation_failed reason=%s audio_s=%.2f chars=%d detail=%s",
+                reason, float(audio_seconds or 0.0), len(text or ""), detail or "-",
+            )
+            if not always and float(audio_seconds or 0.0) < self._FAILURE_MIN_AUDIO_SECONDS:
+                return
+            quiet = reason in self._QUIET_FAILURES
+            if quiet and not always and float(audio_seconds or 0.0) < self._QUIET_FAILURE_MIN_AUDIO_SECONDS:
+                return
+            entry = {"reason": reason, "detail": detail, "audio_seconds": audio_seconds}
+            summary = failure_summary(entry)
+            if self.history is not None:
+                try:
+                    target = str(self.injector.get_target_context().get("process_name", "") or "")
+                except Exception:
+                    target = ""
+                self.history.add_failure(
+                    reason, detail=detail, text=text, audio_seconds=audio_seconds, target=target
+                )
+            if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+                visual_record_transcription_event(
+                    text or "",
+                    float(audio_seconds or 0.0),
+                    0.0,
+                    metadata={"outcome": "failed", "failure_reason": reason, "failure_summary": summary},
+                )
+                if not quiet:
+                    show_error(f"Nothing pasted: {FAILURE_REASONS.get(reason, reason)} - see Recent")
+        except Exception as exc:
+            self._log.warning("history_fail_record_failed error=%s", exc)
 
     def _history_mark(self, entry_id: int, status: str) -> None:
         if self.history is None or not entry_id:
@@ -2147,7 +2585,7 @@ class EnhancedApp:
         entry = self.history.get(entry_id) if self.history is not None else None
         if not entry:
             return False
-        ok = bool(self.injector.copy_text_to_clipboard(entry["text"]))
+        ok = bool(self.injector.copy_text_to_clipboard(history_copy_text(entry)))
         self._overlay_message("Copied to clipboard" if ok else "Copy failed", error=not ok)
         return ok
 
@@ -2220,6 +2658,8 @@ class EnhancedApp:
         self._disarm_cancel_key()
         try:
             self._stop_streaming_preview()
+            if self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
+                visual_clear_preview()
             self._stop_audio_visual_monitor()
             self._stop_live_checkpoint_monitor()
             self.rec.stop()          # audio is discarded
@@ -2241,8 +2681,8 @@ class EnhancedApp:
             if not self.rec.is_recording():
                 print("[MIC] Listening...")
                 self._log.info("recording_started")
+                _t_press = time.perf_counter()
                 self._reset_checkpoint_state()
-                self.injector.capture_target_window()
                 self._release_target_noted = False
 
                 # Mark state as recording for idle-aware monitoring
@@ -2252,13 +2692,27 @@ class EnhancedApp:
                 if self.visual_indicators_enabled:
                     update_tray_status(self.tray_controller, "listening", True)
                     if VISUAL_INDICATORS_AVAILABLE:
+                        visual_clear_preview()  # the previous result may still be showing
                         show_listening()
 
                 # Audio feedback: high-pitched ping confirms hotkey was registered
                 if getattr(self.cfg, "audio_feedback_beeps", True):
                     _play_beep(880, 60)
 
+                _t_overlay = time.perf_counter()
                 self.rec.start()
+                _t_rec = time.perf_counter()
+                # After the overlay and the microphone, not before them: looking up
+                # the target window's process and title is the slow step here, and
+                # nothing the user sees or says should wait for it. The overlay never
+                # takes focus, so the foreground window is still the one dictated into.
+                self.injector.capture_target_window()
+                self._log.info(
+                    "recording_start_timing overlay_ms=%.1f mic_ms=%.1f target_ms=%.1f",
+                    (_t_overlay - _t_press) * 1000.0,
+                    (_t_rec - _t_overlay) * 1000.0,
+                    (time.perf_counter() - _t_rec) * 1000.0,
+                )
                 self._cancel_pending = False
                 self._arm_cancel_key()
                 try:
@@ -2291,6 +2745,21 @@ class EnhancedApp:
                 if VISUAL_INDICATORS_AVAILABLE:
                     show_error(f"Audio error: {e}")
 
+    def _return_to_idle(self) -> None:
+        """
+        Put every status surface back to idle.
+
+        Call this on EVERY path that abandons a recording without injecting
+        text. Each surface has to be told separately -- the idle monitor, the
+        tray icon, and the floating overlay -- and forgetting the overlay is
+        what used to leave the dock stuck showing "processing" after a
+        suppressed or timed-out transcription.
+        """
+        mark_idle()
+        if self.visual_indicators_enabled:
+            update_tray_status(self.tray_controller, "idle", False)
+            if VISUAL_INDICATORS_AVAILABLE:
+                hide_status()
     def sample_release_target(self):
         """Handle of the window focused right now. Runs synchronously on the key-release
         thread, so it must stay a single cheap OS call; the heavier retarget happens later in
@@ -2357,6 +2826,7 @@ class EnhancedApp:
 
             if audio.size == 0:
                 print("[MIC] No audio captured")
+                self._history_fail("no_audio", detail="check the input device", always=True)
                 # Return to idle state
                 mark_idle()
                 # Update visual indicators - back to idle
@@ -2382,6 +2852,11 @@ class EnhancedApp:
                 # Both conditions must be true - energy AND peak must be below thresholds
                 if audio_energy < silence_threshold and max_amplitude < peak_threshold:
                     print(f"[MIC] Silent audio detected (energy: {audio_energy:.6f}, max: {max_amplitude:.6f}) - skipping transcription")
+                    self._history_fail(
+                        "silent",
+                        detail=f"peak level {max_amplitude:.4f}; check the microphone or its mute switch",
+                        audio_seconds=audio_duration,
+                    )
                     # Return to idle state
                     mark_idle()
                     # Update visual indicators - back to idle
@@ -2435,6 +2910,7 @@ class EnhancedApp:
 
     def _perform_transcription(self, audio_data: np.ndarray) -> str:
         """Perform actual transcription with enhanced error handling and timeout protection"""
+        self._keep_dictation_audio(audio_data)
         # Ensure logger is available (fix for scoping issue)
         logger = logging.getLogger(__name__)
         stage_ms: Dict[str, float] = {}
@@ -2449,6 +2925,7 @@ class EnhancedApp:
         second_pass_mode = "none"
         second_pass_chars_delta = 0
         idle_resume_force_primary = False
+        raw_transcript = ""  # bound on every path (was guarded with locals())
 
         def _capture_model_metadata(engine: Any) -> None:
             nonlocal asr_model_id, asr_model_name, asr_device, asr_compute
@@ -2586,6 +3063,7 @@ class EnhancedApp:
                 )
                 if not bool(getattr(self.cfg, "non_speech_guard_soft_mode", True)):
                     print("[TRANSCRIPTION] Filtered likely non-speech audio burst.")
+                    self._history_fail("non_speech", audio_seconds=raw_audio_duration)
                     mark_idle()
                     if self.visual_indicators_enabled:
                         update_tray_status(self.tray_controller, "idle", False)
@@ -2862,8 +3340,13 @@ class EnhancedApp:
                             suppress_reason,
                             transcription_no_speech_prob,
                         )
-                        mark_idle()
-                        update_tray_status(self.tray_controller, "idle", False)
+                        self._return_to_idle()
+                        self._history_fail(
+                            "filtered",
+                            detail=f"{suppress_reason}, no-speech {transcription_no_speech_prob:.2f}",
+                            text=text,
+                            audio_seconds=raw_audio_duration,
+                        )
                         self._last_transcription_completed_at = time.time()
                         return ""
 
@@ -2871,8 +3354,8 @@ class EnhancedApp:
                     if len(text.strip()) < 3:
                         print("[TRANSCRIPTION] Content too short - skipping")
                         self._log.info("transcription_filtered reason=too_short")
-                        mark_idle()
-                        update_tray_status(self.tray_controller, "idle", False)
+                        self._return_to_idle()
+                        self._history_fail("too_short", text=text, audio_seconds=raw_audio_duration)
                         self._last_transcription_completed_at = time.time()
                         return ""
 
@@ -2881,7 +3364,10 @@ class EnhancedApp:
                 print(f"[TRANSCRIPTION] Timeout after {timeout_seconds}s - skipping")
                 self._log.error("transcription_timeout duration=%.2f timeout=%.2f", audio_duration, timeout_seconds)
                 # Return to idle state after timeout
-                mark_idle()
+                self._return_to_idle()
+                self._history_fail(
+                    "timeout", detail=f"gave up after {timeout_seconds:.0f}s", audio_seconds=raw_audio_duration, always=True
+                )
                 self._last_transcription_completed_at = time.time()
                 return ""
 
@@ -2903,6 +3389,7 @@ class EnhancedApp:
                 )
                 if self.adaptive_learning and text.strip():
                     text = self.adaptive_learning.apply(text)
+                text = self._format_lists(text, destination_profile)
                 text = format_transcript_preserving_breaks(
                     text,
                     destination=destination_context,
@@ -3008,6 +3495,35 @@ class EnhancedApp:
                 )
             stage_ms["postprocess"] = (time.perf_counter() - postprocess_start) * 1000.0
 
+            # VF-17 reconstruction pass. Runs on the finished text; its output is
+            # only used if every guard passes, so the worst case is today's text.
+            # In `auto` mode this is asynchronous unless the model has proven it
+            # fits the budget, so the paste is not delayed (see
+            # voiceflow.ai.reconstruction_runtime).
+            recon_job = None
+            recon_outcome = None
+            recon_synchronous = False
+            if text.strip() and self.reconstruction is not None and not effective_code_mode:
+                try:
+                    stage_start = time.perf_counter()
+                    recon_job = self.reconstruction.begin(
+                        text,
+                        raw_transcript or text,
+                        code_mode=effective_code_mode,
+                        destination_profile=destination_profile,
+                    )
+                    if recon_job is not None:
+                        wait_s = self.reconstruction.sync_wait_s()
+                        recon_outcome = recon_job.wait(wait_s) if wait_s > 0 else None
+                        if recon_outcome is not None and recon_outcome.accepted:
+                            text = recon_outcome.text
+                            recon_synchronous = True
+                    stage_ms["reconstruction_wait"] = (time.perf_counter() - stage_start) * 1000.0
+                    self.reconstruction.added_latency.record(stage_ms["reconstruction_wait"])
+                except Exception as recon_exc:
+                    self._log.warning("reconstruction_stage_failed error=%s", recon_exc)
+                    recon_job = None
+
             # Performance tracking
             transcription_time = time.perf_counter() - start_time
             self._total_transcription_time += transcription_time
@@ -3050,6 +3566,7 @@ class EnhancedApp:
                 perf_snapshot["status"],
             )
             final_transcription_path = retry_strategy if retry_used else asr_path
+            text = self._auto_paragraphs(text, destination_profile)
             if self.visual_indicators_enabled and text.strip():
                 visual_record_transcription_event(
                     text,
@@ -3067,6 +3584,7 @@ class EnhancedApp:
 
             # Inject text
             inject_start = time.perf_counter()
+            inject_ok = False
             if text.strip():
                 # Mark as injecting
                 mark_injecting()
@@ -3162,11 +3680,52 @@ class EnhancedApp:
             )
 
             if text.strip():
+                tuning_meta = {
+                    "source": "runtime_transcription",
+                    "model_tier": getattr(self.cfg, "model_tier", ""),
+                    "code_mode": bool(self.code_mode),
+                    "course_corrected": course_corrected,
+                    "correction_type": correction_type,
+                    "audio_duration": round(audio_duration, 3),
+                    "raw_audio_duration": round(raw_audio_duration, 3),
+                    "compacted_audio_duration": round(compacted_audio_duration, 3),
+                    "compaction_reduction_pct": round(compaction_reduction_pct, 2),
+                    "retry_used": bool(retry_used),
+                    "retry_strategy": retry_strategy,
+                    "transcription_path": final_transcription_path,
+                    "processing_time": round(transcription_time, 3),
+                    "second_pass_mode": second_pass_mode,
+                }
+                recon_log: Optional[Dict[str, Any]] = None
+                recon_text: Optional[str] = None
+                if recon_job is not None:
+                    if recon_outcome is not None:
+                        recon_log = dict(recon_outcome.as_log(), path="sync")
+                        recon_text = recon_outcome.text or None
+                    else:
+                        recon_log = {"status": "pending", "path": "async"}
+                    recon_log["wait_ms"] = round(stage_ms.get("reconstruction_wait", 0.0), 1)
+                uid = self._record_tuning(
+                    raw_transcript or text, text, tuning_meta,
+                    reconstructed_text=recon_text, reconstruction=recon_log,
+                )
+                if self.reconstruction is not None:
+                    self.reconstruction.remember(text)
+                    if recon_job is not None and recon_outcome is None:
+                        self.reconstruction.attach_async(
+                            recon_job,
+                            utterance_id=uid,
+                            pasted_text=text,
+                            replaceable=inject_ok,
+                            on_done=lambda outcome, usable, _uid=uid, _raw=(raw_transcript or text), _pasted=text: (
+                                self._on_async_reconstruction(_uid, _raw, _pasted, outcome, usable)
+                            ),
+                        )
                 self._observe_adaptive_async(
-                    raw_transcript if 'raw_transcript' in locals() else text,
+                    raw_transcript or text,
                     text,
                     {
-                        "source": "runtime_transcription",
+                        "source": "reconstruction" if recon_synchronous else "runtime_transcription",
                         "model_tier": getattr(self.cfg, "model_tier", ""),
                         "code_mode": bool(self.code_mode),
                         "course_corrected": course_corrected,
@@ -3193,6 +3752,8 @@ class EnhancedApp:
                 update_tray_status(self.tray_controller, "idle", False)
                 if VISUAL_INDICATORS_AVAILABLE:
                     hide_status()
+            if not text.strip():
+                self._history_fail("empty", audio_seconds=raw_audio_duration)
 
             self._last_transcription_completed_at = time.time()
             return text
@@ -3201,6 +3762,7 @@ class EnhancedApp:
             print(f"[TRANSCRIPTION] Error: {e}")
             traceback.print_exc()
             self._log.exception("transcription_error: %s", e)
+            self._history_fail("error", detail=f"{type(e).__name__}: {e}", always=True)
 
             # Mark error state
             mark_error(f"Transcription error: {e}")
@@ -3298,6 +3860,41 @@ class EnhancedApp:
         print("[EnhancedApp] Shutdown complete")
 
 
+def _run_launch_selfcheck(alog: Any, runtime_log: logging.Logger) -> Dict[str, Any]:
+    """Prove this launch can log and keep history, and record how it was launched.
+
+    Never raises: a broken self-check must not stop VoiceFlow from starting.
+    """
+    try:
+        from voiceflow.utils.launch_diagnostics import run_startup_selfcheck
+
+        streams: Dict[str, str] = {}
+        for part in str(os.environ.get("VOICEFLOW_LAUNCH_STREAMS", "")).split(";"):
+            if "=" in part:
+                key, value = part.split("=", 1)
+                streams[key.strip()] = value.strip()
+        report = run_startup_selfcheck(
+            log_write=runtime_log.info,
+            active_log_path=Path(alog.active_log_path),
+            marker_path=Path(alog.active_log_marker_path),
+            data_dir=config_dir(),
+            original_streams=streams or None,
+        )
+        if report.get("ok"):
+            runtime_log.info(
+                "startup_selfcheck_ok token=%s parent=%s",
+                report.get("token"),
+                report.get("context", {}).get("parent"),
+            )
+        return report
+    except Exception as exc:
+        try:
+            runtime_log.exception("startup_selfcheck_crashed")
+        except Exception:
+            pass
+        return {"ok": False, "problems": [f"self-check crashed: {type(exc).__name__}: {exc}"]}
+
+
 def main(argv=None):
     """Enhanced main with better error handling and monitoring"""
     if not _acquire_single_instance_mutex():
@@ -3361,6 +3958,7 @@ def main(argv=None):
     runtime_log = _alog.get()
     runtime_log.info("single_instance_ok pid=%d", os.getpid())
     runtime_log.info("single_instance_watchdog_started interval_s=2.0")
+    startup_selfcheck = _run_launch_selfcheck(_alog, runtime_log)
 
     # Start idle-aware monitoring for long-running operation
     print(
@@ -3460,6 +4058,35 @@ def main(argv=None):
     else:
         runtime_log.info("tray_disabled_by_config")
 
+    # A CPU fallback that happened while the tray was still starting, and a
+    # self-check that could not read its own records back, both need to be seen.
+    # The fallback event fires during EnhancedApp.__init__ (preload), before the
+    # tray exists, so this is the first moment it can actually be shown: announce
+    # it here, not just as a tooltip nobody hovers over.
+    app._apply_device_warning(announce=bool(app._device_warning))
+    if not startup_selfcheck.get("ok", False):
+        problems = "; ".join(startup_selfcheck.get("problems", [])) or "self-check failed"
+        runtime_log.error("startup_selfcheck_failed problems=%s", problems)
+        try:
+            if tray is not None and hasattr(tray, "show_warning"):
+                tray.show_warning("Logging or history is not recording - see startup_selfcheck.json")
+        except Exception:
+            runtime_log.exception("startup_selfcheck_warning_failed")
+    try:
+        from voiceflow.ui.visual_indicators import set_history_failure_handler
+
+        def _on_history_failure(path: str, reason: str) -> None:
+            runtime_log.error("history_not_recorded path=%s reason=%s", path, reason)
+            try:
+                if tray is not None and hasattr(tray, "show_warning"):
+                    tray.show_warning("Dictation history is not being saved - see the log")
+            except Exception:
+                pass
+
+        set_history_failure_handler(_on_history_failure)
+    except Exception:
+        runtime_log.debug("history_failure_handler_unavailable", exc_info=True)
+
     # Keep dock feedback alive even if tray startup fails.
     if not tray and app.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE:
         try:
@@ -3521,6 +4148,20 @@ def main(argv=None):
             _repaste_chord,
             lambda: threading.Thread(target=app.repaste_last, daemon=True).start(),
             "repaste_last",
+        )
+
+    def _replace_last_paste_hotkey() -> None:
+        # Never do keyboard work inside the keyboard-hook callback.
+        threading.Thread(target=app.replace_last_paste, daemon=True, name="ReplaceLastPaste").start()
+
+    if app.reconstruction is not None:
+        enable_tracking = getattr(app.injector, "enable_replace_tracking", None)
+        if enable_tracking is not None:
+            runtime_log.info("replace_last_paste_tracking live=%s", bool(enable_tracking()))
+        _register_hotkey(
+            str(getattr(cfg, "replace_last_paste_hotkey", "ctrl+alt+r") or "ctrl+alt+r"),
+            _replace_last_paste_hotkey,
+            "replace_last_paste",
         )
 
     # Enhanced PTT listener with tail-end buffer

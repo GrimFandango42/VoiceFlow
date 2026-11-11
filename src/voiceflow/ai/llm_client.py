@@ -84,6 +84,9 @@ class OllamaClient:
         system: Optional[str] = None,
         temperature: float = 0.1,
         max_tokens: int = 500,
+        timeout: Optional[float] = None,
+        extra_options: Optional[dict] = None,
+        keep_alive: Optional[str] = None,
     ) -> LLMResponse:
         """
         Generate text using Ollama.
@@ -93,6 +96,9 @@ class OllamaClient:
             system: Optional system prompt
             temperature: Sampling temperature (0.0 = deterministic)
             max_tokens: Maximum tokens to generate
+            timeout: Per-call HTTP timeout in seconds (defaults to the client's)
+            extra_options: Extra Ollama ``options`` (e.g. ``{"num_gpu": 0}`` to stay on CPU)
+            keep_alive: Ollama ``keep_alive`` (how long the model stays loaded)
 
         Returns:
             LLMResponse with generated text
@@ -116,6 +122,10 @@ class OllamaClient:
                 },
             }
 
+            if extra_options:
+                payload["options"].update(extra_options)
+            if keep_alive:
+                payload["keep_alive"] = keep_alive
             if system:
                 payload["system"] = system
 
@@ -126,7 +136,7 @@ class OllamaClient:
                 headers={"Content-Type": "application/json"},
             )
 
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as response:
                 result = json.loads(response.read().decode('utf-8'))
 
             return LLMResponse(

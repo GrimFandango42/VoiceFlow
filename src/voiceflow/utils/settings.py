@@ -212,6 +212,122 @@ def _apply_performance_migrations(cfg: Config) -> bool:
     return changed
 
 
+_MODEL_NAME_FIELDS = ("model_name", "fast_model_name", "quality_model_name")
+
+
+def _apply_model_key_migration(cfg: Config) -> bool:
+    """Rewrite a legacy model key to the key whose weights it actually loads (VF-18).
+
+    ``distil-large-v3.5`` never loaded v3.5 (no CTranslate2 export existed when
+    the key was added); it loaded the distil-large-v3 weights. Persisting the
+    key that matches the weights keeps the saved config, the displayed label and
+    the log line in agreement. The real v3.5 export is a separate opt-in key,
+    ``distil-large-v3.5-ct2``, which this never touches.
+    """
+    from voiceflow.core.asr_engine import canonical_model_key
+
+    changed = False
+    for field in _MODEL_NAME_FIELDS:
+        current = getattr(cfg, field, None)
+        if not isinstance(current, str) or not current:
+            continue
+        canonical = canonical_model_key(current)
+        if canonical != current:
+            setattr(cfg, field, canonical)
+            changed = True
+    return changed
+
+
+SINGLE_MODEL_MIGRATION_VERSION = 1
+
+
+def _apply_single_model_migration(cfg: Config) -> bool:
+    """Turn the tiny.en fast path off once on GPU setups (VF-18 item 7).
+
+    ``save_config`` persists every field, so a config written while
+    ``latency_boost_enabled`` defaulted to True carries it forever and flipping
+    the default alone would change nothing for an existing install. On a GPU the
+    main model is within ~65 ms of tiny.en on short clips, so the second model
+    is dropped (one preload thread, one warmup, one set of weights in VRAM).
+    CPU setups keep it: there it saves about a second per clip. The version
+    marker makes this run once, so a user who later turns the fast path back on
+    keeps it.
+
+    On a GPU-configured install the marker is recorded only once the migration
+    has really happened (CUDA confirmed and the fast path off). A launch where
+    CUDA is unavailable (CPU fallback, forced CPU, runtime check failure) leaves
+    the marker unset, so the next launch with a working GPU still migrates
+    instead of keeping tiny.en loaded forever.
+    """
+    try:
+        seen = int(getattr(cfg, "single_model_migration_version", 0) or 0)
+    except Exception:
+        seen = 0
+    if seen >= SINGLE_MODEL_MIGRATION_VERSION:
+        return False
+    device = str(getattr(cfg, "device", "") or "").strip().lower()
+    gpu_setup = bool(getattr(cfg, "enable_gpu_acceleration", False)) and device in {"cuda", "auto"}
+    if gpu_setup and bool(getattr(cfg, "latency_boost_enabled", False)):
+        # Only where CUDA actually works here; a GPU-configured machine that
+        # runs on CPU keeps the fast path that makes short clips tolerable,
+        # and is looked at again on the next launch.
+        try:
+            from voiceflow.core.asr_engine import _cuda_runtime_ready
+
+            cuda_ok = bool(_cuda_runtime_ready())
+        except Exception:
+            cuda_ok = False
+        if not cuda_ok:
+            return False
+        cfg.latency_boost_enabled = False
+    cfg.single_model_migration_version = SINGLE_MODEL_MIGRATION_VERSION
+    return True
+
+
+VF19_MIGRATION_VERSION = 2
+
+
+def _apply_vf19_migration(cfg: Config) -> bool:
+    """One-time changes for existing installs (``save_config`` persists every field).
+
+    * Pause compaction off on a working GPU. It cuts silence out of the audio
+      before decoding to save time; at ~60x real time on CUDA that saves about
+      50 ms and costs splices in the audio the model hears.
+    * Reconstruction limited to short dictations. The local model runs on CPU;
+      on anything long it held half the cores for ~50 s and then timed out.
+    * The caption shows what fits its two lines.
+    """
+    try:
+        seen = int(getattr(cfg, "vf19_migration_version", 0) or 0)
+    except Exception:
+        seen = 0
+    if seen >= VF19_MIGRATION_VERSION:
+        return False
+    cfg.vf19_migration_version = VF19_MIGRATION_VERSION
+    # v2: the background reconstruction pass off. Measured on 2026-11-10: it ran
+    # a local 8B model on every CPU core for 13-52 s after each dictation, 16 of
+    # 17 results were unusable, and dictations made meanwhile decoded up to 80x
+    # slower. It stays available as an opt-in.
+    cfg.reconstruction_enabled = False
+    if seen >= 1:
+        return True
+    if int(getattr(cfg, "reconstruction_max_chars", 2000) or 2000) > 400:
+        cfg.reconstruction_max_chars = 400
+    if int(getattr(cfg, "live_caption_max_chars", 150) or 150) > 150:
+        cfg.live_caption_max_chars = 150
+    device = str(getattr(cfg, "device", "") or "").strip().lower()
+    gpu_setup = bool(getattr(cfg, "enable_gpu_acceleration", False)) and device in {"cuda", "auto"}
+    if gpu_setup and bool(getattr(cfg, "enable_pause_compaction", True)):
+        try:
+            from voiceflow.core.asr_engine import _cuda_runtime_ready
+
+            if _cuda_runtime_ready():
+                cfg.enable_pause_compaction = False
+        except Exception:
+            pass
+    return True
+
+
 CLOUD_LEARNING_CONSENT_VERSION = 1
 
 
@@ -280,7 +396,14 @@ def load_config(defaults: Config) -> Config:
         pass
 
     changed = _apply_performance_migrations(defaults)
+    changed = _apply_single_model_migration(defaults) or changed
+    changed = _apply_vf19_migration(defaults) or changed
     changed = _apply_cloud_learning_consent_migration(defaults) or changed
+    try:
+        changed = _apply_model_key_migration(defaults) or changed
+    except Exception:
+        # Never block startup on a label migration; the engine still aliases it.
+        pass
     try:
         validation_changed = pre_validation_state is not None and asdict(defaults) != pre_validation_state
     except Exception:

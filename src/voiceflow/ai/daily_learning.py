@@ -839,6 +839,19 @@ class DailyLearningJob:
                 entry_map[key] = int(entry_map.get(key, 0)) + int(value)
             self._save_insights_state(insights_state)
 
+        # VF-17: promote repeated phonetic misses (from accepted reconstructions and
+        # explicit user edits in the local tuning log) to the vocabulary. Local only.
+        hotword_promotion: Dict[str, Any] | None = None
+        if bool(getattr(self.cfg, "hotword_promotion_enabled", True)):
+            try:
+                from voiceflow.ai.tuning_log import TuningLog
+
+                hotword_promotion = self.manager.promote_hotwords(
+                    TuningLog(self.base_dir / "tuning_log.jsonl"), write=not dry_run
+                )
+            except Exception as exc:  # learning must never fail the nightly run
+                hotword_promotion = {"error": str(exc)}
+
         run_ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         report_path = self.report_dir / f"daily_learning_{target_date.isoformat()}_{run_ts}.json"
         stats = DailyLearningStats(
@@ -873,6 +886,7 @@ class DailyLearningJob:
                 "insights_path": str(self.insights_path),
             },
             "ai_learning_analysis": ai_learning_analysis,
+            "hotword_promotion": hotword_promotion,
             "adaptive_snapshot": self.manager.snapshot(max_rules=12, max_tokens=20),
             "paths": {
                 "base_dir": str(self.base_dir),
