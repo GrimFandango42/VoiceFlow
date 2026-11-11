@@ -4,6 +4,7 @@
 .PHONY: test-docker test-local test-ci clean setup install-deps
 .PHONY: report analytics baseline docker-build docker-test
 .PHONY: lint format check-security quality-gates
+.PHONY: vf-eval
 
 # Default target
 .DEFAULT_GOAL := help
@@ -28,6 +29,10 @@ help: ## Show this help message
 	@echo "  make test-comprehensive # Run all tests"
 	@echo "  make test-docker        # Run tests in Docker"
 	@echo "  make report            # Generate analytics report"
+
+# VF-17: scenario evaluation (before/after table; needs Ollama for the reconstruction columns)
+vf-eval: ## VF-17 scenario evaluation. Example: make vf-eval ARGS="--no-llm --scenarios tail,noise"
+	$(PYTHON) scripts/vf_eval.py $(ARGS)
 
 # Setup and installation
 setup: ## Set up the testing environment
