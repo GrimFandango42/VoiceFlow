@@ -1,7 +1,18 @@
 param(
     [string]$PythonExe = "",
     [string]$OutputName = "VoiceFlow",
+    # Reusing PyInstaller's module cache shipped a bundle built from modules
+    # dated 2026-09-13 while every other signal said the build was current:
+    # no logging, no transcription history, no live caption, and a stamp
+    # naming the right commit. Cold builds are now the default; -ReuseCache
+    # trades that safety for speed when iterating.
+    [switch]$ReuseCache,
+    # Kept for callers that already pass it. Cleaning is now unconditional
+    # unless -ReuseCache is given, so this is a no-op.
     [switch]$Clean,
+    # Skip running the finished bundle to check it works. Only for building on
+    # a machine that cannot run it (no GPU, or a CI box without audio).
+    [switch]$SkipSmokeTest,
     [switch]$OneFile,
     [switch]$Console,
     [switch]$InstallPackagingDeps,
@@ -10,7 +21,10 @@ param(
     # CPU int8. That shipped twice by accident, so it now needs an explicit
     # opt-in; without it a missing CUDA runtime fails the build.
     [switch]$AllowCpuOnly,
-    [switch]$SkipProcessCleanup
+    [switch]$SkipProcessCleanup,
+    # How many timestamped build snapshots to keep in dist\packages. Each is
+    # ~2 GB. Published release assets are never pruned. 0 keeps all of them.
+    [int]$KeepPackages = 2
 )
 
 Set-StrictMode -Version Latest
@@ -198,9 +212,12 @@ function Remove-DuplicateCudaDlls {
                 $rootLen = (Get-Item $rootDll.FullName).Length
                 $torchLen = (Get-Item $torchDll).Length
                 if ($rootLen -eq $torchLen) {
-                    Remove-Item -Path $rootDll.FullName -Force -ErrorAction SilentlyContinue
+                    # Drop the torch/lib copy and keep the root one. The root is the
+                    # only directory Windows searches before ctranslate2.dll loads, so
+                    # removing it there is what silently demotes a build to CPU.
+                    Remove-Item -Path $torchDll -Force -ErrorAction SilentlyContinue
                     $removed += 1
-                    Write-Host "[build_windows_exe] Removed duplicate CUDA runtime: $($rootDll.Name)"
+                    Write-Host "[build_windows_exe] Removed duplicate CUDA runtime from torch/lib: $($rootDll.Name)"
                 }
             }
         }
@@ -209,6 +226,200 @@ function Remove-DuplicateCudaDlls {
     if ($removed -gt 0) {
         Write-Host ("[build_windows_exe] Removed duplicate CUDA DLL copies: {0}" -f $removed)
     }
+}
+
+function Assert-BundleBehaves {
+    <#
+      Run the thing we just built and check it actually works.
+
+      On 2026-11-07 a bundle shipped with no logging, no transcription history
+      and no live caption, because PyInstaller reused cached modules dated
+      2026-09-13. Every signal was green: the build reported success, 325 tests
+      passed against the source, and the embedded stamp named the right commit.
+      The stamp records what the source said, not what got compiled in, so it
+      cannot catch this. Only running the artifact can.
+
+      Checks, against a throwaway LOCALAPPDATA so a user's real log and history
+      are never touched:
+        * the app writes a log at all -- the symptom that hid the rest
+        * AsyncLogger actually initialised (single_instance_ok)
+        * it reached device=cuda, not a silent CPU demotion
+
+      A run that cannot be judged -- because another instance holds the
+      single-instance mutex -- warns loudly rather than passing quietly. The
+      whole lesson here is that a check which cannot tell pass from fail is
+      worse than no check.
+    #>
+    param(
+        [string]$BundleRoot,
+        [string]$ExeName,
+        [switch]$ExpectCuda
+    )
+
+    $exe = Join-Path $BundleRoot ($ExeName + ".exe")
+    if (-not (Test-Path $exe)) {
+        throw "[build_windows_exe] Smoke test: built exe not found at $exe"
+    }
+
+    if (Get-Process -Name $ExeName -ErrorAction SilentlyContinue) {
+        Write-Warning "[build_windows_exe] Smoke test SKIPPED: an instance of $ExeName is already running."
+        return
+    }
+
+    $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("vf-smoke-" + [Guid]::NewGuid().ToString("N").Substring(0,8))
+    New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
+    $logPath = Join-Path $sandbox "VoiceFlow\logs\voiceflow.log"
+
+    $savedLocal = $env:LOCALAPPDATA
+    $proc = $null
+    try {
+        $env:LOCALAPPDATA = $sandbox
+        $proc = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+
+        $deadline = (Get-Date).AddSeconds(90)
+        $text = ""
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 3
+            if (Test-Path $logPath) {
+                try {
+                    $text = Get-Content $logPath -Raw -ErrorAction Stop
+                } catch {
+                    $text = ""
+                }
+                if ($text -match "asr_engine_initialized") { break }
+            }
+            if ($proc.HasExited) { break }
+        }
+
+        if ($proc.HasExited -and -not ($text -match "asr_engine_initialized")) {
+            Write-Warning ("[build_windows_exe] Smoke test INCONCLUSIVE: the exe exited early " +
+                           "(code " + $proc.ExitCode + "). Most often another VoiceFlow holds the " +
+                           "single-instance mutex. Re-run with nothing else running to get a verdict.")
+            return
+        }
+
+        if (-not (Test-Path $logPath)) {
+            throw ("[build_windows_exe] Smoke test FAILED: the bundle wrote no log at all. " +
+                   "This is the 2026-11-07 failure -- a bundle that runs but persists nothing. " +
+                   "Rebuild with -Clean; PyInstaller may be serving cached modules.")
+        }
+        if ($text -notmatch "single_instance_ok") {
+            throw ("[build_windows_exe] Smoke test FAILED: log exists but AsyncLogger never " +
+                   "initialised (no single_instance_ok). The bundle's startup diverges from source.")
+        }
+        if ($ExpectCuda -and ($text -notmatch "device=cuda")) {
+            $demoted = if ($text -match "device=cpu") { " It reported device=cpu." } else { "" }
+            throw ("[build_windows_exe] Smoke test FAILED: the bundle did not reach the GPU." + $demoted +
+                   " Whisper on CPU int8 is roughly 85x slower. Pass -SkipCudaRuntime to accept this.")
+        }
+
+        $verdict = "logging OK"
+        if ($ExpectCuda) { $verdict += ", device=cuda OK" }
+        Write-Host "[build_windows_exe] Smoke test passed: $verdict."
+    }
+    finally {
+        if ($proc -and -not $proc.HasExited) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        }
+        $env:LOCALAPPDATA = $savedLocal
+        Remove-Item $sandbox -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Remove-StaleBuildArtifacts {
+    <#
+      Keep the last few build snapshots and delete the rest.
+
+      Every build drops a ~2 GB timestamped zip into dist\packages and nothing
+      ever removed them: by 2026-11-07 that was 15.5 GB of snapshots, most of
+      them months old, on a disk with 34 GB free. The published release assets
+      live in the same folder, so prune by name pattern and never touch a file
+      that does not carry a build timestamp.
+    #>
+    param(
+        [string]$PackagePath,
+        [int]$Keep = 2
+    )
+
+    # 0 means keep everything, as the -KeepPackages help says.
+    if ($Keep -le 0) {
+        return
+    }
+
+    if (-not (Test-Path $PackagePath)) {
+        return
+    }
+
+    # Only files this script generates: <name>-YYYYMMDD-HHMMSS-(portable|onefile).zip.
+    # Release assets (VoiceFlow-win64.exe, VoiceFlow-portable-win64.zip,
+    # SHA256SUMS.txt) carry no timestamp and are therefore never matched.
+    $snapshots = Get-ChildItem -Path $PackagePath -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '-\d{8}-\d{6}-(portable|onefile)\.zip$' } |
+        Sort-Object LastWriteTime -Descending
+
+    if ($snapshots.Count -le $Keep) {
+        return
+    }
+
+    $freed = 0
+    foreach ($old in ($snapshots | Select-Object -Skip $Keep)) {
+        $freed += $old.Length
+        Remove-Item -Path $old.FullName -Force -ErrorAction SilentlyContinue
+        Write-Host "[build_windows_exe] Pruned old build snapshot: $($old.Name)"
+    }
+
+    if ($freed -gt 0) {
+        Write-Host ("[build_windows_exe] Reclaimed {0:N1} GB; keeping the {1} most recent snapshots." -f ($freed / 1GB), $Keep)
+    }
+}
+
+function Assert-CudaRuntimeComplete {
+    <#
+      Fail the build rather than ship a bundle that will quietly run on CPU.
+
+      cudnn64_9.dll is only a front end; it loads the cudnn_* engine and
+      subsystem DLLs by name at runtime. Ship a partial set and nothing errors:
+      ctranslate2 reports zero CUDA devices, _cuda_runtime_ready() returns
+      false, and Whisper runs int8 on the CPU roughly 85x slower with no
+      message beyond one warning in a log nobody reads. A build that cannot
+      honour device=cuda should not reach a user silently.
+    #>
+    param([string]$BundleRoot)
+
+    # The bundle root is the only location Windows searches before our code runs.
+    $cudaDir = Join-Path $BundleRoot "_internal"
+    $required = @(
+        "cudnn64_9.dll",
+        "cudnn_ops64_9.dll",
+        "cudnn_graph64_9.dll",
+        "cudnn_cnn64_9.dll",
+        "cudnn_adv64_9.dll",
+        "cudnn_engines_precompiled64_9.dll",
+        "cudnn_engines_runtime_compiled64_9.dll",
+        "cudnn_heuristic64_9.dll",
+        "cublas64_12.dll",
+        "cublasLt64_12.dll"
+    )
+
+    $missing = @()
+    foreach ($dll in $required) {
+        $path = Join-Path $cudaDir $dll
+        if (-not (Test-Path $path)) {
+            $missing += $dll
+        } elseif ((Get-Item $path).Length -eq 0) {
+            $missing += ($dll + " (zero bytes)")
+        }
+    }
+
+    if ($missing.Count -gt 0) {
+        throw ("[build_windows_exe] Incomplete CUDA runtime in bundle; this build would " +
+               "silently run on CPU. Missing from the bundle root: " + ($missing -join ", ") +
+               ". Install the NVIDIA runtime wheels (pip install nvidia-cublas-cu12 " +
+               "nvidia-cudnn-cu12) and rebuild, or pass -SkipCudaRuntime to accept a " +
+               "deliberately CPU-only package.")
+    }
+
+    Write-Host ("[build_windows_exe] CUDA runtime verified: {0}/{0} required DLLs present." -f $required.Count)
 }
 
 function Get-CudaRuntimeDlls {
@@ -220,6 +431,24 @@ function Get-CudaRuntimeDlls {
     $candidates = @()
     if ($env:VOICEFLOW_TORCH_LIB_DIR) {
         $candidates += $env:VOICEFLOW_TORCH_LIB_DIR
+    }
+
+    # Prefer the standalone NVIDIA runtime wheels. They are the only source that
+    # is both coherent (cuDNN ships its whole dependency chain) and stable --
+    # unlike torch, which may be a CPU-only build, and unlike a previous bundle,
+    # which lives in the directory this build is about to overwrite.
+    try {
+        $nvidiaRoot = (& $PythonExe -c "import importlib.util,pathlib;print(pathlib.Path(importlib.util.find_spec('nvidia').submodule_search_locations[0]))" 2>$null | Select-Object -First 1)
+        if ($nvidiaRoot) {
+            $nvidiaPath = $nvidiaRoot.ToString().Trim()
+            if ($nvidiaPath) {
+                foreach ($pkg in @("cudnn", "cublas", "cuda_runtime", "cufft", "curand", "cusolver", "cusparse", "cuda_nvrtc")) {
+                    $candidates += (Join-Path $nvidiaPath ($pkg + "\bin"))
+                }
+            }
+        }
+    } catch {
+        # no-op
     }
 
     try {
@@ -473,7 +702,10 @@ $args = @(
     "--specpath", $specPath
 )
 
-if ($Clean) {
+if ($ReuseCache) {
+    Write-Warning ("[build_windows_exe] Reusing PyInstaller's cache. This has shipped months-old " +
+                   "modules in a bundle whose stamp named the current commit. Do not release this build.")
+} else {
     $args += "--clean"
 }
 if ($OneFile) {
@@ -505,10 +737,22 @@ if (-not $SkipCudaRuntime) {
     }
     if ($cudaDlls.Count -gt 0) {
         foreach ($dll in $cudaDlls) {
-            # Bundle CUDA runtime DLLs when available so packaged builds can run GPU path
-            # without depending on system-wide torch installs.
-            # Keep them under torch/lib to avoid duplicate giant DLL copies at bundle root.
-            $args += @("--add-binary", ($dll + ";torch/lib"))
+            # Bundle CUDA runtime DLLs so packaged builds can run the GPU path without
+            # depending on a system-wide torch install.
+            #
+            # These MUST land at the bundle root, not under torch/lib. PyInstaller puts
+            # the root (sys._MEIPASS) on the DLL search path before any Python runs, and
+            # Windows resolves a DLL's dependencies when it loads. ctranslate2.dll loads
+            # the moment ctranslate2 is imported -- earlier than any code of ours -- so if
+            # cuDNN and cuBLAS are not already findable at that instant, ctranslate2
+            # initialises with CUDA unavailable and reports zero devices for the life of
+            # the process. Registering the directory afterwards is too late: that is why
+            # a bundle with a verified-complete torch/lib still ran on CPU.
+            #
+            # Landing at the root also avoids synthesising a 'torch' package directory,
+            # which turned the deliberate --exclude-module torch into a hollow namespace
+            # package: 'import torch' then succeeded and 'torch.Tensor' raised instead.
+            $args += @("--add-binary", ($dll + ";."))
         }
         Write-Host ("[build_windows_exe] Bundling CUDA runtime DLLs: {0}" -f $cudaDlls.Count)
     } elseif ($AllowCpuOnly) {
@@ -576,9 +820,13 @@ if ($OneFile) {
     }
     Remove-ConflictingRuntimeDlls -BundleRoot $bundleRoot
     Remove-DuplicateCudaDlls -BundleRoot $bundleRoot
-
     Invoke-BundleVerification -Target $bundleRoot
-
+    if (-not $SkipCudaRuntime) {
+        Assert-CudaRuntimeComplete -BundleRoot $bundleRoot
+    }
+    if (-not $SkipSmokeTest) {
+        Assert-BundleBehaves -BundleRoot $bundleRoot -ExeName $OutputName -ExpectCuda:(-not $SkipCudaRuntime)
+    }
     $zipOut = Join-Path $packagePath "$OutputName-$timestamp-portable.zip"
     Write-Host "[build_windows_exe] Built bundled executable: $(Join-Path $bundleRoot "$OutputName.exe")"
     if (Compress-ArchiveWithRetry -Path @((Join-Path $bundleRoot "*")) -DestinationPath $zipOut) {
@@ -586,4 +834,5 @@ if ($OneFile) {
     } else {
         Write-Warning "[build_windows_exe] Continuing without zip artifact. Bundled build directory is still available."
     }
+    Remove-StaleBuildArtifacts -PackagePath $packagePath -Keep $KeepPackages
 }

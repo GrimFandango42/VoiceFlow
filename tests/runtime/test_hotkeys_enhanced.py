@@ -59,3 +59,102 @@ def test_short_press_release_stops_without_listener_lock_deadlock(monkeypatch):
             listener._lock.release()
     finally:
         listener.stop()
+
+
+def _make_listener(monkeypatch, state, on_start=None, on_stop=None):
+    """Wire a listener to a fake keyboard whose physical state is `state`."""
+    monkeypatch.setattr(hotkeys_mod.keyboard, "KEY_DOWN", "down", raising=False)
+    monkeypatch.setattr(hotkeys_mod.keyboard, "KEY_UP", "up", raising=False)
+    monkeypatch.setattr(hotkeys_mod.keyboard, "is_pressed", lambda key: bool(state.get(key, False)))
+    monkeypatch.setattr(hotkeys_mod.keyboard, "hook", lambda callback: object())
+    monkeypatch.setattr(hotkeys_mod.keyboard, "unhook", lambda hook: None)
+    monkeypatch.setattr(hotkeys_mod.keyboard, "block_key", lambda key: None)
+    monkeypatch.setattr(hotkeys_mod.keyboard, "unblock_key", lambda key: None)
+
+    cfg = Config()
+    cfg.hotkey_ctrl = True
+    cfg.hotkey_shift = True
+    cfg.hotkey_alt = False
+    cfg.hotkey_key = ""
+
+    return hotkeys_mod.EnhancedPTTHotkeyListener(
+        cfg=cfg,
+        on_start=on_start or (lambda: None),
+        on_stop=on_stop or (lambda: None),
+    )
+
+
+def test_stale_modifier_cannot_start_recording_on_single_key_tap(monkeypatch):
+    """
+    A lost Shift key-up must not turn a bare Ctrl tap into a recording.
+
+    keyboard.write() synthesises Shift to type capitals, and an elevated
+    window stealing focus can swallow a key-up. Either way the tracked set
+    can keep 'shift' while the user is not holding it. Physical state is
+    checked before the microphone opens, so the chord stays closed.
+    """
+    state = {"ctrl": False, "shift": False, "alt": False}
+    starts: list[int] = []
+    listener = _make_listener(monkeypatch, state, on_start=lambda: starts.append(1))
+
+    # Poisoned tracked state: Shift looks held, but physically it is not.
+    listener._pressed_keys = {"shift"}
+
+    # User taps Ctrl alone.
+    state["ctrl"] = True
+    listener._on_event(SimpleNamespace(name="left ctrl", event_type="down"))
+
+    assert not starts, "Ctrl-only tap started a recording from stale Shift state"
+    assert not listener._recording
+    # The bogus Shift should have been scrubbed on the way out.
+    assert "shift" not in listener._pressed_keys
+
+
+def test_real_chord_still_starts_recording(monkeypatch):
+    """Guard the fix above against over-correcting: a genuine chord must work."""
+    state = {"ctrl": False, "shift": False, "alt": False}
+    starts: list[int] = []
+    listener = _make_listener(monkeypatch, state, on_start=lambda: starts.append(1))
+
+    state["ctrl"] = True
+    listener._on_event(SimpleNamespace(name="left ctrl", event_type="down"))
+    state["shift"] = True
+    listener._on_event(SimpleNamespace(name="left shift", event_type="down"))
+
+    assert starts == [1]
+    assert listener._recording
+
+
+def test_idle_poll_scrubs_stale_tracked_keys(monkeypatch):
+    """The idle watchdog pass clears tracked keys that are not physically down."""
+    state = {"ctrl": False, "shift": False, "alt": False}
+    listener = _make_listener(monkeypatch, state)
+    listener._pressed_keys = {"shift"}
+
+    listener.start()
+    try:
+        deadline = time.time() + 1.0
+        while time.time() < deadline and listener._pressed_keys:
+            time.sleep(0.02)
+        assert not listener._pressed_keys, "Idle poll left a stale modifier in the tracked set"
+    finally:
+        listener.stop()
+
+
+def test_injection_window_events_do_not_poison_tracked_keys(monkeypatch):
+    """
+    Synthetic Shift events during text injection must not be tracked.
+
+    This is the upstream cause of the stale modifier: while the suppression
+    window is open the event stream belongs to keyboard.write(), not the user.
+    """
+    state = {"ctrl": False, "shift": False, "alt": False}
+    listener = _make_listener(monkeypatch, state)
+
+    listener.suppress_event_side_effects(0.5)
+
+    # keyboard.write() presses Shift to emit a capital, and its key-up is lost.
+    listener._on_event(SimpleNamespace(name="shift", event_type="down"))
+
+    assert "shift" not in listener._pressed_keys
+    assert not listener._recording

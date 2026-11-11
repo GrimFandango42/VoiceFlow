@@ -138,7 +138,13 @@ class Config:
     compression_ratio_threshold: float = 2.4  # Quality threshold
     log_prob_threshold: float = -1.0  # Confidence threshold
     no_speech_threshold: float = 0.9  # Silence detection sensitivity
-    latency_boost_enabled: bool = True  # Use a smaller model for short utterances
+    # Short-utterance fast path (tiny.en alongside the main model). Off by default
+    # (VF-18 item 7): on a GPU the main model decodes a 2-4 s clip in ~90 ms vs
+    # ~25 ms for tiny.en, so the second model saves ~65 ms and costs a second
+    # preload thread, a second warmup and a less accurate transcript. On CPU it
+    # still saves ~1 s per clip over small.en, so the CPU setup profile turns it
+    # on explicitly.
+    latency_boost_enabled: bool = False
     latency_boost_model_tier: str = "tiny"  # Fast-path model tier for short utterances
     latency_boost_max_audio_seconds: float = 10.0  # Keep ultra-fast path short; preserve accuracy on longer utterances
     latency_boost_tiny_max_audio_seconds: float = 3.0  # Hard cap for tiny tier to protect recognition quality
@@ -299,6 +305,10 @@ class Config:
     # old default); load_config resets the flag to False once and bumps this to
     # 1. The wizard writes 1 when the user saves the setting themselves.
     cloud_learning_consent_version: int = 0
+    # One-time record that the GPU single-model migration (VF-18 item 7) has run:
+    # configs saved while the fast path defaulted to on get it switched off once
+    # on GPU setups, after which the user's own choice is never overridden.
+    single_model_migration_version: int = 0
     adaptive_ai_analysis_max_items: int = 8  # Max samples sent to the cloud model when enabled
     adaptive_ai_analysis_max_suggestions: int = 8  # Bound AI-proposed phrase/protected-term suggestions
     longrun_housekeeping_enabled: bool = True  # periodic long-run health telemetry and cleanup hooks

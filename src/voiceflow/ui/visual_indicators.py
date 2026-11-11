@@ -2413,15 +2413,39 @@ class BottomScreenIndicator:
                 "retry_used": bool(item.get("retry_used", False)),
                 "source_kind": str(item.get("source_kind", "live")),
             }
-            append_jsonl_bounded(
+            # append_jsonl_bounded refuses rows over max_line_chars, so a long
+            # dictation used to vanish from history. Keep the row, shorten the
+            # text, and say so.
+            while (
+                len(json.dumps(payload, ensure_ascii=True)) > 8000
+                and len(payload["full_text"]) > 200
+            ):
+                payload["full_text"] = payload["full_text"][: int(len(payload["full_text"]) * 0.8)]
+                payload["truncated"] = True
+                payload["preview"] = payload["preview"][:400]
+            written = append_jsonl_bounded(
                 self.history_store_path,
                 payload,
                 max_file_bytes=1048576,
                 keep_lines=1200,
                 max_line_chars=8192,
             )
+            if not written:
+                # Returns False for an oversized row or an I/O error. This used
+                # to be ignored, so history could stop being recorded with
+                # nothing in the log (VF-18).
+                _report_history_failure(
+                    self.history_store_path,
+                    "append refused or failed (row too large, or the file is not writable)",
+                )
+                return
+            tail = read_text_tail_lines(
+                self.history_store_path, max_lines=1, max_bytes=65536, max_line_chars=8192
+            )
+            if not tail or str(payload["event_epoch"]) not in tail[-1]:
+                _report_history_failure(self.history_store_path, "row written but not found on read-back")
         except Exception as e:
-            logger.debug(f"Failed to append history store: {e}")
+            _report_history_failure(self.history_store_path, f"{type(e).__name__}: {e}")
 
     def _sync_history_from_store(self) -> None:
         history_lines = list(
@@ -3382,6 +3406,35 @@ class BottomScreenIndicator:
 # Global indicator instance
 _indicator: Optional[BottomScreenIndicator] = None
 _indicator_lock = threading.Lock()
+
+# Told when a history row cannot be saved (VF-18). Set by the app so the failure
+# reaches the tray; without a handler it still lands in the log as an error.
+_history_failure_handler: Optional[Callable[[str, str], None]] = None
+_history_failure_last_report = 0.0
+
+
+def set_history_failure_handler(handler: Optional[Callable[[str, str], None]]) -> None:
+    global _history_failure_handler
+    _history_failure_handler = handler
+
+
+def _report_history_failure(path: Any, reason: str) -> None:
+    """Log (and surface) a history write failure, at most once a minute."""
+    global _history_failure_last_report
+    now = time.monotonic()
+    if _history_failure_last_report and now - _history_failure_last_report < 60.0:
+        return
+    _history_failure_last_report = now
+    try:
+        logging.getLogger("voiceflow").error("history_append_failed path=%s reason=%s", path, reason)
+    except Exception:
+        pass
+    handler = _history_failure_handler
+    if handler is not None:
+        try:
+            handler(str(path), reason)
+        except Exception:
+            pass
 
 def get_indicator() -> BottomScreenIndicator:
     """Get or create the global status indicator"""

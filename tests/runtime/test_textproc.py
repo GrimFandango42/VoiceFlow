@@ -408,13 +408,13 @@ def test_custom_vocabulary_multi_word_phrase(tmp_path):
 
 
 def test_custom_vocabulary_case_insensitive_match(tmp_path):
-    vf = _vocab_file(tmp_path, "veeva -> Veeva\n")
+    vf = _vocab_file(tmp_path, "acme -> Acme\n")
     os.environ["VOICEFLOW_VOCABULARY_PATH"] = str(vf)
     try:
         import voiceflow.core.textproc as tp
         tp._VOCAB_CACHE_KEY = None
-        result = normalize_context_terms("the VEEVA system is ready")
-        assert "Veeva" in result
+        result = normalize_context_terms("the ACME system is ready")
+        assert "Acme" in result
     finally:
         del os.environ["VOICEFLOW_VOCABULARY_PATH"]
         import voiceflow.core.textproc as tp

@@ -17,6 +17,7 @@ class _DummyApp:
         self._background_services_started = False
         self._daily_learning_calls = 0
         self._housekeeping_calls = 0
+        self._cuda_restore_calls = 0
         self._log_records: list[str] = []
         self._log = logging.getLogger("test.start_background_services")
         self._log.handlers = []
@@ -29,6 +30,9 @@ class _DummyApp:
 
     def _start_longrun_housekeeping_thread(self) -> None:
         self._housekeeping_calls += 1
+
+    def _start_cuda_restore_thread(self) -> None:
+        self._cuda_restore_calls += 1
 
 
 class _ListHandler(logging.Handler):
@@ -49,5 +53,6 @@ def test_start_background_services_starts_workers_once() -> None:
     assert app._background_services_started is True
     assert app._daily_learning_calls == 1
     assert app._housekeeping_calls == 1
+    assert app._cuda_restore_calls == 1
     assert app._log_records
     assert "background_services_started" in app._log_records[0]
