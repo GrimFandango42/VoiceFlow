@@ -692,13 +692,78 @@ class TestSingleModelOnGpu:
         assert json.loads(path.read_text(encoding="utf-8"))["single_model_migration_version"] == 1
 
     def test_gpu_config_without_a_working_runtime_keeps_the_fast_path(self, monkeypatch, tmp_path):
-        cfg, _ = self._load(
+        cfg, path = self._load(
             monkeypatch,
             tmp_path,
             {"device": "cuda", "enable_gpu_acceleration": True, "latency_boost_enabled": True, "setup_completed": True},
             cuda_ready=False,
         )
         assert cfg.latency_boost_enabled is True
+        # The marker is not spent on a launch that could not migrate.
+        saved = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        assert saved.get("single_model_migration_version", 0) == 0
+
+    def test_cpu_fallback_launch_then_gpu_launch_still_migrates(self, monkeypatch, tmp_path):
+        """Two-launch regression: CUDA down on launch 1, healthy on launch 2."""
+        from voiceflow.core.config import Config
+        from voiceflow.utils import settings
+
+        path = tmp_path / "config.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "device": "cuda",
+                    "enable_gpu_acceleration": True,
+                    "latency_boost_enabled": True,
+                    "setup_completed": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(settings, "config_path", lambda: path)
+
+        # Launch 1: the CUDA runtime check is unavailable.
+        monkeypatch.setattr(ae, "_cuda_runtime_ready", lambda: False)
+        first = settings.load_config(Config())
+        assert first.latency_boost_enabled is True
+        assert first.single_model_migration_version == 0
+        on_disk = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        assert on_disk.get("latency_boost_enabled", True) is True
+        assert on_disk.get("single_model_migration_version", 0) == 0
+
+        # Launch 2: CUDA healthy -> the fast path is now switched off and the marker recorded.
+        monkeypatch.setattr(ae, "_cuda_runtime_ready", lambda: True)
+        second = settings.load_config(Config())
+        assert second.latency_boost_enabled is False
+        assert second.single_model_migration_version == 1
+        on_disk = json.loads(path.read_text(encoding="utf-8"))
+        assert on_disk["latency_boost_enabled"] is False
+        assert on_disk["single_model_migration_version"] == 1
+
+        # Launch 3: a user opt-in after the migration is respected.
+        on_disk["latency_boost_enabled"] = True
+        path.write_text(json.dumps(on_disk), encoding="utf-8")
+        third = settings.load_config(Config())
+        assert third.latency_boost_enabled is True
+
+    def test_runtime_check_that_raises_does_not_spend_the_marker(self, monkeypatch, tmp_path):
+        def boom():
+            raise RuntimeError("probe failed")
+
+        cfg, _ = self._load(
+            monkeypatch,
+            tmp_path,
+            {"device": "cuda", "enable_gpu_acceleration": True, "latency_boost_enabled": True, "setup_completed": True},
+        )
+        # _load installed a healthy probe; now break it and reload a fresh config.
+        from voiceflow.core.config import Config
+        from voiceflow.utils import settings
+
+        monkeypatch.setattr(ae, "_cuda_runtime_ready", boom)
+        cfg2 = Config()
+        cfg2.device, cfg2.enable_gpu_acceleration, cfg2.latency_boost_enabled = "cuda", True, True
+        assert settings._apply_single_model_migration(cfg2) is False
+        assert cfg2.latency_boost_enabled is True and cfg2.single_model_migration_version == 0
 
     def test_no_second_model_or_preload_thread_when_the_fast_path_is_off(self, monkeypatch):
         from voiceflow.ui import cli_enhanced
