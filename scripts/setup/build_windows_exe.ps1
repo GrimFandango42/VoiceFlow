@@ -610,6 +610,11 @@ $stampPath = Join-Path $repoRoot "src\voiceflow\_build_stamp.py"
 $commit = (& git -C $repoRoot rev-parse --short HEAD 2>$null)
 if (-not $commit) { $commit = "unknown" }
 $dirty = [bool](& git -C $repoRoot status --porcelain --untracked-files=no 2>$null)
+# verify_bundle.py fails any bundle that cannot prove it is a clean build of
+# HEAD (VF-11b), so stop now rather than after a long PyInstaller run.
+if ($dirty -or $commit -eq "unknown") {
+    throw "[build_windows_exe] Refusing to build: tracked changes are uncommitted or git HEAD is unknown (commit=$commit, dirty=$dirty). The bundle verification would reject it; commit or discard changes first."
+}
 $builtAt = Get-Date -Format "MM-dd HH:mm"
 $pkgVersion = "unknown"
 $initPath = Join-Path $repoRoot "src\voiceflow\__init__.py"

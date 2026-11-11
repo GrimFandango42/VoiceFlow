@@ -4,7 +4,15 @@ import time
 from types import SimpleNamespace
 
 from voiceflow.core.config import Config
+import pytest
+
 import voiceflow.integrations.hotkeys_enhanced as hotkeys_mod
+
+
+@pytest.fixture(autouse=True)
+def _no_os_key_state(monkeypatch):
+    """These tests drive a fake keyboard; never consult the developer's real key state."""
+    monkeypatch.setattr(hotkeys_mod, "_os_key_state", lambda name: None)
 
 
 def test_short_press_release_stops_without_listener_lock_deadlock(monkeypatch):
@@ -104,6 +112,7 @@ def test_stale_modifier_cannot_start_recording_on_single_key_tap(monkeypatch):
     state["ctrl"] = True
     listener._on_event(SimpleNamespace(name="left ctrl", event_type="down"))
 
+    time.sleep(0.1)  # on_start is dispatched asynchronously; give it the chance to (wrongly) fire
     assert not starts, "Ctrl-only tap started a recording from stale Shift state"
     assert not listener._recording
     # The bogus Shift should have been scrubbed on the way out.
@@ -120,6 +129,11 @@ def test_real_chord_still_starts_recording(monkeypatch):
     listener._on_event(SimpleNamespace(name="left ctrl", event_type="down"))
     state["shift"] = True
     listener._on_event(SimpleNamespace(name="left shift", event_type="down"))
+
+    # on_start runs on the listener's callback thread, not inline on the hook thread.
+    deadline = time.time() + 1.5
+    while time.time() < deadline and not starts:
+        time.sleep(0.01)
 
     assert starts == [1]
     assert listener._recording

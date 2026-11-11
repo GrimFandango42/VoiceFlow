@@ -452,6 +452,15 @@ def validate_config(cfg: Config) -> Config:
             logger.warning(f"Invalid beam_size {getattr(cfg, 'beam_size', 'None')}, defaulting to 2")
             cfg.beam_size = 2
 
+        # Hotwords bias every decode window; an overlong list degrades ordinary speech.
+        hotwords_value = getattr(cfg, 'asr_hotwords', '')
+        if not isinstance(hotwords_value, str):
+            cfg.asr_hotwords = ''
+        elif len(hotwords_value) > 160:
+            trimmed = hotwords_value[:160].rsplit(',', 1)[0].strip()
+            logger.warning('asr_hotwords longer than 160 chars; trimmed to %d chars', len(trimmed))
+            cfg.asr_hotwords = trimmed
+
         # Temperature validation
         if not hasattr(cfg, 'temperature') or cfg.temperature < 0.0 or cfg.temperature > 1.0:
             logger.warning(f"Invalid temperature {getattr(cfg, 'temperature', 'None')}, defaulting to 0.0")

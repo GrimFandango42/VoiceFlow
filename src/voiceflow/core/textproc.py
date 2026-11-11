@@ -166,6 +166,10 @@ _GLOBAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\baws\b", re.IGNORECASE), "AWS"),
     (re.compile(r"\bgcp\b", re.IGNORECASE), "GCP"),
     (re.compile(r"\bmqtt\b", re.IGNORECASE), "MQTT"),
+    # The app's own name. "voice flona" is how Whisper heard it in the VF-10 test.
+    # Built in (not in custom_vocabulary.txt, which is seeded once and never overwritten)
+    # so existing installs get it.
+    (re.compile(r"\bvoice[\s-]*flo(?:w|wn|wna|na|nah)?\b", re.IGNORECASE), "VoiceFlow"),
 )
 
 _CONTEXTUAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (

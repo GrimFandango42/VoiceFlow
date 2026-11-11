@@ -52,6 +52,16 @@ class BuildInfo:
             parts.append(self.built_at)
         return " · ".join(parts)
 
+    def updated_label(self) -> str:
+        """"Updated 11-02 23:14": when this build was made, nothing else.
+
+        The overlay shows only this (not the version or commit) so a glance answers
+        "is this the build I just made?". Empty when the date is unknown.
+        """
+        if self.built_at and self.built_at != _UNKNOWN:
+            return f"Updated {self.built_at}"
+        return ""
+
     def detail(self) -> str:
         """Longer form for logs and about dialogs."""
         state = "dirty" if self.dirty else "clean"
@@ -138,6 +148,14 @@ def build_info() -> BuildInfo:
         if info is not None:
             return info
     return _from_executable()
+
+
+def updated_label() -> str:
+    """Last-updated date of the running build for the overlay. Never raises."""
+    try:
+        return build_info().updated_label()
+    except Exception:  # pragma: no cover - the UI must never crash over a label
+        return ""
 
 
 def short_label() -> str:

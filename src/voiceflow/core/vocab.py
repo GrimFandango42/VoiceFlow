@@ -67,6 +67,11 @@ INITIAL_PROMPT_TERMS: Tuple[str, ...] = (
     "Sonnet",
     "Opus",
     "Haiku",
+    "Wispr",
+    "Codex",
+    "Atlas",
+    "LIMS",
+    "Veeva",
 )
 
 _PROMPT_CACHE_KEY: Optional[Tuple[str, float]] = None
