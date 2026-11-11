@@ -515,9 +515,13 @@ def _decode_plans(
     kept: List[Tuple[str, float]] = []
     pending_gap = 0.0
     for piece in pieces:
-        pending_gap += (
-            piece.speech_gap_before_s if piece.speech_gap_before_s is not None else piece.gap_before_s
-        )
+        if piece.speech_gap_before_s is not None:
+            pending_gap += piece.speech_gap_before_s
+        elif vad_regions is None:
+            pending_gap += piece.gap_before_s
+        # else: a VAD timeline exists and this piece has no speech in it (a cough, a clatter), so
+        # it contributes nothing -- the next speech piece's VAD gap already spans the whole
+        # stretch, and adding the energy gap too would count that silence twice.
         if not piece.text:
             continue
         kept.append((piece.text, pending_gap))

@@ -236,3 +236,55 @@ def test_empty_attempt_is_recorded_in_history_and_stays_off_the_error_toast(tmp_
     EnhancedApp._history_fail(app, "no_speech", audio_seconds=0.4)
     assert len(history.recent()) == 1
     assert history.last() is None, "re-paste never pastes an empty attempt"
+
+
+# ------------------------------------------------- review round 1 (VF-21-review-claude-20261111-174446)
+
+
+def _plans_with_cough(second_speech_start_s):
+    """Speech 0-10 s, a cough 10.5-11.5 s (VAD hears nothing), then speech again."""
+    from voiceflow.core.segmenter import SegmentPlan
+
+    def s(x):
+        return int(x * SR)
+
+    plans = [
+        SegmentPlan(start=0, end=s(10.2), gap_before_s=0.0),
+        SegmentPlan(start=s(10.5), end=s(11.5), gap_before_s=1.0),  # energy-only blip
+        SegmentPlan(start=s(second_speech_start_s - 0.2), end=s(20.0), gap_before_s=1.1),
+    ]
+    regions = [(0, s(10.0)), (s(second_speech_start_s), s(19.0))]
+    return plans, regions, s(20.0)
+
+
+def _run_plans(plans, regions, n_samples):
+    import numpy as np
+
+    # The cough piece is never decoded (VAD heard nothing), so only two replies are consumed.
+    engine = ScriptedEngine(["First sentence. Second sentence.", "Third sentence."])
+    result = seg_mod._decode_plans(
+        engine, np.zeros(n_samples, dtype=np.float32), plans, Config(), logging.getLogger("test"),
+        vad_regions=regions, min_vad_s=0.5,
+    )
+    return result.text
+
+
+def test_a_cough_between_two_short_pauses_is_not_counted_twice():
+    # Real silence is 2.1 s (< 2.5 s). The old code added the cough's energy gap (1.0 s) to the
+    # next VAD gap (2.1 s, which already spans it) and broke the paragraph at 3.1 s.
+    plans, regions, n = _plans_with_cough(12.1)
+    text = _run_plans(plans, regions, n)
+    assert "\n" not in text
+    assert text.startswith("First sentence.") and text.endswith("Third sentence.")
+
+
+def test_a_cough_does_not_hide_a_genuinely_long_pause():
+    plans, regions, n = _plans_with_cough(13.5)  # 3.5 s of real silence
+    assert _run_plans(plans, regions, n).split("\n\n")[-1] == "Third sentence."
+
+
+def test_non_latin_transcripts_are_not_treated_as_empty():
+    assert classify("नमस्ते दुनिया") == (False, "")
+    assert classify("你好，世界。") == (False, "")
+    assert classify("...") == (True, "empty")
+    assert classify(" ,-— ") == (True, "empty")
