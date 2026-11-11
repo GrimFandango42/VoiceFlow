@@ -24,14 +24,72 @@ class Config:
     # by the driver but not yet handed to our callback is otherwise discarded,
     # which clips the last word off the end of an utterance. `start()` prepends
     # 800 ms of pre-buffer to protect the beginning; this protects the end.
-    # The wait exits early once callbacks go quiet, so it usually costs far less
-    # than the cap.
+    # VF-12 note: this is only the LAST stage of the post-key-up tail. The PTT listener
+    # already keeps the mic recording for ptt_release_confirm (0.12 s) +
+    # ptt_tail_buffer_seconds (0.35 s) before calling stop(), and this drain adds 0.25 s
+    # on top: about 0.7 s of capture after the key comes up. Raising it further would
+    # only add latency, so it stays at 0.25.
     stop_drain_seconds: float = 0.25
+    # Silence appended (room-tone level, never digital zero) to the audio right
+    # before decoding so the final word has right context. Whisper decodes its
+    # last window with no look-ahead, which is where sentence endings degrade.
+    decode_right_context_seconds: float = 0.4
+    # Long recordings are cut at their own pauses and decoded piece by piece
+    # (core/segmenter.py) so every piece gets the same vocabulary prompt and no
+    # silence reaches the decoder. Replaces pause compaction on those clips.
+    segmented_transcription_enabled: bool = True
+    segmented_min_audio_seconds: float = 20.0
+    segment_max_seconds: float = 25.0        # cap on one decode piece
+    segment_split_gap_seconds: float = 2.0   # a pause this long always starts a new piece
+    segment_pad_ms: int = 350                # audio kept either side of a piece's speech
+    # If the detector finds less speech than this fraction of the recording, segmentation is
+    # not trusted and the whole recording is decoded in one call (never drop words).
+    segment_min_speech_fraction: float = 0.05
+    # VF-12 review finding 1: Whisper's no_speech_prob is unreliable on stationary noise (0.04
+    # while emitting "I think. Thank you."), so speech/noise evidence comes from Silero VAD
+    # (bundled with faster-whisper, CPU, offline). VAD hears no speech -> nothing is decoded;
+    # a piece with no VAD speech in it is not decoded. If VAD cannot load, the old behaviour
+    # applies (logged once).
+    silence_vad_gate_enabled: bool = True
+    silence_vad_threshold: float = 0.5
+    silence_vad_min_chunk_ms: int = 100          # shorter VAD chunks are ignored
+    silence_vad_min_speech_seconds: float = 0.25  # total speech needed to decode a whole recording
+    paragraph_pause_seconds: float = 2.5     # pause that becomes a paragraph break
+
+    # VF-12 formatting for AI prompts (core/dictation_format.py)
+    prompt_cleanup_enabled: bool = True       # um/uh, stutters, "I mean," / "scratch that"
+    spoken_formatting_commands: bool = True   # "new line", "new paragraph", "bullet ..."
+    # Keep user-requested line breaks (spoken commands, long pauses) in chat windows when
+    # the text is PASTED. Typed injection still strips them (Enter would send).
+    chat_preserve_newlines: bool = True
+
+    # Which window receives the text. "release" (default, as the VF-12 order requires) =
+    # whatever window has focus when the key comes up; "start" = the window that had focus
+    # when the hotkey went down (captured at press and re-focused before pasting).
+    inject_target_policy: str = "release"
+
+    # Local transcript history (core/history.py): last N dictations, never uploaded.
+    history_enabled: bool = True
+    history_max_items: int = 50
+    # Re-paste the most recent transcript. Not Ctrl+Shift (VoiceFlow's PTT) and not
+    # Ctrl+Alt (Wispr Flow / VoiceFlow toggles). "" disables the hotkey.
+    repaste_hotkey: str = "alt+shift+v"
+    # Pressing this while recording throws the recording away. "" disables it.
+    cancel_recording_key: str = "esc"
+
+    # Corrections that stick: terms the user fixes repeatedly become Whisper hotwords
+    # (local only; see ai/hotword_learning.py).
+    learned_hotwords_enabled: bool = True
+    learned_hotword_min_count: int = 2
+    learned_hotwords_max: int = 24
     # PortAudio input latency for the capture streams: "high", "low" or seconds.
     # "high" gives the driver the most buffer before it overruns (dropped
     # frames logged as `input overflow`); start/stop timing is covered by the
     # pre-buffer and stop drain, so it does not add hotkey latency.
     audio_input_latency: str = "high"
+    # One always-on mic stream shared by pre-roll and recording (False = the old
+    # second-stream-per-recording behaviour). See EnhancedAudioRecorder.
+    audio_single_stream: bool = True
     # Ring-buffer capacity. Memory is fixed at this size; a longer hold keeps
     # the most recent audio and logs `recording_ring_wrapped`.
     max_recording_seconds: float = 300.0
@@ -60,7 +118,10 @@ class Config:
     enable_pause_compaction: bool = True  # Trim long silent spans before ASR for faster long dictation
     pause_compaction_min_audio_seconds: float = 7.0  # compact pauses earlier for medium/long dictations
     pause_compaction_frame_ms: int = 30  # frame size for pause detection
-    pause_compaction_keep_silence_ms: int = 80  # tighter silence retention for better medium/long latency
+    # VF-12: 80 -> 250 ms. 80 ms left the last word of a compacted clip with almost no
+    # right context. The true end of the recording is also always kept (below).
+    pause_compaction_keep_silence_ms: int = 250
+    pause_compaction_tail_keep_ms: int = 450  # always keep this much of the recording's real end
     pause_compaction_max_reduction_pct: float = 82.0  # allow stronger dead-air removal in long conversations
     pause_compaction_tail_protect_ms: int = 1500  # VF-17: never blip-filter/cut soft speech in the last N ms (0 = legacy behaviour)
     asr_tail_pad_ms: int = 0  # VF-17: trailing silence appended before ASR (0 = off; see docs/FAITHFUL_DICTATION.md for measurements)
@@ -150,10 +211,17 @@ class Config:
     latency_boost_enabled: bool = False
     latency_boost_model_tier: str = "tiny"  # Fast-path model tier for short utterances
     latency_boost_max_audio_seconds: float = 10.0  # Keep ultra-fast path short; preserve accuracy on longer utterances
-    latency_boost_tiny_max_audio_seconds: float = 3.0  # Hard cap for tiny tier to protect recognition quality
+    # VF-12: 3.0 -> 1.2 s. Suspected contributor to end-of-sentence errors: a ~1.5 s
+    # question ("when will that happen" heard as "remember that happened") was
+    # routed to the tiny model (not yet measured on real audio). Tiny now only
+    # handles one-word/very short clips; anything longer uses the primary tier.
+    latency_boost_tiny_max_audio_seconds: float = 1.2
 
     # Quality improvements without speed impact
     enable_smart_prompting: bool = True  # Adaptive prompting for better accuracy
+    # Names Whisper should prefer, re-applied to every 30 s window (faster-whisper hotwords).
+    # Keep this SHORT: a long list biases ordinary speech toward the list. Empty disables.
+    asr_hotwords: str = "VoiceFlow, Wispr, Claude, Codex, Gemini, Ollama, Atlas, LIMS, Veeva, Madison"
     use_enhanced_post_processing: bool = True  # Smart text cleaning
     enable_light_typo_correction: bool = True  # Low-latency typo/spelling cleanup before injection
     enable_safe_second_pass_cleanup: bool = True  # Deterministic low-cost cleanup after main formatting

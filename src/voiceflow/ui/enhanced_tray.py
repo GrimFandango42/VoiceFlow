@@ -431,6 +431,46 @@ class EnhancedTrayController(ITrayManager):
             ),
         )
 
+        def _copy_recent(entry_id: int):
+            def _action(icon, item):
+                try:
+                    self.app.copy_history_entry(entry_id)
+                except Exception as e:
+                    print(f"[Tray] Copy from history failed: {e}")
+            return _action
+
+        def _recent_items():
+            # Rebuilt every time the menu opens, so it always shows the latest dictations.
+            from voiceflow.core.history import DEFAULT_MAX_ITEMS, menu_label, menu_pages
+
+            try:
+                entries = self.app.recent_history(DEFAULT_MAX_ITEMS)
+            except Exception:
+                entries = []
+            if not entries:
+                yield pystray.MenuItem("(no dictations yet)", None, enabled=False)
+            # Newest 10 inline; the rest (up to all 50 retained) in "Older (n-m)" submenus.
+            for title, page_entries in menu_pages(entries):
+                items = [
+                    pystray.MenuItem(menu_label(e), _copy_recent(int(e["id"])))
+                    for e in page_entries
+                ]
+                if title is None:
+                    yield from items
+                else:
+                    yield pystray.MenuItem(title, pystray.Menu(*items))
+            yield pystray.Menu.SEPARATOR
+            yield pystray.MenuItem(
+                "Re-paste last transcript",
+                lambda icon, item: threading.Thread(target=self.app.repaste_last, daemon=True).start(),
+                enabled=bool(entries),
+            )
+            yield pystray.MenuItem(
+                "Clear history",
+                lambda icon, item: self.app.clear_history(),
+                enabled=bool(entries),
+            )
+
         return pystray.Menu(
             pystray.MenuItem(
                 lambda item: f"Code Mode: {'ON' if self.app.code_mode else 'OFF'}",
@@ -469,6 +509,7 @@ class EnhancedTrayController(ITrayManager):
                 replace_last_paste,
                 enabled=_has_improvement,
             ),
+            pystray.MenuItem("Recent", pystray.Menu(_recent_items)),
             pystray.MenuItem("Recent History", show_recent_history),
             pystray.MenuItem("Correction Review", show_correction_review),
             pystray.Menu.SEPARATOR,

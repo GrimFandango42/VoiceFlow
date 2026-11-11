@@ -53,6 +53,9 @@ else:
 import keyboard
 
 from voiceflow.core.preloader import ModelPreloader, PreloadState
+from voiceflow.core.dictation_format import prepare_prompt_text
+from voiceflow.core.history import STATUS_CLIPBOARD, STATUS_PASTED, STATUS_SAVED, TranscriptHistory
+from voiceflow.core.segmenter import decode_audio, decode_for_duration, should_segment
 from voiceflow.core.silence_artifacts import classify as classify_silence_artifact
 
 # Streaming preview
@@ -61,6 +64,7 @@ from voiceflow.core.textproc import (
     apply_code_mode,
     apply_second_pass_cleanup,
     format_transcript_for_destination,
+    format_transcript_preserving_breaks,
     format_transcript_text,
     infer_destination_profile,
     normalize_context_terms,
@@ -405,6 +409,19 @@ except ImportError:
     def visual_set_correction_feedback_handler(handler): pass
 
 
+def inject_failure_message(reason: str, clipboard_ok: bool) -> str:
+    """Overlay text when a paste did not land. The transcript is always in history."""
+    if reason == "target_closed":
+        return "Target window closed - saved to history"
+    if clipboard_ok:
+        return "Focus changed - copied, saved to history"
+    return "Focus changed - saved to history"
+
+
+def paste_success_message(word_count: int) -> str:
+    return "Pasted " + str(word_count) + (" word" if word_count == 1 else " words")
+
+
 class EnhancedTranscriptionManager:
     """Enhanced thread-safe transcription manager for long conversations"""
 
@@ -541,6 +558,17 @@ class EnhancedApp:
         self.rec = EnhancedAudioRecorder(cfg)
         self._audio_preprocessor = AudioPreprocessor(cfg)
         self.injector = injector_backend or create_injector_backend(cfg)
+
+        # VF-12: local transcript history (last N dictations; never uploaded) so a missed
+        # paste never loses text, plus Esc-to-cancel bookkeeping.
+        self.history: Optional[TranscriptHistory] = None
+        if bool(getattr(cfg, "history_enabled", True)):
+            try:
+                self.history = TranscriptHistory(max_items=int(getattr(cfg, "history_max_items", 50)))
+            except Exception as exc:
+                logging.getLogger("voiceflow").warning("history_unavailable error=%s", exc)
+        self._cancel_pending = False
+        self._cancel_hook: Any = None
 
         # Cold start elimination: Create ASR and start background preloading
         print("[STARTUP] Creating ASR engine...")
@@ -685,6 +713,7 @@ class EnhancedApp:
         self._checkpoint_live_injected = False
         self._idle_resume_warmup_lock = threading.Lock()
         self._idle_resume_last_warmup_at = 0.0
+        self._idle_prewarm_thread: Optional[threading.Thread] = None
         self.ptt_listener: Optional[Any] = None
         self._feedback_audio_enabled = str(os.environ.get("VOICEFLOW_FEEDBACK_AUDIO", "")).strip().lower() in {
             "1",
@@ -1113,6 +1142,51 @@ class EnhancedApp:
             signal *= 0.126 / rms
         return np.clip(signal, -1.0, 1.0)
 
+    def _idle_gap_seconds(self) -> float:
+        """Seconds since the last finished transcription (0 before the first one)."""
+        last_completed = float(getattr(self, "_last_transcription_completed_at", 0.0) or 0.0)
+        if last_completed <= 0.0:
+            return 0.0
+        return max(0.0, time.time() - last_completed)
+
+    def _maybe_prewarm_on_press(self) -> bool:
+        """Warm the ASR runtime while the user is still speaking.
+
+        After a long idle the first decode paid a 330-440 ms warm-up (VF-10 log
+        analysis: 11 of 57 dictations) inside the release-to-text path. The hotkey
+        press happens seconds before the release, so the warm-up runs then, in the
+        background, and the release path finds it already done. Returns True when a
+        warm-up was started.
+        """
+        if not bool(getattr(self.cfg, "idle_resume_guard_enabled", True)):
+            return False
+        if not bool(getattr(self.cfg, "idle_resume_warmup_enabled", True)):
+            return False
+        threshold = max(30.0, float(getattr(self.cfg, "idle_resume_threshold_seconds", 1200.0)))
+        if self._idle_gap_seconds() < threshold:
+            return False
+        if not self.is_model_ready():
+            return False
+        existing = self._idle_prewarm_thread
+        if existing is not None and existing.is_alive():
+            return False
+        thread = threading.Thread(
+            target=self._run_idle_resume_warmup, name="IdlePrewarm", daemon=True
+        )
+        self._idle_prewarm_thread = thread
+        thread.start()
+        self._log.info("idle_prewarm_on_press gap_seconds=%.1f", self._idle_gap_seconds())
+        return True
+
+    def _await_idle_prewarm(self, timeout: float = 2.0) -> float:
+        """Wait (bounded) for a press-time warm-up still in flight; returns ms waited."""
+        thread = self._idle_prewarm_thread
+        if thread is None or not thread.is_alive():
+            return 0.0
+        started = time.perf_counter()
+        thread.join(timeout=max(0.0, float(timeout)))
+        return (time.perf_counter() - started) * 1000.0
+
     def _run_idle_resume_warmup(self) -> float:
         """Warm ASR runtime once after long idle to reduce first-utterance quality dips."""
         if not bool(getattr(self.cfg, "idle_resume_warmup_enabled", True)):
@@ -1339,7 +1413,9 @@ class EnhancedApp:
     ) -> tuple[str, Any, bool, str, float, float]:
         """Decode with the selected engine, retrying blank fast-path results on primary."""
         decode_start = time.perf_counter()
-        text = active_asr.transcribe(audio_data)
+        # VF-12: every final decode goes through decode_for_duration: right-context
+        # padding always, pause-segmented decoding for long recordings.
+        text = decode_for_duration(active_asr, audio_data, self.cfg, self._log)
         decode_ms = (time.perf_counter() - decode_start) * 1000.0
 
         retry_used = False
@@ -1369,7 +1445,7 @@ class EnhancedApp:
         )
 
         retry_start = time.perf_counter()
-        retry_text = self.asr.transcribe(audio_data)
+        retry_text = decode_for_duration(self.asr, audio_data, self.cfg, self._log)
         retry_ms = (time.perf_counter() - retry_start) * 1000.0
         retry_chars = len(str(retry_text or "").strip())
         retry_words = len(str(retry_text or "").split())
@@ -1437,8 +1513,12 @@ class EnhancedApp:
 
         for idx, chunk in enumerate(chunks):
             chunk_duration = len(chunk) / float(sample_rate)
-            retry_asr, retry_path = self._pick_asr_engine(chunk_duration, force_primary=force_primary)
-            piece = str(retry_asr.transcribe(chunk) or "").strip()
+            # VF-12: a short FINAL chunk must not drop to the fast model while the
+            # earlier chunks used the primary one; multi-chunk decodes stay primary.
+            retry_asr, retry_path = self._pick_asr_engine(
+                chunk_duration, force_primary=force_primary or len(chunks) > 1
+            )
+            piece = str(decode_audio(retry_asr, chunk, self.cfg) or "").strip()
             chunks_used += 1
             if not piece:
                 continue
@@ -1554,6 +1634,13 @@ class EnhancedApp:
             dilated[:-shift] |= speech[shift:]
             dilated[shift:] |= speech[:-shift]
 
+        # VF-12: never trim the real end of the recording. The words nearest key-up are
+        # the ones the decoder is least sure of and they need their right context.
+        tail_keep_ms = int(options.get("tail_keep_ms", getattr(self.cfg, "pause_compaction_tail_keep_ms", 450)))
+        tail_frames = max(0, int(tail_keep_ms / frame_ms))
+        if tail_frames:
+            dilated[-tail_frames:] = True
+
         kept_frames = framed[dilated]
         if kept_frames.size == 0:
             return audio_data
@@ -1570,7 +1657,7 @@ class EnhancedApp:
         # tail protection on, the sub-frame remainder is always kept: it is the
         # last <30 ms of what the user said, and costs nothing.
         tail = audio_data[usable:]
-        if tail.size > 0 and (tail_frames or np.sqrt(np.mean(tail * tail)) >= dyn_thr):
+        if tail.size > 0:
             compacted = np.concatenate((compacted, tail))
         return compacted
 
@@ -1748,6 +1835,23 @@ class EnhancedApp:
         context["destination_chat_chars"] = int(getattr(self.cfg, "destination_chat_chars", 68))
         context["destination_editor_chars"] = int(getattr(self.cfg, "destination_editor_chars", 94))
         return context
+
+    def _keep_chat_newlines(self, text: str) -> bool:
+        """May explicit line breaks reach a chat window?
+
+        Chat apps submit on Enter, so breaks were always stripped for them. A PASTE does
+        not press Enter in the chat apps checked so far, so breaks the user asked for
+        (spoken commands, long pauses) are kept when the text is pasted. Typed injection
+        sends "
+" as Enter and therefore stays stripped. ``chat_preserve_newlines``
+        turns the whole thing off.
+        """
+        if not bool(getattr(self.cfg, "chat_preserve_newlines", True)):
+            return False
+        if not bool(getattr(self.cfg, "paste_injection", True)):
+            return False
+        type_limit = int(getattr(self.cfg, "type_if_len_le", 0) or 0)
+        return not (type_limit > 0 and len(text or "") <= type_limit)
 
     def _normalize_context_terms_runtime(self, text: str) -> str:
         return normalize_context_terms(
@@ -2323,6 +2427,135 @@ class EnhancedApp:
             return
         self._observe_adaptive_async(raw, corrected, meta)
 
+    # ------------------------------------------------------------------ VF-12 history / cancel
+
+    def _history_add(self, text: str) -> int:
+        if self.history is None:
+            return 0
+        try:
+            ctx = self.injector.get_target_context()
+            target = str((ctx or {}).get("process_name", "") or "")
+            return self.history.add(text, target=target)
+        except Exception as exc:
+            self._log.warning("history_add_failed error=%s", exc)
+            return 0
+
+    def _history_mark(self, entry_id: int, status: str) -> None:
+        if self.history is None or not entry_id:
+            return
+        try:
+            self.history.set_status(entry_id, status)
+        except Exception as exc:
+            self._log.warning("history_mark_failed error=%s", exc)
+
+    def recent_history(self, limit: int = 10) -> list:
+        return self.history.recent(limit) if self.history is not None else []
+
+    def clear_history(self) -> None:
+        if self.history is not None:
+            self.history.clear()
+
+    def _overlay_message(self, message: str, *, error: bool = False) -> None:
+        if not (self.visual_indicators_enabled and VISUAL_INDICATORS_AVAILABLE):
+            return
+        try:
+            (show_error if error else show_complete)(message)
+        except Exception:
+            pass
+
+    def copy_history_entry(self, entry_id: int) -> bool:
+        """Put a past transcript on the clipboard (tray: Recent -> item)."""
+        entry = self.history.get(entry_id) if self.history is not None else None
+        if not entry:
+            return False
+        ok = bool(self.injector.copy_text_to_clipboard(entry["text"]))
+        self._overlay_message("Copied to clipboard" if ok else "Copy failed", error=not ok)
+        return ok
+
+    @staticmethod
+    def _wait_for_modifiers_released(timeout: float = 1.5) -> None:
+        """A hotkey fires while its modifiers are still down; pasting then would send
+        Ctrl+Alt+Shift+V to the target instead of Ctrl+V."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                if not any(keyboard.is_pressed(k) for k in ("alt", "shift", "ctrl", "windows")):
+                    return
+            except Exception:
+                return
+            time.sleep(0.02)
+
+    def repaste_last(self) -> bool:
+        """Paste the most recent transcript again into the window that has focus now."""
+        entry = self.history.last() if self.history is not None else None
+        if not entry:
+            self._overlay_message("No transcript to re-paste", error=True)
+            return False
+        self._wait_for_modifiers_released()
+        try:
+            self.injector.capture_target_window()   # re-paste where the user is now
+        except Exception:
+            pass
+        text = entry["text"]
+        ok = bool(self.injector.inject(text))
+        if ok:
+            words = int(entry.get("words", len(text.split())))
+            self._overlay_message("Re-pasted " + str(words) + (" word" if words == 1 else " words"))
+        else:
+            clip = bool(self.injector.copy_text_to_clipboard(text))
+            self._overlay_message(
+                "Could not paste - copied to clipboard" if clip else "Could not paste", error=True
+            )
+        return ok
+
+    def _arm_cancel_key(self) -> None:
+        key = str(getattr(self.cfg, "cancel_recording_key", "esc") or "").strip()
+        if not key or self._cancel_hook is not None:
+            return
+        try:
+            # Armed only while recording. suppress=True also keeps Ctrl+Shift+Esc (Task
+            # Manager) from opening when Esc is pressed with the default Ctrl+Shift hold.
+            self._cancel_hook = keyboard.on_press_key(
+                key,
+                lambda _event: threading.Thread(target=self.cancel_recording, daemon=True).start(),
+                suppress=True,
+            )
+        except Exception as exc:
+            self._cancel_hook = None
+            self._log.warning("cancel_key_arm_failed key=%s error=%s", key, exc)
+
+    def _disarm_cancel_key(self) -> None:
+        hook, self._cancel_hook = self._cancel_hook, None
+        if hook is None:
+            return
+        try:
+            keyboard.unhook(hook)
+        except Exception as exc:
+            self._log.warning("cancel_key_disarm_failed error=%s", exc)
+
+    def cancel_recording(self) -> bool:
+        """Throw the current recording away (Esc while recording). Nothing is transcribed."""
+        if self._cancel_pending or not self.rec.is_recording():
+            return False
+        self._cancel_pending = True
+        self._disarm_cancel_key()
+        try:
+            self._stop_streaming_preview()
+            self._stop_audio_visual_monitor()
+            self._stop_live_checkpoint_monitor()
+            self.rec.stop()          # audio is discarded
+            self._reset_checkpoint_state()
+            self._log.info("recording_cancelled")
+            print("[MIC] Recording cancelled (Esc) - discarded")
+            mark_idle()
+            if self.visual_indicators_enabled:
+                update_tray_status(self.tray_controller, "idle", False)
+                if VISUAL_INDICATORS_AVAILABLE:
+                    show_complete("Recording discarded")
+        except Exception as exc:
+            self._log.exception("cancel_recording_failed error=%s", exc)
+        return True
+
     def start_recording(self):
         """Enhanced recording start with better error handling"""
         try:
@@ -2331,6 +2564,7 @@ class EnhancedApp:
                 self._log.info("recording_started")
                 self._reset_checkpoint_state()
                 self.injector.capture_target_window()
+                self._release_target_noted = False
 
                 # Mark state as recording for idle-aware monitoring
                 mark_recording()
@@ -2346,6 +2580,12 @@ class EnhancedApp:
                     _play_beep(880, 60)
 
                 self.rec.start()
+                self._cancel_pending = False
+                self._arm_cancel_key()
+                try:
+                    self._maybe_prewarm_on_press()
+                except Exception as prewarm_error:
+                    self._log.debug("idle_prewarm_failed error=%s", prewarm_error)
                 self._start_audio_visual_monitor()
                 if getattr(self.cfg, "live_flush_during_hold", False):
                     self._start_live_checkpoint_monitor()
@@ -2387,9 +2627,52 @@ class EnhancedApp:
             update_tray_status(self.tray_controller, "idle", False)
             if VISUAL_INDICATORS_AVAILABLE:
                 hide_status()
+    def sample_release_target(self):
+        """Handle of the window focused right now. Runs synchronously on the key-release
+        thread, so it must stay a single cheap OS call; the heavier retarget happens later in
+        ``note_release_target`` on the callback thread."""
+        if str(getattr(self.cfg, "inject_target_policy", "release")).strip().lower() != "release":
+            return None
+        snap = getattr(self.injector, "foreground_snapshot", None)
+        if not callable(snap):
+            return None
+        try:
+            return snap()
+        except Exception as exc:
+            self._log.debug("foreground_snapshot_failed error=%s", exc)
+            return None
+
+    def note_release_target(self, hwnd=None) -> None:
+        """Pin the window focused at key release as the paste target (policy "release").
+
+        Called by the hotkey listener as soon as a release is confirmed, i.e. before the
+        post-key-up audio tail, so a focus change during the tail cannot redirect the text.
+        ``hwnd`` is the handle the listener sampled synchronously at the moment of release;
+        without it (backends with no sampler) the foreground window at call time is used.
+        """
+        self._release_target_noted = True
+        if str(getattr(self.cfg, "inject_target_policy", "release")).strip().lower() != "release":
+            return
+        retarget = getattr(self.injector, "retarget_to_foreground", None)
+        if callable(retarget):
+            try:
+                retarget(hwnd) if hwnd else retarget()
+            except Exception as exc:
+                self._log.debug("retarget_to_foreground_failed error=%s", exc)
 
     def stop_recording(self):
         """Enhanced recording stop with improved transcription handling"""
+        self._disarm_cancel_key()
+        if self._cancel_pending:
+            # Esc already discarded this recording; the key release that follows is a no-op.
+            self._cancel_pending = False
+            return
+        # VF-12: the "release" target is sampled when the key release is confirmed (before the
+        # post-key-up tail), via note_release_target. Only backends that never report a release
+        # (no on_release hook) are sampled here, at stop time.
+        if not getattr(self, "_release_target_noted", False):
+            self.note_release_target()
+        self._release_target_noted = False
         try:
             # Stop streaming preview first
             self._stop_streaming_preview()
@@ -2554,6 +2837,8 @@ class EnhancedApp:
                         idle_resume_threshold,
                     )
                     stage_start = time.perf_counter()
+                    # Normally already done: it started when the hotkey went down.
+                    self._await_idle_prewarm()
                     warmup_ms = self._run_idle_resume_warmup()
                     stage_ms["idle_resume_warmup"] = warmup_ms or ((time.perf_counter() - stage_start) * 1000.0)
 
@@ -2580,7 +2865,14 @@ class EnhancedApp:
                 compaction_overrides["max_reduction_pct"] = float(
                     getattr(self.cfg, "idle_resume_compaction_max_reduction_pct", 68.0)
                 )
-            if skip_pause_compaction:
+            if should_segment(raw_audio_duration, self.cfg):
+                # VF-12: long recordings are cut at their own pauses and decoded piece
+                # by piece (core/segmenter.py), which replaces pause compaction.
+                skip_pause_compaction = True
+                compacted_audio = audio_data
+                stage_ms["pause_compaction"] = 0.0
+                self._log.info("pause_compaction_replaced_by_segmentation raw_duration=%.2f", raw_audio_duration)
+            elif skip_pause_compaction:
                 compacted_audio = audio_data
                 stage_ms["pause_compaction"] = 0.0
                 self._log.info(
@@ -2823,7 +3115,7 @@ class EnhancedApp:
                                     raw_audio_duration,
                                     force_primary=idle_resume_force_primary,
                                 )
-                            retry_text = retry_asr.transcribe(audio_data)
+                            retry_text = decode_for_duration(retry_asr, audio_data, self.cfg, self._log)
 
                         stage_ms["asr_retry"] = (time.perf_counter() - stage_start) * 1000.0
                         retry_words = len((retry_text or "").split())
@@ -2937,12 +3229,20 @@ class EnhancedApp:
             if effective_code_mode:
                 text = apply_code_mode(text, lowercase=self.cfg.code_mode_lowercase)
             else:
+                # VF-12: spoken "new line"/"new paragraph"/"bullet", ums/uhs, stutters and
+                # false starts -- conservative, code-ish tokens untouched.
+                text = prepare_prompt_text(
+                    text,
+                    spoken_commands=bool(getattr(self.cfg, "spoken_formatting_commands", True)),
+                    cleanup=bool(getattr(self.cfg, "prompt_cleanup_enabled", True)),
+                )
                 if self.adaptive_learning and text.strip():
                     text = self.adaptive_learning.apply(text)
-                text = format_transcript_for_destination(
+                text = format_transcript_preserving_breaks(
                     text,
                     destination=destination_context,
                     audio_duration=audio_duration,
+                    keep_chat_newlines=self._keep_chat_newlines(text),
                 )
                 self._log.info(
                     "format_profile profile=%s process=%s width=%s",
@@ -3010,10 +3310,11 @@ class EnhancedApp:
             if text and not effective_code_mode:
                 try:
                     final_destination = destination_context or self._destination_format_context()
-                    text = format_transcript_for_destination(
+                    text = format_transcript_preserving_breaks(
                         text,
                         destination=final_destination,
                         audio_duration=audio_duration,
+                        keep_chat_newlines=self._keep_chat_newlines(text),
                     )
                 except Exception:
                     text = format_transcript_text(text)
@@ -3135,16 +3436,26 @@ class EnhancedApp:
                 # Mark as injecting
                 mark_injecting()
 
+                # VF-12: the text is on disk before the paste is attempted, so a miss never loses it.
+                history_id = self._history_add(text)
+                word_count = len(text.split())
                 inject_ok = bool(self.injector.inject(text))
-                if not inject_ok:
+                if inject_ok:
+                    self._history_mark(history_id, STATUS_PASTED)
+                else:
+                    failure_reason = str(getattr(self.injector, "last_failure_reason", "") or "")
                     clipboard_ok = bool(self.injector.copy_text_to_clipboard(text))
+                    self._history_mark(history_id, STATUS_CLIPBOARD if clipboard_ok else STATUS_SAVED)
                     target_context = self.injector.get_target_context()
                     target_name = (
                         str(target_context.get("process_name", "") or "").strip()
                         or str(target_context.get("window_title", "") or "").strip()
                         or "target window"
                     )
-                    if clipboard_ok:
+                    overlay_msg = inject_failure_message(failure_reason, clipboard_ok)
+                    if failure_reason == "target_closed":
+                        print(f"[INJECT] {overlay_msg} ({target_name}); copy it from the tray's Recent list.")
+                    elif clipboard_ok:
                         print(
                             f"[INJECT] Focus changed before paste. Transcript copied to clipboard for manual paste in {target_name}."
                         )
@@ -3153,23 +3464,16 @@ class EnhancedApp:
                             f"[INJECT] Focus changed before paste and clipboard fallback failed. Verify focus and retry in {target_name}."
                         )
                     self._log.warning(
-                        "inject_failed clipboard_fallback=%s target=%s chars=%d",
+                        "inject_failed reason=%s clipboard_fallback=%s target=%s chars=%d",
+                        failure_reason or "unknown",
                         str(clipboard_ok),
                         target_name,
                         len(text),
                     )
                     if self.visual_indicators_enabled:
-                        update_tray_status(
-                            self.tray_controller,
-                            "error",
-                            False,
-                            "Focus changed; transcript copied to clipboard" if clipboard_ok else "Focus changed; injection failed",
-                        )
+                        update_tray_status(self.tray_controller, "error", False, overlay_msg)
                         if VISUAL_INDICATORS_AVAILABLE:
-                            if clipboard_ok:
-                                show_error("Focus changed; copied to clipboard")
-                            else:
-                                show_error("Focus changed; injection failed")
+                            show_error(overlay_msg)
 
                 self._log.info("transcribed chars=%d words=%d seconds=%.3f",
                              len(text), len(text.split()), transcription_time)
@@ -3182,7 +3486,7 @@ class EnhancedApp:
                         # Show the final corrected text in preview during the COMPLETE window
                         # so the user can see what was actually injected (post-cleanup version)
                         visual_show_preview(text)
-                        show_complete("Complete")
+                        show_complete(paste_success_message(word_count))
 
                     # CRITICAL: Schedule delayed reset to idle via tray auto-reset timer
                     # Don't immediately go to idle - let the tray controller handle the 2s auto-reset
@@ -3377,6 +3681,14 @@ class EnhancedApp:
         self.postprocess_executor.shutdown(wait=False)
         self.checkpoint_executor.shutdown(wait=False)
         self.injector.clear_target_window()
+        try:
+            # A paste defers its clipboard restore to a timer; never exit with the
+            # user's clipboard still holding the last dictation.
+            from voiceflow.integrations.inject import flush_pending_clipboard_restore
+
+            flush_pending_clipboard_restore()
+        except Exception:
+            pass
 
         # Session summary with ASR statistics
         session_duration = time.time() - self._session_start_time
@@ -3672,6 +3984,15 @@ def main(argv=None):
     _register_hotkey('ctrl+alt+c', toggle_code_mode, "toggle_code_mode")
     _register_hotkey('ctrl+alt+p', toggle_injection, "toggle_injection")
     _register_hotkey('ctrl+alt+enter', toggle_enter, "toggle_enter")
+    # VF-12: re-paste the last transcript. Default Alt+Shift+V -- not Ctrl+Shift (VoiceFlow's
+    # hold-to-talk) and not Ctrl+Alt (Wispr Flow / the toggles above). Empty string disables.
+    _repaste_chord = str(getattr(cfg, "repaste_hotkey", "") or "").strip()
+    if _repaste_chord and app.history is not None:
+        _register_hotkey(
+            _repaste_chord,
+            lambda: threading.Thread(target=app.repaste_last, daemon=True).start(),
+            "repaste_last",
+        )
 
     def _replace_last_paste_hotkey() -> None:
         # Never do keyboard work inside the keyboard-hook callback.
@@ -3695,6 +4016,10 @@ def main(argv=None):
         platform_name=current_platform,
     )
     app.ptt_listener = listener
+    if hasattr(listener, "on_release"):
+        listener.on_release = app.note_release_target
+        if hasattr(listener, "release_sampler"):
+            listener.release_sampler = app.sample_release_target
 
     # Final bootstrap guard: if this process spawned an identical child, yield to child.
     # This avoids dual hotkey listeners in parent+child launch environments.

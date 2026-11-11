@@ -22,9 +22,11 @@ param(
     # opt-in; without it a missing CUDA runtime fails the build.
     [switch]$AllowCpuOnly,
     [switch]$SkipProcessCleanup,
-    # How many timestamped build snapshots to keep in dist\packages. Each is
-    # ~2 GB. Published release assets are never pruned. 0 keeps all of them.
-    [int]$KeepPackages = 2
+    # OPT-IN pruning of old timestamped build snapshots in dist\packages (each is ~2 GB).
+    # Default 0 = keep everything: a build never deletes files unless asked. N > 0 keeps
+    # the N most recent snapshots and deletes older ones. Published release assets are
+    # never pruned.
+    [int]$KeepPackages = 0
 )
 
 Set-StrictMode -Version Latest
@@ -338,7 +340,7 @@ function Remove-StaleBuildArtifacts {
     #>
     param(
         [string]$PackagePath,
-        [int]$Keep = 2
+        [int]$Keep = 0
     )
 
     # 0 means keep everything, as the -KeepPackages help says.
@@ -610,6 +612,11 @@ $stampPath = Join-Path $repoRoot "src\voiceflow\_build_stamp.py"
 $commit = (& git -C $repoRoot rev-parse --short HEAD 2>$null)
 if (-not $commit) { $commit = "unknown" }
 $dirty = [bool](& git -C $repoRoot status --porcelain --untracked-files=no 2>$null)
+# verify_bundle.py fails any bundle that cannot prove it is a clean build of
+# HEAD (VF-11b), so stop now rather than after a long PyInstaller run.
+if ($dirty -or $commit -eq "unknown") {
+    throw "[build_windows_exe] Refusing to build: tracked changes are uncommitted or git HEAD is unknown (commit=$commit, dirty=$dirty). The bundle verification would reject it; commit or discard changes first."
+}
 $builtAt = Get-Date -Format "MM-dd HH:mm"
 $pkgVersion = "unknown"
 $initPath = Join-Path $repoRoot "src\voiceflow\__init__.py"

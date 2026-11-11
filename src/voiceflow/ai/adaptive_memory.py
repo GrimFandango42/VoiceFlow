@@ -125,6 +125,9 @@ def extract_learning_pairs(
     return matches
 
 
+_EXPLICIT_CORRECTION_SOURCES = frozenset({"manual_correction", "correction_feedback", "daily_user_correction"})
+
+
 class AdaptiveLearningManager:
     """Local temporary pattern learner with retention-based purging."""
 
@@ -149,6 +152,21 @@ class AdaptiveLearningManager:
             "updated_at": int(time.time()),
         }
 
+        # VF-12: explicit user corrections also feed a durable hotword store, so a term
+        # fixed repeatedly keeps being recognised after its replacement rule has expired.
+        self._hotword_store = None
+        if bool(getattr(cfg, "learned_hotwords_enabled", True)):
+            try:
+                from voiceflow.ai.hotword_learning import LearnedHotwords
+
+                self._hotword_store = LearnedHotwords(
+                    base / "learned_hotwords.json",
+                    min_count=int(getattr(cfg, "learned_hotword_min_count", 2)),
+                    max_terms=int(getattr(cfg, "learned_hotwords_max", 24)),
+                )
+            except Exception as exc:
+                logger.warning(f"Learned hotword store unavailable: {exc}")
+
         self._load_patterns()
         self._purge_expired()
 
@@ -160,7 +178,7 @@ class AdaptiveLearningManager:
         output = text
         now = int(time.time())
         replacements = self._patterns.get("replacements", {})
-        active_rules: List[Tuple[int, int, re.Pattern[str], str]] = []
+        active_rules: List[Tuple[int, int, re.Pattern[str], str, bool]] = []
 
         for entry in replacements.values():
             score = float(entry.get("score", entry.get("count", 0)))
@@ -188,10 +206,24 @@ class AdaptiveLearningManager:
 
             pattern = re.compile(rf"\b{re.escape(src)}\b", re.IGNORECASE)
             token_count = max(1, len(_tokenize(src)))
-            active_rules.append((token_count, len(src), pattern, dst))
+            # VF-12: a proper noun the USER corrected ("Ollama", "Madison") must come back
+            # capitalised. _match_case lower-cases a replacement whenever the misheard word
+            # was lowercase, so such corrections never stuck. Auto-detected rules keep the
+            # old casing behaviour.
+            keep_case = False
+            if has_user_correction and dst[:1].isupper():
+                from voiceflow.ai.hotword_learning import is_term_like
 
-        for _, _, pattern, dst in sorted(active_rules, key=lambda item: (item[0], item[1]), reverse=True):
-            output = pattern.sub(lambda m, replacement=dst: self._match_case(m.group(0), replacement), output)
+                keep_case = is_term_like(dst)
+            active_rules.append((token_count, len(src), pattern, dst, keep_case))
+
+        for _, _, pattern, dst, keep_case in sorted(active_rules, key=lambda item: (item[0], item[1]), reverse=True):
+            output = pattern.sub(
+                lambda m, replacement=dst, keep=keep_case: (
+                    replacement if keep and not m.group(0).isupper() else self._match_case(m.group(0), replacement)
+                ),
+                output,
+            )
 
         return output
 
@@ -221,6 +253,11 @@ class AdaptiveLearningManager:
             from voiceflow.ai.hotword_promotion import is_hotword_candidate
 
             learned_pairs = [pair for pair in learned_pairs if is_hotword_candidate(*pair)]
+        if self._hotword_store is not None and source_key in _EXPLICIT_CORRECTION_SOURCES:
+            try:
+                self._hotword_store.observe_pairs(learned_pairs)
+            except Exception as exc:
+                logger.warning(f"Learned hotword update failed: {exc}")
         replacements = self._patterns.setdefault("replacements", {})
 
         for src, dst in learned_pairs:

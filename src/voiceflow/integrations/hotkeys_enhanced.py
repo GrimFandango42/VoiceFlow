@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ctypes
+import queue
 import threading
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 # Graceful import for environments without the keyboard module during tests
 try:
@@ -29,6 +31,42 @@ except Exception:  # pragma: no cover
             return None
 
 from voiceflow.core.config import Config
+
+_VK_BY_MODIFIER = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12}
+_VK_BY_NAME = {"space": 0x20, "tab": 0x09, "enter": 0x0D, "esc": 0x1B, "caps lock": 0x14}
+
+
+def _vk_for(name: str) -> Optional[int]:
+    key = (name or "").strip().lower()
+    if key in _VK_BY_MODIFIER:
+        return _VK_BY_MODIFIER[key]
+    if key in _VK_BY_NAME:
+        return _VK_BY_NAME[key]
+    if len(key) == 1 and key.isalnum():
+        return ord(key.upper())
+    if key.startswith("f") and key[1:].isdigit() and 1 <= int(key[1:]) <= 24:
+        return 0x70 + int(key[1:]) - 1
+    return None
+
+
+def _os_key_state(name: str) -> Optional[bool]:
+    """Ask Windows whether a key is down right now; None when it cannot say.
+
+    ``keyboard.is_pressed`` is NOT an OS query: it reads the keyboard library's own
+    table, which is fed only by hook events. If the low-level hook misses a key-up
+    (Windows skips a hook call that runs past LowLevelHooksTimeout, and the hook
+    thread shares the GIL with transcription), that table says "pressed" forever
+    and every "physical" check built on it agrees with the stale answer.
+    GetAsyncKeyState has no such blind spot.
+    """
+    vk = _vk_for(name)
+    windll = getattr(ctypes, "windll", None)
+    if vk is None or windll is None:
+        return None
+    try:
+        return bool(windll.user32.GetAsyncKeyState(vk) & 0x8000)
+    except Exception:
+        return None
 
 
 class EnhancedPTTHotkeyListener:
@@ -74,7 +112,30 @@ class EnhancedPTTHotkeyListener:
         )
         self._tail_timer: Optional[threading.Timer] = None
         self._pending_stop = False
-        
+        # VF-12: called the moment a release is confirmed, BEFORE the tail buffer, so the app
+        # can pin the window that had focus at release (inject_target_policy="release").
+        # Set by the owner after construction; optional.
+        self.on_release: Optional[Callable[..., None]] = None
+        # Optional cheap, non-blocking probe run SYNCHRONOUSLY the instant a release is
+        # confirmed; its result is passed to on_release (which runs later on the callback
+        # thread). This pins "the window at release" even when the callback queue is busy.
+        self.release_sampler: Optional[Callable[[], Any]] = None
+        self._release_noted = False
+        # One-shot timer armed by the first key-up of a release. Without it the
+        # hook path could only finish a release when ANOTHER key event arrived
+        # after the confirm window; after the last key-up nothing else comes, so
+        # every release was really completed by the 30 ms poller.
+        self._release_timer: Optional[threading.Timer] = None
+
+        # on_start / on_stop used to run inside self._lock on the keyboard hook or
+        # poll thread. on_stop is the whole stop path (stop drain up to 250 ms,
+        # preprocessing), so the hook thread blocked behind it for that long -
+        # long enough for Windows to skip hook calls, i.e. lose key events. They
+        # now run in order on their own thread.
+        self._callbacks: "queue.Queue[tuple[str, Callable[[], None]]]" = queue.Queue()
+        self._callback_thread: Optional[threading.Thread] = None
+        self._callback_guard = threading.Lock()
+
         # Performance tracking
         self._recording_start_time = 0.0
         self._max_recording_duration = 300.0  # 5 minutes max
@@ -110,24 +171,112 @@ class EnhancedPTTHotkeyListener:
                             if self._pending_stop:
                                 self._cancel_tail_timer()
                                 self._pending_stop = False
+                                self._release_noted = False
                         else:
-                            if self._release_candidate_since <= 0.0:
-                                self._release_candidate_since = current_time
-                            elapsed = current_time - self._release_candidate_since
-                            if elapsed >= self._release_confirm_seconds and not self._pending_stop:
-                                recording_duration = current_time - self._recording_start_time
-                                if recording_duration < self._min_recording_for_tail_buffer:
-                                    self._actual_stop_recording(force=True)
-                                else:
-                                    self._pending_stop = True
-                                    self._tail_timer = threading.Timer(
-                                        self._tail_buffer_duration,
-                                        self._actual_stop_recording
-                                    )
-                                    self._tail_timer.start()
+                            self._confirm_release_locked(current_time)
             except Exception:
                 pass
             self._poll_stop.wait(0.03)
+
+    def _confirm_release_locked(self, now: float) -> None:
+        """Finish a release once the chord has stayed up for the confirm window.
+
+        Caller holds self._lock. Shared by the poller and the release timer so
+        both apply exactly the same rules.
+        """
+        if not self._recording or self._pending_stop:
+            return
+        if self._release_candidate_since <= 0.0:
+            self._release_candidate_since = now
+        if (now - self._release_candidate_since) < self._release_confirm_seconds:
+            return
+        recording_duration = now - self._recording_start_time
+        self._note_release()
+        if (
+            recording_duration >= self._max_recording_duration
+            or recording_duration < self._min_recording_for_tail_buffer
+        ):
+            self._actual_stop_recording(force=True)
+            return
+        self._pending_stop = True
+        self._tail_timer = threading.Timer(
+            self._tail_buffer_duration,
+            self._actual_stop_recording
+        )
+        self._tail_timer.start()
+
+    def _note_release(self) -> None:
+        """Tell the owner the key was released now (before tail capture). Never raises.
+
+        The callback runs on the ordered callback thread, not here: this is the keyboard hook /
+        poll thread under the listener lock, and looking up another process's window title can
+        block (VF-11: blocking the hook thread loses key events). The queue is FIFO, so the
+        sample still happens before on_stop, which is enqueued after the tail.
+        """
+        self._release_noted = True
+        cb = self.on_release
+        if cb is None:
+            return
+        try:
+            sampler = self.release_sampler
+            if sampler is None:
+                self._dispatch("on_release", cb)
+            else:
+                try:
+                    sample = sampler()          # synchronous: this IS the moment of release
+                except Exception:
+                    sample = None
+                self._dispatch("on_release", lambda: cb(sample))
+        except Exception as exc:  # focus sampling must never break a stop
+            print(f"[PTT] on_release dispatch error: {exc}")
+
+    def _arm_release_timer(self) -> None:
+        """Re-check the release once the confirm window has passed (caller holds the lock)."""
+        self._cancel_release_timer()
+        timer = threading.Timer(self._release_confirm_seconds + 0.005, self._release_timer_fired)
+        timer.daemon = True
+        self._release_timer = timer
+        timer.start()
+
+    def _cancel_release_timer(self) -> None:
+        timer = self._release_timer
+        self._release_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _release_timer_fired(self) -> None:
+        try:
+            with self._lock:
+                if not self._recording or self._pending_stop:
+                    return
+                if self._chord_active_physical():
+                    self._sync_pressed_keys_from_physical()
+                    self._release_candidate_since = 0.0
+                    return
+                self._confirm_release_locked(time.time())
+        except Exception:
+            pass
+
+    # --- callbacks run off the hook/poll threads ---------------------------------
+    def _dispatch(self, label: str, fn: Callable[[], None]) -> None:
+        with self._callback_guard:
+            if self._callback_thread is None or not self._callback_thread.is_alive():
+                self._callback_thread = threading.Thread(
+                    target=self._callback_loop, name="PTTCallbacks", daemon=True
+                )
+                self._callback_thread.start()
+        self._callbacks.put((label, fn))
+
+    def _callback_loop(self) -> None:
+        while True:
+            label, fn = self._callbacks.get()
+            try:
+                fn()
+            except Exception as e:
+                print(f"[PTT] Error in {label} callback: {e}")
+                if label == "on_start":
+                    with self._lock:
+                        self._recording = False
 
     def _normalize_key_name(self, key_name: str) -> str:
         """Normalize key names for consistent tracking"""
@@ -165,32 +314,40 @@ class EnhancedPTTHotkeyListener:
         This protects against synthetic/injected key events corrupting tracked state.
         """
         try:
-            if self.cfg.hotkey_ctrl and not keyboard.is_pressed('ctrl'):
+            if self.cfg.hotkey_ctrl and not self._key_down('ctrl'):
                 return False
-            if self.cfg.hotkey_shift and not keyboard.is_pressed('shift'):
+            if self.cfg.hotkey_shift and not self._key_down('shift'):
                 return False
-            if self.cfg.hotkey_alt and not keyboard.is_pressed('alt'):
+            if self.cfg.hotkey_alt and not self._key_down('alt'):
                 return False
 
             key = (self.cfg.hotkey_key or '').strip().lower()
-            if key and not keyboard.is_pressed(key):
+            if key and not self._key_down(key):
                 return False
             return True
         except Exception:
             return False
 
+    @staticmethod
+    def _key_down(name: str) -> bool:
+        """OS truth where Windows can answer, the keyboard library's table otherwise."""
+        state = _os_key_state(name)
+        if state is not None:
+            return state
+        return bool(keyboard.is_pressed(name))
+
     def _sync_pressed_keys_from_physical(self) -> None:
         """Rebuild tracked pressed key set from physical state."""
         refreshed = set()
         try:
-            if self.cfg.hotkey_ctrl and keyboard.is_pressed('ctrl'):
+            if self.cfg.hotkey_ctrl and self._key_down('ctrl'):
                 refreshed.add('ctrl')
-            if self.cfg.hotkey_shift and keyboard.is_pressed('shift'):
+            if self.cfg.hotkey_shift and self._key_down('shift'):
                 refreshed.add('shift')
-            if self.cfg.hotkey_alt and keyboard.is_pressed('alt'):
+            if self.cfg.hotkey_alt and self._key_down('alt'):
                 refreshed.add('alt')
             key = (self.cfg.hotkey_key or '').strip().lower()
-            if key and keyboard.is_pressed(key):
+            if key and self._key_down(key):
                 refreshed.add(key)
         except Exception:
             pass
@@ -213,8 +370,12 @@ class EnhancedPTTHotkeyListener:
                 if not force and self._chord_active_physical():
                     self._sync_pressed_keys_from_physical()
                     self._pending_stop = False
+                    self._release_noted = False
                     return
 
+                if not self._release_noted:
+                    self._note_release()   # forced stop that never went through a release confirm
+                self._release_noted = False
                 self._recording = False
                 self._pending_stop = False
                 self._release_candidate_since = 0.0
@@ -231,10 +392,7 @@ class EnhancedPTTHotkeyListener:
                 recording_duration = time.time() - self._recording_start_time
                 print(f"[PTT] Recording completed: {recording_duration:.2f}s")
                 
-                try:
-                    self.on_stop()
-                except Exception as e:
-                    print(f"[PTT] Error in on_stop callback: {e}")
+                self._dispatch("on_stop", self.on_stop)
 
     def _cancel_tail_timer(self):
         """Cancel the tail timer if active"""
@@ -282,10 +440,12 @@ class EnhancedPTTHotkeyListener:
             if self._recording:
                 if chord_active:
                     self._release_candidate_since = 0.0
+                    self._cancel_release_timer()
                 else:
                     # Require a short, continuous release period before stop logic.
                     if self._release_candidate_since <= 0.0:
                         self._release_candidate_since = current_time
+                        self._arm_release_timer()
                         return
                     if (current_time - self._release_candidate_since) < self._release_confirm_seconds:
                         return
@@ -323,6 +483,7 @@ class EnhancedPTTHotkeyListener:
                 self._pending_stop = False
 
                 self._recording = True
+                self._release_noted = False
                 self._recording_start_time = current_time
                 self._release_candidate_since = 0.0
 
@@ -336,16 +497,13 @@ class EnhancedPTTHotkeyListener:
                         self._blocked_key = None
 
                 print("[PTT] Recording started")
-                try:
-                    self.on_start()
-                except Exception as e:
-                    print(f"[PTT] Error in on_start callback: {e}")
-                    self._recording = False
+                self._dispatch("on_start", self.on_start)
 
             # INITIATE STOP WITH TAIL BUFFER - only when all keys released
             elif not chord_active and self._recording and not self._pending_stop:
                 # Check for maximum recording duration safety limit
                 recording_duration = current_time - self._recording_start_time
+                self._note_release()
                 if recording_duration >= self._max_recording_duration:
                     print(f"[PTT] Max recording duration reached ({self._max_recording_duration}s), stopping immediately")
                     self._actual_stop_recording(force=True)
@@ -376,6 +534,7 @@ class EnhancedPTTHotkeyListener:
                 print("[PTT] Key pressed again, canceling tail buffer")
                 self._cancel_tail_timer()
                 self._pending_stop = False
+                self._release_noted = False
                 self._release_candidate_since = 0.0
 
     def start(self):
@@ -395,7 +554,8 @@ class EnhancedPTTHotkeyListener:
         """Stop the hotkey listener and cleanup"""
         # Cancel any active tail timer
         self._cancel_tail_timer()
-        
+        self._cancel_release_timer()
+
         if self._hook is not None:
             try:
                 keyboard.unhook(self._hook)

@@ -20,7 +20,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from ..utils.build_info import short_label as build_short_label
+from ..utils.build_info import updated_label as build_updated_label
 from ..utils.guardrails import (
     safe_visual_update,
     with_error_recovery,
@@ -199,6 +199,20 @@ def _emit_correction_feedback_learning(original_text: str, corrected_text: str, 
         handler(str(original_text or ""), str(corrected_text or ""), dict(metadata or {}))
     except Exception as exc:
         logger.debug("Correction feedback learning dispatch failed: %s", exc)
+
+def format_elapsed(seconds: float) -> str:
+    """Recording timer text: whole seconds ("7s") for the first minute, then m:ss ("1:05").
+
+    Truncates rather than rounds, so the counter never runs ahead of the clock.
+    """
+    try:
+        total = max(0, int(float(seconds)))
+    except (TypeError, ValueError):
+        total = 0
+    if total < 60:
+        return f"{total}s"
+    return f"{total // 60}:{total % 60:02d}"
+
 
 class TranscriptionStatus(Enum):
     """Status states for visual indication"""
@@ -778,17 +792,19 @@ class BottomScreenIndicator:
         )
         self.status_label.pack()
 
-        hotkey_hint = tk.Label(
+        # Live recording timer (was a static "Ctrl+Shift" hint). Empty unless recording.
+        self.elapsed_var = tk.StringVar(value="")
+        self.elapsed_label = tk.Label(
             status_row,
-            text="Ctrl+Shift",
+            textvariable=self.elapsed_var,
             bg=self._ui("panel_surface"),
-            fg=self._ui("text_muted"),
-            font=("Segoe UI", 8),
+            fg=self._ui("text_secondary"),
+            font=("Segoe UI", 9, "bold"),
             anchor="e",
             padx=5,
             pady=1,
         )
-        hotkey_hint.pack(side=tk.RIGHT, padx=4)
+        self.elapsed_label.pack(side=tk.RIGHT, padx=4)
 
         # Preview text for streaming transcription
         preview_card = tk.Frame(
@@ -1544,10 +1560,11 @@ class BottomScreenIndicator:
         # Which build is this? A packaged app and a source checkout look
         # identical from the outside, so "am I testing the fix or the old
         # binary?" is unanswerable exactly when it matters -- mid-test, looking
-        # at this window. Sits between the status text and Hide.
+        # at this window. Shows only when the build was made (from the bundle
+        # stamp), not the version number. Sits between the status text and Hide.
         version_label = tk.Label(
             dock_frame,
-            text=build_short_label(),
+            text=build_updated_label(),
             bg=self._ui("panel_bg"),
             fg=self._ui("text_secondary"),
             font=("Segoe UI", 7),
@@ -3065,15 +3082,9 @@ class BottomScreenIndicator:
             return
         status_value = (status or self.current_status).value
         status_label = "Ready" if status_value == "idle" else status_value.title()
-        tail = "History"
-        if last_item:
-            tail = "Last {dur:.1f}s -> {proc:.2f}s".format(
-                dur=last_item["audio_duration"],
-                proc=last_item["processing_time"],
-            )
-        elif status_value in ("listening", "processing", "transcribing", "complete"):
-            tail = "Live"
-        self.dock_var.set(f"{status_label} | {tail}")
+        # Status word only: the "History" / "Last 3.2s -> 0.4s" / "Live" detail text
+        # was replaced by the build date (right) and the recording timer (overlay).
+        self.dock_var.set(status_label)
 
     @with_error_recovery(fallback_value=None)
     def show_status(self, status: TranscriptionStatus, message: str = None, duration: float = None):
@@ -3091,6 +3102,10 @@ class BottomScreenIndicator:
                 return
 
             with self.lock:
+                if status == TranscriptionStatus.LISTENING and self.current_status != TranscriptionStatus.LISTENING:
+                    # Stamp at the call, not when the GUI thread gets to it, so the
+                    # counter starts at the real start of the recording.
+                    self._listening_started_at = time.monotonic()
                 self.current_status = status
 
                 # Cancel existing auto-hide timer
@@ -3147,7 +3162,9 @@ class BottomScreenIndicator:
                     pb.configure(mode='indeterminate')
                     pb.start(10)
                 self._start_animation(status)
+                self._start_elapsed_timer()
             elif status in (TranscriptionStatus.PROCESSING, TranscriptionStatus.TRANSCRIBING):
+                self._stop_elapsed_timer()
                 # Keep overlay visible — user needs feedback that work is happening
                 self._fade_in()
                 if pb:
@@ -3160,11 +3177,13 @@ class BottomScreenIndicator:
                 # IDLE state (below) clears it when the overlay hides.
                 self._fade_in()
                 self._stop_animation()
+                self._stop_elapsed_timer()
                 if pb:
                     pb.stop()
                 self.progress_var.set(0)
             else:
                 # IDLE — fade out and hide
+                self._stop_elapsed_timer()
                 self._fade_out()
                 self._stop_animation()
                 if pb:
@@ -3179,6 +3198,43 @@ class BottomScreenIndicator:
 
         except Exception as e:
             print(f"[VisualIndicator] UI update error: {e}")
+
+    def _start_elapsed_timer(self) -> None:
+        """Tick the recording timer ~4x/s on the GUI thread until the status leaves LISTENING."""
+        self._stop_elapsed_timer(clear=False)
+        started = getattr(self, "_listening_started_at", None) or time.monotonic()
+        self._elapsed_generation = getattr(self, "_elapsed_generation", 0) + 1
+        generation = self._elapsed_generation
+
+        def _tick() -> None:
+            if generation != self._elapsed_generation:
+                return
+            var = getattr(self, "elapsed_var", None)
+            if var is None or not self.window:
+                return
+            try:
+                var.set(format_elapsed(time.monotonic() - started))
+                self._elapsed_after_id = self.window.after(250, _tick)
+            except Exception:
+                self._elapsed_after_id = None
+
+        _tick()
+
+    def _stop_elapsed_timer(self, clear: bool = True) -> None:
+        self._elapsed_generation = getattr(self, "_elapsed_generation", 0) + 1
+        after_id = getattr(self, "_elapsed_after_id", None)
+        self._elapsed_after_id = None
+        if after_id is not None and self.window:
+            try:
+                self.window.after_cancel(after_id)
+            except Exception:
+                pass
+        var = getattr(self, "elapsed_var", None)
+        if clear and var is not None:
+            try:
+                var.set("")
+            except Exception:
+                pass
 
     def _update_status_badge(self, status: TranscriptionStatus) -> None:
         """Update the status badge label and color to reflect the current state."""
