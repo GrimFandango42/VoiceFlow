@@ -639,6 +639,9 @@ class ClipboardInjector:
         # Why the last inject() returned False: "" | "target_closed" | "focus_drift".
         # The app reads it to pick the overlay message and the history status.
         self.last_failure_reason: str = ""
+        # VF-19: where the paste step's time went, filled by paste_text (ms).
+        self._paste_stages: Dict[str, float] = {}
+        self.last_inject_timing: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------ #
     # VF-17: replace-last-paste support
@@ -899,6 +902,9 @@ class ClipboardInjector:
         # the paste we keep the old inline wait, since Enter has to land after it.
         restore_delay = max(0, int(getattr(self.cfg, "clipboard_restore_delay_ms", 150))) / 1000.0
         press_enter = bool(self.cfg.press_enter_after_paste)
+        stages = self._paste_stages
+        stages.clear()
+        t0 = time.perf_counter()
 
         with _preserve_clipboard(
             self.cfg.restore_clipboard,
@@ -914,13 +920,20 @@ class ClipboardInjector:
             restore_delay=0.0 if press_enter else restore_delay,
             log=self._log,
         ):
+            t1 = time.perf_counter()
+            stages["snapshot_ms"] = (t1 - t0) * 1000.0   # user's clipboard saved (or inherited)
             try:
                 _clipboard_copy_with_retry(text)
             except Exception as e:
                 self._log.warning("clipboard_copy_failed error=%s", e)
                 return False
+            t2 = time.perf_counter()
+            stages["copy_ms"] = (t2 - t1) * 1000.0
             time.sleep(0.03)  # allow clipboard to settle
+            t3 = time.perf_counter()
+            stages["settle_ms"] = (t3 - t2) * 1000.0
             keyboard.send(self.cfg.paste_shortcut)
+            stages["send_ms"] = (time.perf_counter() - t3) * 1000.0
             if press_enter:
                 time.sleep(restore_delay)
                 keyboard.send('enter')
@@ -950,8 +963,38 @@ class ClipboardInjector:
         return ok
 
     def _inject_impl(self, text: str) -> bool:
-        self._throttle()
-        self.last_failure_reason = ""
+        """Inject and log one ``inject_timing`` line saying where the paste step's time went (VF-19)."""
+        timing: Dict[str, Any] = {"method": "none", "throttle_ms": 0.0, "target_ms": None}
+        self._paste_stages.clear()
+        started = time.perf_counter()
+        checks_started = started
+        try:
+            self._throttle()
+            checks_started = time.perf_counter()
+            timing["throttle_ms"] = (checks_started - started) * 1000.0
+            self.last_failure_reason = ""
+            return self._inject_checked(text, timing, checks_started)
+        finally:
+            if timing["target_ms"] is None:  # refused or raised before the text was sent
+                timing["target_ms"] = (time.perf_counter() - checks_started) * 1000.0
+            timing["total_ms"] = (time.perf_counter() - started) * 1000.0
+            for key in ("snapshot_ms", "copy_ms", "settle_ms", "send_ms"):
+                timing[key] = float(self._paste_stages.get(key, 0.0))
+            self.last_inject_timing = timing
+            self._log.info(
+                "inject_timing method=%s total_ms=%.1f throttle_ms=%.1f target_ms=%.1f snapshot_ms=%.1f "
+                "copy_ms=%.1f settle_ms=%.1f send_ms=%.1f",
+                timing["method"],
+                timing["total_ms"],
+                timing["throttle_ms"],
+                timing["target_ms"],
+                timing["snapshot_ms"],
+                timing["copy_ms"],
+                timing["settle_ms"],
+                timing["send_ms"],
+            )
+
+    def _inject_checked(self, text: str, timing: Dict[str, Any], checks_started: float) -> bool:
         if not self.target_window_exists():
             # The window we were going to paste into is gone. Pasting would land in whatever
             # has focus now; refusing lets the caller keep the text (history + clipboard).
@@ -967,25 +1010,30 @@ class ClipboardInjector:
                 str(fg),
             )
             return False
+        timing["target_ms"] = (time.perf_counter() - checks_started) * 1000.0
 
         # Optional switch: for short payloads, prefer typing to avoid clipboard exposure
         if self.cfg.type_if_len_le > 0 and len(text) <= self.cfg.type_if_len_le:
             method = 'type'
+            timing["method"] = method
             ok = self.type_text(text)
             self._log.info("inject len=%d method=%s ok=%s", len(text), method, ok)
             return ok
 
         if self.cfg.paste_injection:
             method = 'paste'
+            timing["method"] = method
             ok = self.paste_text(text)
             if not ok:
                 # Fallback to typing if paste fails
                 method = 'type'
+                timing["method"] = "paste_then_type"
                 ok = self.type_text(text)
             self._log.info("inject len=%d method=%s ok=%s", len(text), method, ok)
             return ok
         else:
             method = 'type'
+            timing["method"] = method
             ok = self.type_text(text)
             self._log.info("inject len=%d method=%s ok=%s", len(text), method, ok)
             return ok
