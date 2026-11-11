@@ -1,221 +1,158 @@
 # VoiceFlow User Guide
 
-## Core Workflow
+## Core workflow
 
-1. Focus the target app.
-2. Hold push-to-talk (`Ctrl+Shift` by default).
-3. Speak.
-4. Release to transcribe and insert text.
-5. By default, VoiceFlow pastes text without auto-sending Enter.
+1. Focus the app you want to type into.
+2. Hold push-to-talk (`Ctrl+Shift` by default) and speak.
+3. Release. VoiceFlow transcribes, cleans the text and pastes it. It does not press Enter unless you turn **Auto-Enter** on.
 
-## UI Surfaces
+Keys at a glance:
 
-VoiceFlow is intentionally tray-first:
-
-- Setup wizard: first-run defaults and advanced overrides.
-- Tray menu: primary settings and actions.
-- Overlay + dock: status and recent transcript visibility.
-- Recent History + Correction Review: fast correction loop.
-- VoiceFlow keeps day-to-day control close to the transcription loop instead of scattering it across separate admin surfaces.
-
-## Tray Settings Map
-
-Use this as a visual click-path map:
-
-| Goal | Click Path | Persists In Config |
+| Key | Does | Configurable |
 |---|---|---|
-| Open setup wizard | Tray -> `Setup & Defaults` | `setup_*` fields + selected defaults |
-| Toggle code mode | Tray -> `Code Mode` | Session toggle (runtime state) |
-| Choose paste vs type injection | Tray -> `Injection` | `paste_injection` |
-| Auto-press Enter after paste (default OFF) | Tray -> `Auto-Enter` | `press_enter_after_paste` |
-| Show/hide visual indicators | Tray -> `Visual Indicators` | `visual_indicators_enabled` |
-| Show/hide dock | Tray -> `Dock` | `visual_dock_enabled` |
-| Change push-to-talk preset | Tray -> `PTT Hotkey` -> pick preset | `hotkey_*` fields |
-| Open transcript history | Tray -> `Recent History` | n/a |
-| Open correction workflow | Tray -> `Correction Review` | n/a |
+| `Ctrl+Shift` (hold) | Record; release to transcribe and paste | Tray → **PTT Hotkey** (presets) |
+| `Esc` while recording | Discard the recording; nothing is transcribed | `cancel_recording_key` (empty disables) |
+| `Alt+Shift+V` | Re-paste the last transcript into the focused window | `repaste_hotkey` (empty disables) |
+| `Ctrl+Alt+C` | Toggle code mode | fixed |
+| `Ctrl+Alt+P` | Toggle paste / type injection | fixed |
+| `Ctrl+Alt+Enter` | Toggle auto-Enter after paste | fixed |
+| `Ctrl+Alt+R` | Replace the last paste with the improved version (only when the optional reconstruction pass is on and has one ready) | `replace_last_paste_hotkey` |
 
-Also available via hotkeys:
+The re-paste and cancel keys avoid `Ctrl+Shift` (the push-to-talk hold) and `Ctrl+Alt` (the toggles above, and Wispr Flow), so VoiceFlow can run beside Wispr Flow. `Esc` is only watched while a recording is in progress, and `Ctrl+Shift+Esc` still opens Task Manager.
 
-- `Ctrl+Alt+C`: toggle code mode
-- `Ctrl+Alt+P`: toggle paste/type injection
-- `Ctrl+Alt+Enter`: toggle auto-enter
+## What you see
 
-## Setup Wizard
+VoiceFlow is tray-first: the tray icon, a small **dock** and a transient **overlay**. There is no main window.
 
-At startup, VoiceFlow can show a setup wizard before the main runtime starts.
+The overlay appears while you record, with a waveform, a status badge and the live caption (the words so far). The **timer** on the right counts the recording (`7s`, then `1:05` after a minute). The badge reads **Listening**, then **Processing** / **Transcribing**, then **Done** (or **Error**), and the finished text stays in the caption for about two seconds.
 
-- First startup flow highlights Step 1 as the required action:
-  - `Step 1: Run Hardware Check (Required)`
-  - Step 2 controls are intentionally locked/dimmed until the check completes.
-- Recommended mode: chooses defaults based on hardware detection.
-- CPU-compatible mode: safest fallback for broad compatibility.
-- GPU-balanced mode: optimized for CUDA-capable systems.
-- `Run Hardware Check`: re-detect hardware and reset profile preview to recommended defaults.
-- Choose one profile after check (`Recommended`, `CPU Compatible`, or `GPU Balanced`) before `Save And Launch`.
-- Selected profile shows a green `✓ Selected` indicator in Step 2 for quick visual confirmation.
-- Advanced section: device/compute/model/injection overrides.
+| Idle (dock only) | Recording, 7 s in |
+|---|---|
+| ![Dock showing Ready and the build date](screenshots/overlay-idle.png) | ![Overlay while recording](screenshots/overlay-recording.png) |
 
-You can reopen the same wizard from tray:
+| Transcribing | Done — the pasted text |
+|---|---|
+| ![Overlay while transcribing](screenshots/overlay-transcribing.png) | ![Overlay after the paste](screenshots/overlay-pasted.png) |
 
-- Right-click tray icon -> `Setup & Defaults`
+The **dock** (always visible unless you hide it) shows the state — Ready, Listening, … — and **Updated MM-DD HH:MM**, the date the running build was made, so you can tell at a glance whether you are on the build you just made. **History** opens the recent-transcripts panel and **Hide** hides the dock; you can drag the dock and the history panel anywhere (positions are remembered; tray → **Reset Dock Position** puts them back).
 
-For a clean first-run regression pass, use a clean config or reset the setup markers before launch:
+These screenshots are generated in a demo mode — see [Screenshots](#screenshots).
 
-- `setup_completed=false`
-- `show_setup_on_startup=true`
+## Tray menu
 
-If setup is incomplete, startup stays gated until setup is saved (or setup is explicitly skipped via env flag).
+Right-click the tray icon.
 
-## Transcription Quality and Formatting
+![Tray menu with the Recent submenu open](screenshots/tray-menu-recent.png)
 
-Speed-first defaults now separate lightweight cleanup from aggressive rewrites:
+| Goal | Menu item | Saved as |
+|---|---|---|
+| Open the setup window | **Setup & Defaults** | setup fields and chosen defaults |
+| Code mode (code-friendly term mapping) | **Code Mode** | session toggle |
+| Paste vs. type the text | **Injection** | `paste_injection` |
+| Press Enter after pasting (default off) | **Auto-Enter** | `press_enter_after_paste` |
+| Show / hide the overlay | **Visual Indicators** | `visual_indicators_enabled` |
+| Start / stop beeps | **Audio Beeps** | `audio_feedback_beeps` |
+| Show / hide the dock | **Dock** | `visual_dock_enabled` |
+| Put dock, history and overlay back at the default spot | **Reset Dock Position** | — |
+| Re-use a recent dictation | **Recent** (see below) | — |
+| Browse recent dictations / correct them | **Recent History**, **Correction Review** | — |
+| Change the push-to-talk key | **PTT Hotkey** → preset | `hotkey_*` |
+| Play the overlay through its states | **Test Visual Indicators** | — |
 
-- `enable_light_typo_correction=true`
-  - Low-latency typo/spelling cleanup (safe regex pass).
-  - Runs before destination formatting and injection.
-- `enable_safe_second_pass_cleanup=true`
-  - Deterministic second-pass cleanup after primary formatting.
-  - Designed for low overhead and predictable output.
-- `enable_heavy_second_pass_cleanup=false`
-  - Stronger optional cleanup stage, disabled by default.
-  - Runs only when explicitly enabled and transcript length meets `heavy_second_pass_min_chars` (default `180`).
-- `enable_aggressive_context_corrections=false`
-  - Disables risky phrase rewrites unless explicitly enabled.
-  - Useful if you observed over-correction in normal dictation.
-- `destination_aware_formatting=true`
-  - Keeps line wrapping/paragraph shaping suited to target app.
-  - Terminal and PowerShell targets stay mostly prose-first, with stronger breaks reserved for clear section changes and spoken lists.
+## History and re-paste
 
-If quality drops mid-session:
+Every final transcript is written to a local list **before** VoiceFlow tries to paste it, so a paste that misses never loses text.
 
-1. Keep speaking for 1-2 clips to allow ASR warm path to settle.
-2. Confirm `model_tier` and `device` in logs.
-3. Keep aggressive rewrites off unless you need domain-specific substitutions.
-4. Use `Correction Review` for recurring misses.
+- **Tray → Recent** lists the newest 10 dictations (time and first words); click one to copy it. Older ones (up to 50 are kept) are under **Older (11-20)**, **Older (21-30)** and so on. An entry marked **(not pasted)** was recognised but the paste did not land. A dictation that produced nothing usable (silence, noise, a result discarded as a likely silence artifact, too short, a timeout or an error) is listed too, tagged `[failed]`, `[discarded]` or `[too short]`, and the history panel has a **Failed** filter for them. Copying such an entry returns any text that was recognised before it was dropped. Holds under one second that yield nothing are only logged.
+- **Re-paste last transcript** (or `Alt+Shift+V`) pastes the last one where your cursor is now.
+- **Clear history** deletes the list. It is a local file, `%LOCALAPPDATA%\VoiceFlow\transcript_history.json`, and is never uploaded.
 
-Performance/quality telemetry in logs now includes:
+**Where the text goes.** By default into the window that has focus at the moment you let go of the hotkey (`inject_target_policy = release`), so you can start talking and switch windows before releasing. Set it to `start` to always paste into the window you were in when you pressed the key. If that window has closed, nothing is pasted anywhere: the text goes to history and the clipboard.
 
-- `safe2_ms`, `heavy2_ms`
-- `second_pass` mode (`none`, `safe`, `heavy`, `safe+heavy`)
-- `delta_chars` after second-pass cleanup
+If the paste can't land because focus moved, the transcript is copied to the clipboard and kept in history. (The overlay badge shows **Done** or **Error**; the exact reason is in the log and the history entry, not on the overlay.)
 
-## Dictating to AI Assistants (VF-12)
+## Dictating to AI assistants and long text
 
-- **Say structure out loud.** "new line", "new paragraph" and "bullet, <text>" (say the comma as a short pause) work when you pause around them (Whisper then punctuates them as their own phrase). In a sentence they stay literal.
-- **Pauses are paragraphs.** A pause of 2.5 s or more in a long dictation starts a new paragraph. In chat windows the paragraph breaks are kept when VoiceFlow pastes; set `chat_preserve_newlines` to `false` to flatten them.
-- **Ums and false starts** ("um", "the, the thing", "I mean, ...", "scratch that") are cleaned conservatively; real repeats ("that that", "very very") are left alone. File names and paths are never edited.
-- **Where the text goes.** By default into the window that has focus the moment you let go of the hotkey (`inject_target_policy = release`; the window handle is read synchronously the instant the release is confirmed, not after the short tail that keeps recording your last word and not when a queued callback gets around to it), so you can start talking and switch windows before releasing. Set it to `start` to always paste into the window you were in when you pressed the hotkey. If that window has closed, nothing is pasted; the text is in the tray's **Recent** list and on the clipboard.
-- **Get text back.** Tray -> **Recent** lists the newest 10 dictations (click to copy); the other retained ones (up to 50) are under **Older (11-20)**, **Older (21-30)** and so on. **Alt+Shift+V** re-pastes the last one where your cursor is. The last 50 are kept locally in `%LOCALAPPDATA%\VoiceFlow\transcript_history.json`; **Clear history** wipes them.
-- **Cancel.** Press **Esc** while recording to throw the recording away.
+- **Long recordings are decoded pause by pause.** A recording of 20 s or more is cut at your own pauses and each piece is decoded separately, so silence never reaches the model (no phantom "Thank you." after a long think). Pauses of 2.5 s or more become paragraph breaks. Turn off with `segmented_transcription_enabled`.
+- **Noise and silence are gated by a real voice detector** (Silero VAD, bundled, offline). A long recording with no speech in it is not decoded at all, and a piece with no speech in it is skipped. Turn off with `silence_vad_gate_enabled`.
+- **Say structure out loud.** "new line", "new paragraph" and "bullet, …" work when said as their own phrase (pause around them): "Bullet, buy milk." becomes `- Buy milk.` Inside a sentence they stay literal ("a new line of products", "bullet train").
+- **Long dictations get paragraphs and lists.** A dictation of 60 or more words with no line breaks is split into paragraphs where the subject changes ("So yeah", "Also", "The other thing", …) or after five sentences; words are never changed. Terminals, code mode and typed injection keep one block. Spoken lists ("point one …", "first … second …") become list lines. Turn off with `auto_paragraphs_enabled` / `auto_lists_enabled`.
+- **Optional reconstruction pass (off by default).** `reconstruction_enabled` runs a local Ollama model (CPU only) on each dictation (it pastes first and only waits when it has proven fast) to repair form — casing, punctuation, run-ons, mis-heard vocabulary terms — never meaning. Numbers, names and paths must survive verbatim or the original is kept. An accepted result appears as the tray entry **Replace last paste with improved version** (or `Ctrl+Alt+R`); it is refused unless the same window is still focused and nothing was typed since. See [Faithful dictation](FAITHFUL_DICTATION.md).
+- **Ums and false starts** (`um`, `uh`, "the, the thing", "I think I think", a sentence-opening "I mean,") are removed conservatively; real repeats ("that that", "very very") stay. "Send it to John, no wait, send it to Jane" becomes "Send it to Jane". Say "scratch that" as its own phrase to drop the sentence before it. File names, paths, CamelCase and flags are never edited.
+- **Chat windows keep your line breaks** when pasting (`chat_preserve_newlines`, default on), since a paste does not press Enter. Typed injection strips them.
 
-## Animation Quality Controls
+## Vocabulary and learning
 
-Visual indicator animation is now configurable with performance-aware defaults:
+VoiceFlow adapts to your words, locally:
 
-- `visual_animation_quality=auto`
-  - Adaptive quality mode. The overlay reduces effect complexity under load.
-- `visual_target_fps=28`
-  - Preferred frame target for adaptive mode (guarded to `12..60`).
-- `visual_reduced_motion=false`
-  - When enabled, disables high-cost motion effects and lowers animation intensity.
+- **Hotwords.** `asr_hotwords` (a short seed list of product names) is passed to Whisper on every decode. Edit it to your own terms.
+- **Corrections stick.** A term you correct twice in **Correction Review** (`learned_hotword_min_count`) is stored in `learned_hotwords.json` and added to the hotwords (up to `learned_hotwords_max`, default 24; `learned_hotwords_enabled`). Local only; independent of the cloud setting below.
+- **Your vocabulary file.** `%LOCALAPPDATA%\VoiceFlow\custom_vocabulary.txt` is seeded once from a bundled default and never overwritten. Each `wrong phrase -> correct phrase` line rewrites the text after transcription, and the right-hand sides also bias Whisper (`initial_prompt`). Edit it freely; add your own corrections at the end.
+- **Terms file.** House-style terms can also go in `%LOCALAPPDATA%\VoiceFlow\engineering_terms.json` (examples in [`docs/examples/`](examples/)).
+- **Replacement rules.** Recurring corrections become local replacement rules (`adaptive_patterns.json`). Explicit corrections rank above auto-inferred ones, and a saved correction affects the next dictation in the same session.
+- **Nightly learning** replays the day's corrections and writes a report to `%LOCALAPPDATA%\VoiceFlow\daily_learning_reports\`. Run it by hand with `.\VoiceFlow_DailyLearning.bat` (`--dry-run` to preview) or schedule it:
 
-You can tune these fields in config if your system needs smoother visuals or lower motion.
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\scripts\setup\register_daily_learning_task.ps1 -StartTime "08:00" -Force
+  ```
 
-## Documentation Screenshot Hygiene
+- **Cloud step: off by default.** The nightly pass can send a sample of transcripts to Anthropic for vocabulary suggestions. It does nothing unless you tick **Setup & Defaults → "Send a daily sample of transcripts to Claude"**. What is sent, and how to verify it, is in [Security & Privacy](guides/SECURITY_AND_PRIVACY.md#optional-nightly-cloud-analysis-off-by-default).
 
-Public docs should stay focused on VoiceFlow itself, not whatever happened to be open on the author's desktop.
+To improve accuracy fastest: open **Correction Review**, fix recurring misses, and let the nightly pass process them.
 
-Use this standard when adding screenshots:
+## Setup & Defaults
 
-1. Crop tightly to the VoiceFlow surface or use a neutral sample background.
-2. Do not expose real project tabs, taskbar items, account names, usernames, or other workspace context.
-3. If surrounding UI must stay visible for clarity, blur or fully redact non-VoiceFlow content.
-4. Prefer sample apps such as a blank terminal or Notepad over a real working desktop.
+The setup window opens automatically on first launch and any time from tray → **Setup & Defaults**.
 
-The current open-source docs intentionally avoid embedding live setup screenshots until sanitized replacements are available.
+![Setup & Defaults window](screenshots/setup-defaults.png)
 
-## Accent and Personalization
+- First launch: **Step 1: Run Hardware Check (Required)**. Step 2 stays locked until the check completes.
+- Choose a profile: **Recommended** (picked from the hardware check), **CPU Compatible** (safest) or **GPU Balanced** (CUDA).
+- The cloud-learning checkbox (off by default) sits above the **Show advanced settings** section, which overrides device, compute type, model tier and injection mode.
+- For a clean first-run test, start from an empty config or set `setup_completed=false` and `show_setup_on_startup=true`. Startup stays gated until setup is saved.
 
-VoiceFlow keeps personalization enabled:
+## Model, GPU and CPU
 
-- Recent transcript history
-- Correction review workflow
-- Daily learning from correction data
-- Local engineering terms dictionary support
-- Built-in normalization for recurring coding-tool names such as `Claude Code` and `Claude Desktop`
-- Local adaptive replacement patterns for recurring accent and work-domain misses
+Defaults: `device=auto`, `model_tier=quick`.
 
-Fastest way to improve accent-specific output:
+| Tier | CPU | CUDA GPU |
+|---|---|---|
+| `tiny` | `tiny.en` | `tiny.en` |
+| `quick` (default) | `small.en` | `distil-large-v3` |
+| `balanced` | `distil-large-v3.5` profile | same (see note) |
+| `quality` | `large-v3` | `large-v3` |
 
-1. Open `Correction Review` from tray.
-2. Correct recurring misses.
-3. Let daily learning process those corrections.
-4. Check the latest report in `%LOCALAPPDATA%\VoiceFlow\daily_learning_reports\` for the active rules/tokens VoiceFlow is promoting.
-5. If you have stable house-style vocabulary, add it to `%LOCALAPPDATA%\VoiceFlow\engineering_terms.json` (example seed files live in `docs/examples/`).
+On CUDA the compute type is `float16`; on CPU, `int8`. The `distil-large-v3.5` entry loads the same faster-whisper distil-large-v3 weights as `quick` on a GPU, so `balanced` and `quick` are not different models there. GPU needs `cublas64_12.dll` and `cudnn_ops64_9.dll` (CUDA 12 / cuDNN 9); if they are missing VoiceFlow logs `cuda_runtime_unavailable` and runs on the CPU. `VOICEFLOW_FORCE_CPU=1` forces the CPU. See the README for where VoiceFlow looks for the DLLs.
 
-Learning trust model:
+## Text cleanup passes
 
-- Explicit correction feedback is higher-trust than auto-analysis and promotes faster.
-- Saved correction-review feedback also feeds the live runtime learner, so the next dictation in the same session can benefit sooner.
-- Routine runtime observations still learn, but they need more repetition before they auto-apply.
-- Raw transcript snippet storage is off by default; enable it only if you want local debugging breadcrumbs.
-- Daily reports now include both top replacement rules and common recent domain tokens so you can see whether the system is adapting to your work vocabulary.
+- `enable_light_typo_correction=true` — low-latency typo cleanup before formatting.
+- `enable_safe_second_pass_cleanup=true` — deterministic second pass after formatting.
+- `enable_heavy_second_pass_cleanup=false` — stronger cleanup, opt-in; runs only on transcripts of at least `heavy_second_pass_min_chars` (180).
+- `enable_aggressive_context_corrections=false` — risky phrase rewrites, opt-in.
+- `destination_aware_formatting=true` — shapes line breaks for the target app; terminals and PowerShell stay mostly prose.
 
-Long-idle reliability defaults:
+If quality drops mid-session: speak one or two more clips to let the warm path settle; check `model_tier` and `device` in the log; keep the aggressive options off; use **Correction Review** for recurring misses.
 
-- After extended idle gaps, VoiceFlow now applies a safer first-pass pause-compaction profile.
-- For longer first dictations after extended idle, VoiceFlow can bypass pause compaction entirely to preserve full context.
-- If output looks sparse after heavy compaction, VoiceFlow can run a bounded raw-audio retry.
-- For longer clips beyond the single-pass retry window, VoiceFlow uses chunked raw retry with overlap to recover clipped words.
+## Animation controls
 
-Daily learning commands:
+`visual_animation_quality` (`auto`, `high`, `balanced`, `low`), `visual_target_fps` (28, bounded 12-60) and `visual_reduced_motion` (default false) tune the overlay in the config if your system needs smoother or calmer visuals.
+
+## Config, logs and reliability
+
+- Config: `%LOCALAPPDATA%\VoiceFlow\config.json` · Log: `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log` (a fallback log path is recorded in `logs\active_log_path.txt` if the main one is locked).
+- Local stores (`ui_actions.jsonl`, `recent_history_events.jsonl`, `transcription_corrections.jsonl`) are bounded and rotated.
+- After a long idle the first dictation uses a safer first-pass profile, the model is warmed when you press the key (not after you release), and a result that looks clipped is retried on the raw audio.
+- One microphone stream is shared by the pre-roll buffer and the recording; dropped audio frames are counted and reported in the log once per recording.
+- Injection: `inject_require_target_focus`, `inject_refocus_on_miss` (3 attempts); if focus can't be restored the text is copied to the clipboard.
+
+More in the [FAQ](guides/FAQ.md) and [Architecture](ARCHITECTURE.md).
+
+## Screenshots
+
+The images in these docs are generated by `scripts/capture_screenshots.py`, not taken from a working desktop. It runs the real overlay and dock, the real Setup & Defaults window, and the real tray-menu definition in a **demo mode**: no microphone, no global hotkeys, no paste, fixed demo text, a throw-away data folder instead of `%LOCALAPPDATA%\VoiceFlow`, and only regions covered by the script's own backdrop window are captured (it aborts if another window is in the way). The tray menu is a rendering of the live menu definition, because the native Windows popup cannot be captured without a real tray icon. Re-run it after a UI change:
 
 ```powershell
-.\VoiceFlow_DailyLearning.bat
-.\VoiceFlow_DailyLearning.bat --dry-run
+python scripts\capture_screenshots.py            # all images into docs\screenshots
+python scripts\capture_screenshots.py --only tray
 ```
-
-Schedule daily learning:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\setup\register_daily_learning_task.ps1 -StartTime "08:00" -Force
-```
-
-## Model and Hardware Defaults
-
-Out-of-box defaults:
-
-- `device=auto`
-- `model_tier=quick`
-
-Runtime behavior:
-
-- CUDA available: GPU path with `float16`
-- No CUDA: CPU path with `int8`
-
-Optional tier overrides:
-
-- `tiny`: lowest latency
-- `quick`: default adaptive tier
-- `balanced`: higher quality with good speed (best on GPU)
-- `quality`: best recognition, slower
-
-## Advanced Config and Logs
-
-- Config: `%LOCALAPPDATA%\VoiceFlow\config.json`
-- Logs: `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log`
-
-Local runtime stores are bounded for long-session stability:
-
-- `ui_actions.jsonl`: bounded write + stale-event filtering.
-- `recent_history_events.jsonl`: bounded append with rotation.
-- `transcription_corrections.jsonl`: bounded append with rotation.
-
-Injection reliability defaults:
-
-- `inject_require_target_focus=true`
-- `inject_refocus_on_miss=true`
-- `inject_refocus_attempts=3`
-- If final injection misses due focus drift, transcript is copied to clipboard for manual paste.
-
-For troubleshooting and quick issue triage, use [`docs/guides/FAQ.md`](guides/FAQ.md).

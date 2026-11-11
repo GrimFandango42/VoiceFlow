@@ -20,7 +20,7 @@ This packaging path is Windows-focused and targets the current runtime entrypoin
    - click `Step 1: Run Hardware Check (Required)`
    - choose one profile
    - click `Save And Launch`
-5. Hold `Ctrl+Shift` to dictate (default push-to-talk).
+5. Hold `Ctrl+Shift` to dictate (default push-to-talk). `Esc` cancels a recording, `Alt+Shift+V` re-pastes the last transcript, and the tray's **Recent** list keeps the last dictations.
 6. By default, VoiceFlow pastes on release without auto-sending Enter.
 
 Config and logs still live in:
@@ -80,7 +80,7 @@ If Inno Setup is not installed:
 
 ## Release Checklist
 
-1. Build executable and installer.
+1. Build executable and installer. The executable build must finish without error: it runs the bundle verification and the frozen `--self-check` and refuses a stale (wrong-commit) or dirty-tree build; do not pass `-AllowCpuOnly` for a GPU release ([Build guide](../BUILD_GUIDE.md)).
 2. Run smoke validation on a clean machine or clean config:
    - packaged exe opens setup wizard on first run
    - hardware check completes and one profile can be saved
@@ -99,7 +99,7 @@ If Inno Setup is not installed:
    - `VoiceFlow-win64.exe`
    - `VoiceFlow-portable-win64.zip`
    - `SHA256SUMS.txt`
-5. Verify README links:
+5. Verify the download links still resolve (the README links to `releases/latest`):
    - `https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-win64.exe`
    - `https://github.com/GrimFandango42/VoiceFlow/releases/latest/download/VoiceFlow-portable-win64.zip`
 6. Update release notes with known limitations (Windows-first, unsigned binary warnings if applicable).

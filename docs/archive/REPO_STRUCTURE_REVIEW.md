@@ -1,5 +1,7 @@
 # Repository Structure
 
+> **Archived (VF-14).** Superseded by the *Repository layout* section of [../ARCHITECTURE.md](../ARCHITECTURE.md). Kept for history (it records what was removed in April 2026).
+
 Date: 2026-04-06
 
 ## Active Surface
