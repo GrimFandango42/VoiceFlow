@@ -132,9 +132,13 @@ class EnhancedPTTHotkeyListener:
         # preprocessing), so the hook thread blocked behind it for that long -
         # long enough for Windows to skip hook calls, i.e. lose key events. They
         # now run in order on their own thread.
-        self._callbacks: "queue.Queue[tuple[str, Callable[[], None]]]" = queue.Queue()
+        self._callbacks: "queue.Queue[tuple[str, Callable[[], None], float]]" = queue.Queue()
         self._callback_thread: Optional[threading.Thread] = None
         self._callback_guard = threading.Lock()
+        # VF-19: how long each callback sat in the queue before it ran (ms), keyed by
+        # label, set just before the callback runs. The owner logs it: a trigger that
+        # waits behind the previous stop is a pause the user feels at the keypress.
+        self.callback_wait_ms: dict = {}
 
         # Performance tracking
         self._recording_start_time = 0.0
@@ -265,11 +269,12 @@ class EnhancedPTTHotkeyListener:
                     target=self._callback_loop, name="PTTCallbacks", daemon=True
                 )
                 self._callback_thread.start()
-        self._callbacks.put((label, fn))
+        self._callbacks.put((label, fn, time.perf_counter()))
 
     def _callback_loop(self) -> None:
         while True:
-            label, fn = self._callbacks.get()
+            label, fn, queued_at = self._callbacks.get()
+            self.callback_wait_ms[label] = max(0.0, (time.perf_counter() - queued_at) * 1000.0)
             try:
                 fn()
             except Exception as e:

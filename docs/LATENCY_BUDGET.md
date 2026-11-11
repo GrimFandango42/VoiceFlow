@@ -26,6 +26,24 @@ about 0.95 s, of which about 0.72 s is rows 1-3 (0.125 + 0.35 + 0.25 s). *Correc
 this page first assumed a 0.25 s tail; the shipped default `ptt_tail_buffer_seconds` is 0.35 s,
 so rows 1-3 cost about 0.72 s, not 0.62 s.*
 
+## Log fields added in VF-19
+
+Rows 3-4 and the wait behind a previous dictation were invisible; they are logged now
+(see [the VF-19 report](VF-19-report.md)):
+
+| Field | Line | What it is |
+|-------|------|------------|
+| `queue_ms` | `recording_start_timing` | key press detected -> `start_recording` ran (it shares one ordered callback thread with the previous stop) |
+| `stop_wait_ms` | `transcription_timing` | the same wait for the stop callback |
+| `stop_ms` | `transcription_timing` | `stop_recording()`: caption stop, stop drain (row 3), preprocessing -> job submitted |
+| `queue_ms` | `transcription_timing` | job submitted -> job running. One worker, so a dictation released while the previous one is still decoding waits here; `transcription_finished seconds=` never included it |
+| `stop_to_text_ms` | `transcription_timing` | `stop_wait_ms` + `stop_recording()` entry -> text pasted. Add rows 1-2 (~0.47 s, fixed) for the full key-release-to-text |
+| `inject_timing` | own line | the paste step split: `throttle_ms target_ms snapshot_ms copy_ms settle_ms send_ms total_ms` |
+| `process_priority` | own line, once per launch | CPU priority class before/after, memory priority, power throttling |
+
+`python scripts/dev/log_latency.py <log> --causes --date YYYY-MM-DD` prints the slow
+recordings of a day with their cause and the latency per minute of audio.
+
 ## Note on row 3
 
 `_drain_pending_audio` returns early only once the audio callbacks go quiet, but the input

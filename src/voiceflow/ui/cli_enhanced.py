@@ -428,6 +428,45 @@ def inject_failure_message(reason: str, clipboard_ok: bool) -> str:
     return "Focus changed - saved to history"
 
 
+def listener_wait_ms(app: Any, label: str) -> float:
+    """VF-19: callback-queue wait the hotkey listener measured for ``label`` (0.0 if unknown)."""
+    try:
+        waits = getattr(getattr(app, "ptt_listener", None), "callback_wait_ms", None) or {}
+        return float(waits.get(label, 0.0) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def pre_job_timing(timing: Optional[Dict[str, float]], entered_at: float, now: float) -> Dict[str, float]:
+    """VF-19: the part of release-to-text that happens before the transcription job runs (ms).
+
+    ``stop_wait_ms``   the stop callback's wait in the hotkey listener's queue
+    ``stop_ms``        stop_recording(): caption stop, mic drain, preprocessing -> job submitted
+    ``queue_ms``       submitted -> job running (one worker: a dictation released while the
+                       previous one is still decoding waits here, and the per-recording
+                       ``seconds`` in transcription_finished never showed it)
+    ``stop_to_text_ms`` stop_wait + stop_recording() entry -> text pasted (``now``)
+
+    Missing stamps give 0.0, never an exception.
+    """
+    timing = timing or {}
+
+    def _stamp(key: str) -> Optional[float]:
+        value = timing.get(key)
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    stop_started = _stamp("stop_started_at")
+    submitted = _stamp("submitted_at")
+    stop_wait = max(0.0, _stamp("stop_wait_ms") or 0.0)
+    stop_ms = max(0.0, (submitted - stop_started) * 1000.0) if stop_started is not None and submitted is not None else 0.0
+    queue_ms = max(0.0, (float(entered_at) - submitted) * 1000.0) if submitted is not None else 0.0
+    stop_to_text = stop_wait + max(0.0, (float(now) - stop_started) * 1000.0) if stop_started is not None else 0.0
+    return {"stop_wait_ms": stop_wait, "stop_ms": stop_ms, "queue_ms": queue_ms, "stop_to_text_ms": stop_to_text}
+
+
 def paste_success_message(word_count: int) -> str:
     return "Pasted " + str(word_count) + (" word" if word_count == 1 else " words")
 
@@ -2707,11 +2746,14 @@ class EnhancedApp:
                 # nothing the user sees or says should wait for it. The overlay never
                 # takes focus, so the foreground window is still the one dictated into.
                 self.injector.capture_target_window()
+                # VF-19: queue_ms is how long the keypress waited for this callback to
+                # run (it shares one ordered thread with the previous stop).
                 self._log.info(
-                    "recording_start_timing overlay_ms=%.1f mic_ms=%.1f target_ms=%.1f",
+                    "recording_start_timing overlay_ms=%.1f mic_ms=%.1f target_ms=%.1f queue_ms=%.1f",
                     (_t_overlay - _t_press) * 1000.0,
                     (_t_rec - _t_overlay) * 1000.0,
                     (time.perf_counter() - _t_rec) * 1000.0,
+                    listener_wait_ms(self, "on_start"),
                 )
                 self._cancel_pending = False
                 self._arm_cancel_key()
@@ -2795,6 +2837,9 @@ class EnhancedApp:
 
     def stop_recording(self):
         """Enhanced recording stop with improved transcription handling"""
+        # VF-19: stop-to-text is timed from here; the stop callback's own queue wait is added in.
+        stop_started_at = time.perf_counter()
+        stop_wait_ms = listener_wait_ms(self, "on_stop")
         self._disarm_cancel_key()
         if self._cancel_pending:
             # Esc already discarded this recording; the key release that follows is a no-op.
@@ -2889,8 +2934,17 @@ class EnhancedApp:
                     show_processing()
 
             # Enhanced transcription with proper thread management
+            submitted_at = time.perf_counter()
+
             def transcription_callback(audio_data: np.ndarray) -> str:
-                return self._perform_transcription(audio_data)
+                return self._perform_transcription(
+                    audio_data,
+                    timing={
+                        "stop_started_at": stop_started_at,
+                        "submitted_at": submitted_at,
+                        "stop_wait_ms": stop_wait_ms,
+                    },
+                )
 
             # Submit to thread pool instead of creating ad-hoc threads
             job_id = self.transcription_manager.submit_transcription(
@@ -2908,8 +2962,15 @@ class EnhancedApp:
                 if VISUAL_INDICATORS_AVAILABLE:
                     show_error(f"Stop error: {e}")
 
-    def _perform_transcription(self, audio_data: np.ndarray) -> str:
-        """Perform actual transcription with enhanced error handling and timeout protection"""
+    def _perform_transcription(self, audio_data: np.ndarray, timing: Optional[Dict[str, float]] = None) -> str:
+        """Perform actual transcription with enhanced error handling and timeout protection
+
+        ``timing`` (VF-19) carries ``stop_started_at`` / ``submitted_at`` perf_counter stamps and
+        the stop callback's queue wait, so the log can show the time spent before this job ran:
+        the release-to-text the user sees is stop_wait + stop + queue + processing + inject.
+        """
+        entered_at = time.perf_counter()
+        timing = timing or {}
         self._keep_dictation_audio(audio_data)
         # Ensure logger is available (fix for scoping issue)
         logger = logging.getLogger(__name__)
@@ -3644,6 +3705,7 @@ class EnhancedApp:
                     # CRITICAL: Schedule delayed reset to idle via tray auto-reset timer
                     # Don't immediately go to idle - let the tray controller handle the 2s auto-reset
             stage_ms["inject"] = (time.perf_counter() - inject_start) * 1000.0
+            pre_job = pre_job_timing(timing, entered_at, time.perf_counter())
 
             self._log.info(
                 (
@@ -3651,7 +3713,8 @@ class EnhancedApp:
                     "retry_used=%s compaction_ms=%.1f guard_ms=%.1f asr_ms=%.1f retry_ms=%.1f "
                     "post_ms=%.1f safe2_ms=%.1f heavy2_ms=%.1f second_pass=%s delta_chars=%d inject_ms=%.1f "
                     "raw_dur=%.2f compacted_dur=%.2f reduction=%.1f retry_strategy=%s retry_chunks=%d "
-                    "idle_resume=%s idle_resume_force_primary=%s warmup_ms=%.1f"
+                    "idle_resume=%s idle_resume_force_primary=%s warmup_ms=%.1f "
+                    "stop_wait_ms=%.1f stop_ms=%.1f queue_ms=%.1f stop_to_text_ms=%.1f"
                 ),
                 transcription_time * 1000.0,
                 asr_path,
@@ -3677,6 +3740,10 @@ class EnhancedApp:
                 str(idle_resume_active),
                 str(idle_resume_force_primary),
                 stage_ms.get("idle_resume_warmup", 0.0),
+                pre_job["stop_wait_ms"],
+                pre_job["stop_ms"],
+                pre_job["queue_ms"],
+                pre_job["stop_to_text_ms"],
             )
 
             if text.strip():
@@ -3860,6 +3927,27 @@ class EnhancedApp:
         print("[EnhancedApp] Shutdown complete")
 
 
+def _apply_process_priority(cfg: Any, runtime_log: logging.Logger) -> Dict[str, Any]:
+    """VF-19: undo a launcher's BelowNormal priority and log what this launch runs at.
+
+    Never raises and never lowers anything; ``process_priority_minimum = "off"`` skips it.
+    """
+    minimum = str(getattr(cfg, "process_priority_minimum", "normal") or "").strip().lower()
+    if minimum in {"", "off", "none"}:
+        runtime_log.info("process_priority skipped=config")
+        return {}
+    try:
+        from voiceflow.utils.process_priority import ensure_interactive_scheduling
+
+        return ensure_interactive_scheduling(minimum, log=runtime_log)
+    except Exception as exc:
+        try:
+            runtime_log.warning("process_priority_failed error=%s", exc)
+        except Exception:
+            pass
+        return {}
+
+
 def _run_launch_selfcheck(alog: Any, runtime_log: logging.Logger) -> Dict[str, Any]:
     """Prove this launch can log and keep history, and record how it was launched.
 
@@ -3958,6 +4046,7 @@ def main(argv=None):
     runtime_log = _alog.get()
     runtime_log.info("single_instance_ok pid=%d", os.getpid())
     runtime_log.info("single_instance_watchdog_started interval_s=2.0")
+    _apply_process_priority(cfg, runtime_log)
     startup_selfcheck = _run_launch_selfcheck(_alog, runtime_log)
 
     # Start idle-aware monitoring for long-running operation

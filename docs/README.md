@@ -18,6 +18,7 @@ The maintained documentation for the current runtime. Start with the [project RE
 - [VF-12 real-Whisper comparison](VF-12-real-whisper-results.md) - evidence behind the long-dictation changes
 - [Faithful dictation](FAITHFUL_DICTATION.md) - the optional reconstruction pass (form repair, never meaning), its guards and replace-last-paste
 - [VF-18 report](VF-18-report.md) (model loading, GPU/CPU fallback, launch diagnostics) and [VF-20 report](VF-20-report.md) (the merged build line, self-check failures)
+- [VF-19 report](VF-19-report.md) - the slow tail: causes of the 2026-11-10 p90, process priority, trigger/stop/paste timing, latency per minute of audio
 
 ## Design
 

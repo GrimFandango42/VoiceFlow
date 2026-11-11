@@ -381,6 +381,13 @@ class Config:
     hotword_promotion_enabled: bool = True
     hotword_promotion_min_count: int = 3
 
+    # VF-19: CPU priority floor the app sets for itself at startup. Task Scheduler
+    # starts the watchdog (and so the app) at BelowNormal, which starves dictation
+    # whenever anything else keeps the CPU busy. "normal" undoes that; the app also
+    # opts out of power throttling. Never lowers the priority, capped at
+    # above_normal. "off" leaves whatever the launcher chose.
+    process_priority_minimum: str = "normal"
+
     # VF-17 full-fidelity tuning log: local-only, never uploaded (VF-03).
     tuning_log_enabled: bool = True
     tuning_log_max_chars: int = 8000
