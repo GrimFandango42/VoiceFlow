@@ -41,9 +41,37 @@ def pytest_configure(config) -> None:
     if str(root) not in sys.path:
         sys.path.append(str(root))
 
+    # CUDA detection must not depend on whether this machine happens to have a built
+    # bundle next to the checkout (VF-11 made source processes probe it); otherwise
+    # tests silently take the GPU path on the developer's box and the CPU path in CI.
+    os.environ["VOICEFLOW_CUDA_PROBE_BUNDLE"] = "0"
+
     _SANDBOX = tempfile.TemporaryDirectory(prefix="voiceflow-test-appdata-")
     for var in ("LOCALAPPDATA", "APPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
         os.environ[var] = _SANDBOX.name
     # Path.home() is the non-Windows fallback in default_log_dir().
     os.environ["HOME"] = _SANDBOX.name
     os.environ["USERPROFILE"] = _SANDBOX.name
+
+
+import pytest  # noqa: E402  (kept next to the fixture that needs it)
+
+
+@pytest.fixture(autouse=True)
+def _synchronous_clipboard_restore():
+    """Keep clipboard restores synchronous unless a test opts in (VF-11).
+
+    A deferred restore is a timer that outlives the test body. Left running, it
+    could fire after monkeypatch teardown and write to the developer's real
+    clipboard, or be inherited by the next test's fake clipboard. Tests of the
+    deferred path set ``inject._ALLOW_DEFERRED_RESTORE = True`` themselves.
+    """
+    from voiceflow.integrations import inject
+
+    previous = inject._ALLOW_DEFERRED_RESTORE
+    inject._ALLOW_DEFERRED_RESTORE = False
+    try:
+        yield
+    finally:
+        inject._cancel_pending_restore_without_running()
+        inject._ALLOW_DEFERRED_RESTORE = previous

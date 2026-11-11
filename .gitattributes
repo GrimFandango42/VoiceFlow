@@ -1,0 +1,15 @@
+# Repository line-ending convention: text files are stored with LF in the index.
+# Working-tree endings follow each user's core.autocrlf, so Windows checkouts stay CRLF.
+# This keeps any later edit from committing mixed CRLF/LF (VF-11b review finding 2).
+* text=auto
+
+# Never let auto-detection touch binary assets.
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.wav binary
+*.exe binary
+*.dll binary
+*.pyd binary

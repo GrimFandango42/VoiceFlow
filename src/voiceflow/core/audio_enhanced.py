@@ -599,6 +599,28 @@ class EnhancedAudioRecorder:
         self._lock = threading.Lock()
         self._recording = False
         self._start_time = 0.0
+
+        # One always-on microphone stream instead of a second stream opened per
+        # recording. Two concurrent streams on one device doubled the callbacks, and the
+        # per-recording stream was opened/closed on the hotkey path; both are candidate
+        # causes of the remaining audio_input_overflow in the 118 s field test. Set
+        # audio_single_stream=False to get the old two-stream behaviour back.
+        self._single_stream = bool(getattr(cfg, "audio_single_stream", True))
+        # Worker-side routing: while True, blocks from the single stream go to the
+        # recording ring instead of the pre-roll buffer. Flipped, together with the
+        # pre-roll hand-over, under _route_lock, which the worker also holds while it
+        # applies a block - so a block is wholly before or wholly after the switch.
+        self._route_lock = threading.Lock()
+        self._route_recording = False
+
+        # Overflow diagnostics, written from the audio thread (no I/O, no allocation
+        # beyond a tuple) and read in stop(): when each overflow happened, how deep the
+        # capture queue was, and the longest gap between callbacks. This is what tells a
+        # GIL/CPU stall (long gaps) from device contention (overflow with normal gaps).
+        self._overflow_events: list = []
+        self._last_cb_t = 0.0
+        self._max_cb_gap = 0.0
+        self._start_mono = 0.0
         # Bumped on every start(); blocks queued by an earlier recording that
         # are still in flight are discarded instead of leaking into this one.
         self._generation = 0
@@ -618,6 +640,10 @@ class EnhancedAudioRecorder:
         )
         self._capture.ensure_worker()
         self._dropped_at_start = 0
+        # Blocks the shared stream's callback dropped while a recording was routed to
+        # the ring. The queue counts them on the continuous channel (that is the stream
+        # they came from); they belong to the recording. One writer: that callback.
+        self._shared_recording_dropped = 0
 
         print("[AudioRecorder] Enhanced recorder initialized:")
         print(f"  - Sample rate: {cfg.sample_rate}Hz")
@@ -633,6 +659,9 @@ class EnhancedAudioRecorder:
                 self._continuous_overflow_count += 1
             else:
                 self._overflow_count += 1
+            events = self._overflow_events
+            if len(events) < 32:
+                events.append((time.monotonic(), 1 if continuous else 0, self._capture.depth()))
         else:
             self._other_status_count += 1
 
@@ -660,7 +689,11 @@ class EnhancedAudioRecorder:
         self._ring_buffer.clear(epoch=self._generation)
 
     def _sink_continuous(self, _generation: int, block: np.ndarray) -> None:
-        self._pre_buffer.append_block(block)
+        with self._route_lock:
+            if self._route_recording:
+                self._ring_buffer.append_block(block, epoch=self._generation)
+            else:
+                self._pre_buffer.append_block(block)
 
     def _callback(self, indata, frames, time_info, status):
         """Recording-stream callback. Must never block: copy, enqueue, return.
@@ -687,16 +720,32 @@ class EnhancedAudioRecorder:
 
     def _continuous_callback(self, indata, frames, time_info, status):
         """Pre-buffer callback. Same no-blocking rules as `_callback`."""
+        recording_on_this_stream = self._single_stream and self._recording
         if status:
-            self._note_status(status, continuous=True)
+            self._note_status(status, continuous=not recording_on_this_stream)
 
         if not self._continuous_recording:
             return
 
+        now = time.perf_counter()
+        last = self._last_cb_t
+        if last > 0.0 and (now - last) > self._max_cb_gap:
+            self._max_cb_gap = now - last
+        self._last_cb_t = now
+
         try:
-            self._capture.offer(CHANNEL_CONTINUOUS, 0, _block_to_mono(indata))
+            queued = self._capture.offer(CHANNEL_CONTINUOUS, 0, _block_to_mono(indata))
+            if recording_on_this_stream:
+                if queued:
+                    self._total_frames += frames
+                else:
+                    self._shared_recording_dropped += 1
         except Exception:
             self._callback_error_count += 1
+        if recording_on_this_stream:
+            # Same activity marker the recording-stream callback keeps for the
+            # stop-drain and the watchdog.
+            self._callback_count += 1
 
     def flush_capture(self, timeout: float = 1.0) -> bool:
         """Wait (bounded) until every queued recording block is in the ring."""
@@ -731,6 +780,15 @@ class EnhancedAudioRecorder:
             return "high"
         return value if 0.0 < value <= 1.0 else "high"
 
+    def _recording_queue_dropped(self) -> int:
+        """Queue-saturation drops that belong to recordings: those of the dedicated
+        recording stream plus those of the shared stream while it fed a recording."""
+        return int(self._capture.dropped[CHANNEL_RECORDING]) + int(self._shared_recording_dropped)
+
+    def _continuous_queue_dropped(self) -> int:
+        """Drops of the always-on stream while it was only filling the pre-roll."""
+        return max(0, int(self._capture.dropped[CHANNEL_CONTINUOUS]) - int(self._shared_recording_dropped))
+
     def get_audio_health(self) -> dict:
         """Snapshot of audio-thread health counters for the health report."""
         return {
@@ -740,8 +798,8 @@ class EnhancedAudioRecorder:
             "callback_errors": int(self._callback_error_count),
             "ring_wraps": int(self._ring_wrap_count),
             # Blocks the callback dropped because the worker was >queue bound behind.
-            "queue_dropped_recording": int(self._capture.dropped[CHANNEL_RECORDING]),
-            "queue_dropped_continuous": int(self._capture.dropped[CHANNEL_CONTINUOUS]),
+            "queue_dropped_recording": self._recording_queue_dropped(),
+            "queue_dropped_continuous": self._continuous_queue_dropped(),
             "queue_high_water": int(self._capture.high_water),
             "queue_capacity_blocks": int(self._capture.max_blocks),
             "capture_worker_alive": bool(self._capture.worker_alive()),
@@ -768,31 +826,28 @@ class EnhancedAudioRecorder:
         # before the key press are in the snapshot below. Bounded wait.
         self._capture.flush(CHANNEL_CONTINUOUS, 0.1)
 
-        # Get pre-buffer data BEFORE clearing to use for this recording
-        pre_buffer_data = self._pre_buffer.get_data()
-        
-        # CRITICAL FIX: Clear pre-buffer IMMEDIATELY after getting data
-        # This prevents any accumulation while we process
-        self._pre_buffer.clear()
-        
-        if len(pre_buffer_data) > 0:
-            # Take only the most recent portion to minimize latency
-            min_pre_buffer_samples = int(0.3 * self.cfg.sample_rate)  # 300ms minimum
-            if len(pre_buffer_data) > min_pre_buffer_samples:
-                # Use recent 800ms of pre-buffer for optimal key-press timing
-                recent_samples = int(0.8 * self.cfg.sample_rate)
-                pre_buffer_data = pre_buffer_data[-recent_samples:]
-            
-            # Add pre-buffer to main buffer for this recording only.
-            # Pre-buffer blocks were sanitized on the way in.
-            self._ring_buffer.append_block(pre_buffer_data)
-
         self._callback_count = 0
         self._total_frames = 0
         self._start_time = time.time()
+        self._start_mono = time.monotonic()
         self._overflow_at_start = self._overflow_count
         self._continuous_overflow_at_start = self._continuous_overflow_count
-        self._dropped_at_start = self._capture.dropped[CHANNEL_RECORDING]
+        self._dropped_at_start = self._recording_queue_dropped()
+        self._overflow_events = []
+        self._max_cb_gap = 0.0
+
+        if self._single_stream:
+            # Hand the pre-roll over and switch routing in one step with respect to the
+            # worker; the stream itself keeps running untouched.
+            with self._route_lock:
+                self._append_pre_roll_locked()
+                self._route_recording = True
+            self._recording = True
+            print("[AudioRecorder] Recording started on the shared stream (pre-roll included)")
+            return
+
+        with self._route_lock:
+            self._append_pre_roll_locked()
 
         self._stream = sd.InputStream(
             channels=self.cfg.channels,
@@ -805,6 +860,27 @@ class EnhancedAudioRecorder:
         self._stream.start()
         self._recording = True
         print("[AudioRecorder] Recording started successfully with pre-buffer integration")
+
+    def _append_pre_roll_locked(self) -> None:
+        """Move the freshest pre-roll into the recording ring (caller holds _route_lock)."""
+        # Get pre-buffer data BEFORE clearing to use for this recording
+        pre_buffer_data = self._pre_buffer.get_data()
+
+        # CRITICAL FIX: Clear pre-buffer IMMEDIATELY after getting data
+        # This prevents any accumulation while we process
+        self._pre_buffer.clear()
+
+        if len(pre_buffer_data) > 0:
+            # Take only the most recent portion to minimize latency
+            min_pre_buffer_samples = int(0.3 * self.cfg.sample_rate)  # 300ms minimum
+            if len(pre_buffer_data) > min_pre_buffer_samples:
+                # Use recent 800ms of pre-buffer for optimal key-press timing
+                recent_samples = int(0.8 * self.cfg.sample_rate)
+                pre_buffer_data = pre_buffer_data[-recent_samples:]
+
+            # Add pre-buffer to main buffer for this recording only.
+            # Pre-buffer blocks were sanitized on the way in.
+            self._ring_buffer.append_block(pre_buffer_data)
 
     def _drain_pending_audio(self) -> None:
         """Let in-flight audio reach the buffer before the stream is torn down.
@@ -864,15 +940,26 @@ class EnhancedAudioRecorder:
                 self._stream.close()
                 self._stream = None
 
-            # Stream stopped => no more callbacks. Wait for the worker to move
-            # every queued block into the ring before reading it (the tail of
-            # the utterance is the last thing queued).
-            if not self._capture.flush(CHANNEL_RECORDING, 1.0):
+            # Wait for the worker to move every queued block into the ring before
+            # reading it (the tail of the utterance is the last thing queued). With a
+            # per-recording stream that stream has stopped; with the shared stream the
+            # blocks offered so far are the ones that count.
+            flushed = self._capture.flush(CHANNEL_RECORDING, 1.0)
+            if self._single_stream:
+                flushed = self._capture.flush(CHANNEL_CONTINUOUS, 1.0) and flushed
+            if not flushed:
                 logger.warning(
                     "capture_queue_flush_timeout pending=%d worker_alive=%s",
                     self._capture.depth(),
                     self._capture.worker_alive(),
                 )
+
+            # Stop routing to the ring; from here blocks feed the pre-roll again.
+            # Clearing it keeps this utterance's tail out of the next pre-roll.
+            with self._route_lock:
+                self._route_recording = False
+                if self._single_stream:
+                    self._pre_buffer.clear()
 
             # Get the recorded audio data
             audio_data = self._ring_buffer.get_data()
@@ -889,7 +976,30 @@ class EnhancedAudioRecorder:
                     continuous_overflows,
                     duration,
                 )
-            queue_dropped = self._capture.dropped[CHANNEL_RECORDING] - self._dropped_at_start
+            max_gap_ms = self._max_cb_gap * 1000.0
+            if overflows > 0 or continuous_overflows > 0:
+                # Where in the recording each overflow fell and what the queue looked
+                # like, plus the longest callback gap: a long gap means the process
+                # stalled (GIL/CPU), a normal gap means the device dropped samples.
+                offsets = [round(t - self._start_mono, 2) for t, _s, _d in self._overflow_events]
+                depths = [d for _t, _s, d in self._overflow_events]
+                logger.warning(
+                    "audio_overflow_detail single_stream=%s at_s=%s queue_depth=%s max_callback_gap_ms=%.0f",
+                    self._single_stream,
+                    offsets,
+                    depths,
+                    max_gap_ms,
+                )
+            elif max_gap_ms > 0.0:
+                logger.info(
+                    "audio_capture_summary single_stream=%s duration=%.2f callbacks=%d max_callback_gap_ms=%.0f queue_high_water=%d",
+                    self._single_stream,
+                    duration,
+                    self._callback_count,
+                    max_gap_ms,
+                    self._capture.high_water,
+                )
+            queue_dropped = self._recording_queue_dropped() - self._dropped_at_start
             if queue_dropped > 0:
                 logger.warning(
                     "audio_queue_saturated dropped_blocks=%d capacity_blocks=%d duration=%.2f",
