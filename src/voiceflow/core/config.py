@@ -54,6 +54,7 @@ class Config:
     silence_vad_threshold: float = 0.5
     silence_vad_min_chunk_ms: int = 100          # shorter VAD chunks are ignored
     silence_vad_min_speech_seconds: float = 0.25  # total speech needed to decode a whole recording
+    silence_vad_short_gate_max_seconds: float = 12.0  # recordings up to this long are VAD-checked before decoding
     paragraph_pause_seconds: float = 2.5     # pause that becomes a paragraph break
 
     # VF-12 formatting for AI prompts (core/dictation_format.py)

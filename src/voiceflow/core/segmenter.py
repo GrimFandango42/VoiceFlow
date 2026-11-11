@@ -498,11 +498,12 @@ def _decode_plans(
 
 
 # Words a sentence does not end on. A piece that ends with one was cut by a
-# pause in mid-sentence, whatever full stop the model put after it.
+# pause in mid-sentence, whatever full stop the model put after it. Kept
+# narrow on purpose: "you", "it", "that", "is" and stranded prepositions all
+# end real sentences ("I'll send it to you."), and joining those would be worse
+# than the stray full stop.
 _DANGLING = frozenset(
-    "a an the to of and or but so that which who with for from in on at by as if than then is are was were "
-    "be been am i we you they he she it my your our their his her its this these those not very really just "
-    "can could will would should may might must do does did have has had because while when where".split()
+    "a an the and or but to my your our their because if than which while".split()
 )
 
 
@@ -548,6 +549,20 @@ def decode_for_duration(engine, audio: np.ndarray, cfg=None, log: Optional[loggi
             result.fallback_reason or "none",
         )
         return result.text
+    # Short recordings never went through the VAD gate, so holding the key in a
+    # quiet room pasted whatever the model invents for room tone. Short clips
+    # only: Silero costs about 1% of the audio's length, which a long dictation
+    # already pays in the segmented path above.
+    gate_max = float(getattr(cfg, "silence_vad_short_gate_max_seconds", 12.0))
+    if 0.0 < duration <= gate_max:
+        regions = vad_speech_regions(audio, sample_rate, cfg)
+        if regions is not None:
+            speech_s = sum(b - a for a, b in regions) / float(sample_rate)
+            if speech_s < float(getattr(cfg, "silence_vad_min_speech_seconds", 0.25)):
+                (log or logger).info(
+                    "short_decode_skipped reason=vad_no_speech duration=%.2f vad_speech_s=%.2f", duration, speech_s
+                )
+                return ""
     return decode_audio(engine, audio, cfg)
 
 

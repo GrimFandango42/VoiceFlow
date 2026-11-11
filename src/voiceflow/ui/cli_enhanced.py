@@ -2485,6 +2485,11 @@ class EnhancedApp:
     #: A hold shorter than this that yields nothing is a stray Ctrl+Shift, not a
     #: dictation; it is logged but kept out of the history and off the screen.
     _FAILURE_MIN_AUDIO_SECONDS = 1.0
+    #: Holding the key and saying nothing is not an error. These leave the screen
+    #: alone, and reach the history only when the hold was long enough to have
+    #: been a real attempt.
+    _QUIET_FAILURES = frozenset({"silent", "empty", "non_speech", "no_audio"})
+    _QUIET_FAILURE_MIN_AUDIO_SECONDS = 3.0
 
     def _history_fail(
         self,
@@ -2507,6 +2512,9 @@ class EnhancedApp:
             )
             if not always and float(audio_seconds or 0.0) < self._FAILURE_MIN_AUDIO_SECONDS:
                 return
+            quiet = reason in self._QUIET_FAILURES
+            if quiet and not always and float(audio_seconds or 0.0) < self._QUIET_FAILURE_MIN_AUDIO_SECONDS:
+                return
             entry = {"reason": reason, "detail": detail, "audio_seconds": audio_seconds}
             summary = failure_summary(entry)
             if self.history is not None:
@@ -2524,7 +2532,8 @@ class EnhancedApp:
                     0.0,
                     metadata={"outcome": "failed", "failure_reason": reason, "failure_summary": summary},
                 )
-                show_error(f"Nothing pasted: {FAILURE_REASONS.get(reason, reason)} - see Recent")
+                if not quiet:
+                    show_error(f"Nothing pasted: {FAILURE_REASONS.get(reason, reason)} - see Recent")
         except Exception as exc:
             self._log.warning("history_fail_record_failed error=%s", exc)
 
@@ -2652,8 +2661,8 @@ class EnhancedApp:
             if not self.rec.is_recording():
                 print("[MIC] Listening...")
                 self._log.info("recording_started")
+                _t_press = time.perf_counter()
                 self._reset_checkpoint_state()
-                self.injector.capture_target_window()
                 self._release_target_noted = False
 
                 # Mark state as recording for idle-aware monitoring
@@ -2670,7 +2679,20 @@ class EnhancedApp:
                 if getattr(self.cfg, "audio_feedback_beeps", True):
                     _play_beep(880, 60)
 
+                _t_overlay = time.perf_counter()
                 self.rec.start()
+                _t_rec = time.perf_counter()
+                # After the overlay and the microphone, not before them: looking up
+                # the target window's process and title is the slow step here, and
+                # nothing the user sees or says should wait for it. The overlay never
+                # takes focus, so the foreground window is still the one dictated into.
+                self.injector.capture_target_window()
+                self._log.info(
+                    "recording_start_timing overlay_ms=%.1f mic_ms=%.1f target_ms=%.1f",
+                    (_t_overlay - _t_press) * 1000.0,
+                    (_t_rec - _t_overlay) * 1000.0,
+                    (time.perf_counter() - _t_rec) * 1000.0,
+                )
                 self._cancel_pending = False
                 self._arm_cancel_key()
                 try:
