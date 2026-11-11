@@ -37,7 +37,7 @@ A: Look for `asr_engine_initialized ... device=cuda compute=float16` in `voicefl
 
 ## Q: Can it run next to Wispr Flow?
 
-A: Yes. VoiceFlow's hold key is `Ctrl+Shift`, and its re-paste (`Alt+Shift+V`) and cancel (`Esc`) keys avoid `Ctrl+Alt`, which Wispr Flow and VoiceFlow's own toggles (`Ctrl+Alt+C/P/Enter`) use.
+A: Yes. VoiceFlow's hold key is `Ctrl+Shift`, and its re-paste (`Alt+Shift+V`) and cancel (`Esc`) keys avoid `Ctrl+Alt`, which Wispr Flow and VoiceFlow's own toggles (`Ctrl+Alt+C/P/Enter`) use. The one exception is the optional replace-last-paste key `Ctrl+Alt+R` (`replace_last_paste_hotkey`), which only does anything when the reconstruction pass is turned on; change or clear it if it clashes with Wispr Flow.
 
 ## Q: What leaves my machine?
 

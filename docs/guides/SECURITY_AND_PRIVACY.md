@@ -22,6 +22,9 @@ Everything below stays on your machine.
 | `learned_hotwords.json` | Terms you corrected at least twice; added to Whisper's vocabulary hints. Independent of the cloud setting. |
 | `recent_history_events.jsonl`, `transcription_corrections.jsonl` | Recent-history panel events and Correction Review feedback (bounded, rotated) |
 | `adaptive_patterns.json`, `adaptive_audit.jsonl` | Learned replacement rules and their audit trail; records older than `adaptive_retention_hours` (default 72) are purged |
+| `audio\dictation-*.wav` | The audio of your newest 30 dictations of one second or longer (16-bit mono WAV), kept so a wrong word can be replayed against other settings. **On by default.** Set `keep_audio_last_n` to `0` to keep none; delete the folder any time. Never uploaded. |
+| `tuning_log.jsonl` | Untruncated raw / pasted / reconstructed / edited text per dictation (up to 8,000 characters each) plus timing metadata, for tuning. **On by default** (`tuning_log_enabled`); rotates at 2,000 entries or 30 days. Never uploaded. |
+| `logs\boot_breadcrumb.log`, `startup_selfcheck.json`, `launch_contexts.jsonl` | Launch diagnostics: how and by whom VoiceFlow was started (parent process, session, environment variable *names* only) and the result of a start-up log/history write test. No transcript text. |
 | `daily_learning_reports\` | One JSON report per nightly learning run |
 | `pending_review.jsonl` | Rule suggestions from the nightly pass, waiting for your review (suggest-only) |
 | `custom_vocabulary.txt` | `wrong -> correct` vocabulary rules, seeded once from a bundled default; yours to edit |
@@ -51,7 +54,8 @@ Audio is never sent. The reply is used to suggest vocabulary and phrasing rules;
 3. Prefer `restore_clipboard=true` (the default) unless debugging injection issues.
 4. Keep adaptive retention bounded (`adaptive_retention_hours`) for privacy hygiene.
 5. Review local logs before sharing diagnostics.
-6. The recent-transcripts list is plain text on disk. Clear it from the tray if you dictate something sensitive.
+6. The recent-transcripts list, the tuning log and the saved dictation audio are plain files on disk. If you dictate something sensitive, clear history from the tray and delete `tuning_log.jsonl` and the `audio\` folder (or set `keep_audio_last_n: 0` and `tuning_log_enabled: false` to stop keeping them).
+7. The optional reconstruction pass (`reconstruction_enabled`, off by default) talks only to an Ollama server, `http://localhost:11434` by default; keep it local and the text never leaves the machine.
 
 ## Screenshot And Demo Hygiene
 

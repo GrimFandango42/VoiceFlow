@@ -58,7 +58,7 @@ dist\VoiceFlow\VoiceFlow.exe --self-check=report.json
 ## Architecture Notes
 
 - Tray is the primary control surface — setup wizard, settings, recent dictations, history/correction review are all reached from the tray right-click menu. The dock and overlay show state; the dock also shows the build's "Updated" date.
-- Keys: `Ctrl+Shift` hold to record, `Esc` cancels, `Alt+Shift+V` re-pastes the last transcript; `Ctrl+Alt+C/P/Enter` are toggles. Avoid `Ctrl+Alt` for new keys (Wispr Flow and the toggles use it).
+- Keys: `Ctrl+Shift` hold to record, `Esc` cancels, `Alt+Shift+V` re-pastes the last transcript; `Ctrl+Alt+C/P/Enter` are toggles; `Ctrl+Alt+R` replaces the last paste with the optional reconstruction pass's result. Avoid `Ctrl+Alt` for new keys (Wispr Flow and the toggles use it).
 - Every final transcript is saved to history (`core/history.py`) before the paste is attempted; `inject_target_policy` decides which window gets the text.
 - Long recordings (≥ 20 s) are cut at pauses and decoded piece by piece, with a Silero VAD gate; spoken commands and conservative cleanup live in `core/dictation_format.py`.
 - Three text cleanup passes: light typo correction (on by default), safe second pass (on by default), heavy cleanup and aggressive context rewrite (opt-in only).

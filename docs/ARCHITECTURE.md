@@ -111,16 +111,18 @@ Defined in `core/config.py`, persisted by `utils/settings.py` (which also migrat
 
 | Area | Fields |
 |---|---|
-| Model / device | `model_tier` (`quick`), `device` (`auto`), `compute_type`, `latency_boost_*`, `asr_hotwords` |
+| Model / device | `model_tier` (`quick`), `device` (`auto`), `compute_type`, `latency_boost_*` (second `tiny.en` model; off by default; the CPU setup profile turns it on), `asr_hotwords` |
 | Keys | `hotkey_ctrl/shift/alt/key`, `repaste_hotkey`, `cancel_recording_key`, `ptt_tail_buffer_seconds` |
 | Long dictation | `segmented_transcription_enabled`, `silence_vad_gate_enabled`, `max_recording_seconds` (300), `chat_preserve_newlines` |
 | Injection | `paste_injection`, `press_enter_after_paste`, `inject_target_policy` (`release`), `restore_clipboard`, `clipboard_restore_delay_ms` |
 | History / learning | `history_max_items` (50), `learned_hotwords_*`, `adaptive_retention_hours`, `adaptive_ai_analysis_enabled` (false) |
+| Text shaping / reconstruction | `auto_paragraphs_enabled`, `auto_lists_enabled`, `reconstruction_enabled` (false), `reconstruction_mode`, `replace_last_paste_hotkey` (`ctrl+alt+r`); see [Faithful dictation](FAITHFUL_DICTATION.md) |
+| Local records | `keep_audio_last_n` (30), `tuning_log_enabled` (true), `tuning_log_max_entries`, `tuning_log_max_age_days` |
 | Audio | `audio_single_stream`, `audio_queue_max_seconds`, `audio_input_latency`, `stop_drain_seconds` |
 | UI | `visual_indicators_enabled`, `visual_dock_enabled`, `audio_feedback_beeps`, `visual_animation_quality`, `visual_reduced_motion` |
 | Setup | `setup_completed`, `show_setup_on_startup`, `setup_profile` |
 
-Model tiers: `tiny` -> `tiny.en`; `quick` -> `small.en` (CPU) / `distil-large-v3` (CUDA); `balanced` -> the `distil-large-v3.5` profile, which loads the same faster-whisper distil-large-v3 weights; `quality` -> `large-v3`. CUDA needs `cublas64_12.dll` and `cudnn_ops64_9.dll`.
+Model tiers: `tiny` -> `tiny.en`; `quick` -> `small.en` (CPU) / `distil-large-v3` (CUDA); `balanced` -> `distil-large-v3`; `quality` -> `large-v3`. The name `distil-large-v3.5` is a legacy alias of `distil-large-v3` (it never loaded different weights; saved configs are rewritten once, and the real v3.5 export is the opt-in `distil-large-v3.5-ct2`). Startup logs `model_selection ... agrees=True|False`. If CUDA fails to initialise the app falls back to CPU `int8` loudly (tray tooltip, balloon, overlay message) and retries the GPU about every two minutes while idle. CUDA needs `cublas64_12.dll` and `cudnn_ops64_9.dll`.
 
 ### Environment controls
 

@@ -63,7 +63,7 @@ For a GPU, create `.venv-gpu` instead (`scripts\setup\bootstrap_windows.ps1 -Gpu
 
 ## Privacy
 
-Audio never leaves your machine, and nothing is uploaded by default. Transcript history, learned terms and logs live under `%LOCALAPPDATA%\VoiceFlow`. The one optional cloud step — a nightly sample of transcripts sent to Anthropic (or Gemini) for vocabulary suggestions — is **off by default** and described in full in the [Security & Privacy guide](docs/guides/SECURITY_AND_PRIVACY.md#optional-nightly-cloud-analysis-off-by-default).
+Audio never leaves your machine, and nothing is uploaded by default. Transcript history, learned terms, logs and the newest 30 dictation recordings (`keep_audio_last_n`; `0` keeps none) live under `%LOCALAPPDATA%\VoiceFlow`. The one optional cloud step — a nightly sample of transcripts sent to Anthropic (or Gemini) for vocabulary suggestions — is **off by default** and described in full in the [Security & Privacy guide](docs/guides/SECURITY_AND_PRIVACY.md#optional-nightly-cloud-analysis-off-by-default).
 
 ---
 

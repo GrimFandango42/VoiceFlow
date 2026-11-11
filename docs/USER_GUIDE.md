@@ -16,6 +16,7 @@ Keys at a glance:
 | `Ctrl+Alt+C` | Toggle code mode | fixed |
 | `Ctrl+Alt+P` | Toggle paste / type injection | fixed |
 | `Ctrl+Alt+Enter` | Toggle auto-Enter after paste | fixed |
+| `Ctrl+Alt+R` | Replace the last paste with the improved version (only when the optional reconstruction pass is on and has one ready) | `replace_last_paste_hotkey` |
 
 The re-paste and cancel keys avoid `Ctrl+Shift` (the push-to-talk hold) and `Ctrl+Alt` (the toggles above, and Wispr Flow), so VoiceFlow can run beside Wispr Flow. `Esc` is only watched while a recording is in progress, and `Ctrl+Shift+Esc` still opens Task Manager.
 
@@ -62,7 +63,7 @@ Right-click the tray icon.
 
 Every final transcript is written to a local list **before** VoiceFlow tries to paste it, so a paste that misses never loses text.
 
-- **Tray → Recent** lists the newest 10 dictations (time and first words); click one to copy it. Older ones (up to 50 are kept) are under **Older (11-20)**, **Older (21-30)** and so on. An entry marked **(not pasted)** was recognised but the paste did not land.
+- **Tray → Recent** lists the newest 10 dictations (time and first words); click one to copy it. Older ones (up to 50 are kept) are under **Older (11-20)**, **Older (21-30)** and so on. An entry marked **(not pasted)** was recognised but the paste did not land. A dictation that produced nothing usable (silence, noise, a result discarded as a likely silence artifact, too short, a timeout or an error) is listed too, tagged `[failed]`, `[discarded]` or `[too short]`, and the history panel has a **Failed** filter for them. Copying such an entry returns any text that was recognised before it was dropped. Holds under one second that yield nothing are only logged.
 - **Re-paste last transcript** (or `Alt+Shift+V`) pastes the last one where your cursor is now.
 - **Clear history** deletes the list. It is a local file, `%LOCALAPPDATA%\VoiceFlow\transcript_history.json`, and is never uploaded.
 
@@ -75,6 +76,8 @@ If the paste can't land because focus moved, the transcript is copied to the cli
 - **Long recordings are decoded pause by pause.** A recording of 20 s or more is cut at your own pauses and each piece is decoded separately, so silence never reaches the model (no phantom "Thank you." after a long think). Pauses of 2.5 s or more become paragraph breaks. Turn off with `segmented_transcription_enabled`.
 - **Noise and silence are gated by a real voice detector** (Silero VAD, bundled, offline). A long recording with no speech in it is not decoded at all, and a piece with no speech in it is skipped. Turn off with `silence_vad_gate_enabled`.
 - **Say structure out loud.** "new line", "new paragraph" and "bullet, …" work when said as their own phrase (pause around them): "Bullet, buy milk." becomes `- Buy milk.` Inside a sentence they stay literal ("a new line of products", "bullet train").
+- **Long dictations get paragraphs and lists.** A dictation of 60 or more words with no line breaks is split into paragraphs where the subject changes ("So yeah", "Also", "The other thing", …) or after five sentences; words are never changed. Terminals, code mode and typed injection keep one block. Spoken lists ("point one …", "first … second …") become list lines. Turn off with `auto_paragraphs_enabled` / `auto_lists_enabled`.
+- **Optional reconstruction pass (off by default).** `reconstruction_enabled` runs a local Ollama model (CPU only) on each dictation (it pastes first and only waits when it has proven fast) to repair form — casing, punctuation, run-ons, mis-heard vocabulary terms — never meaning. Numbers, names and paths must survive verbatim or the original is kept. An accepted result appears as the tray entry **Replace last paste with improved version** (or `Ctrl+Alt+R`); it is refused unless the same window is still focused and nothing was typed since. See [Faithful dictation](FAITHFUL_DICTATION.md).
 - **Ums and false starts** (`um`, `uh`, "the, the thing", "I think I think", a sentence-opening "I mean,") are removed conservatively; real repeats ("that that", "very very") stay. "Send it to John, no wait, send it to Jane" becomes "Send it to Jane". Say "scratch that" as its own phrase to drop the sentence before it. File names, paths, CamelCase and flags are never edited.
 - **Chat windows keep your line breaks** when pasting (`chat_preserve_newlines`, default on), since a paste does not press Enter. Typed injection strips them.
 
