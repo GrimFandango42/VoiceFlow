@@ -230,11 +230,17 @@ def _check_bundled_cuda(required: tuple[str, ...]) -> tuple[bool, str]:
     root = _bundle_root()
     if root is None:
         return False, "not a frozen bundle"
-    lib = root / "torch" / "lib"
     names = list(required) + list(CUDA_COMPANION_DLLS)
+    # The build ships the CUDA runtime at the bundle root; older bundles had
+    # it under torch/lib. A complete set in either place counts, root first.
+    lib = root / "torch" / "lib"
+    for candidate in (root, root / "torch" / "lib"):
+        if all((candidate / n).is_file() for n in names):
+            lib = candidate
+            break
     missing = [n for n in names if not (lib / n).is_file()]
     if missing:
-        return False, f"missing in bundle {lib}: {', '.join(missing)}"
+        return False, f"missing in bundle {root} and {lib}: {', '.join(missing)}"
     try:
         os.add_dll_directory(str(lib))
     except Exception:
