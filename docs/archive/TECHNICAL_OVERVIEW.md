@@ -1,5 +1,7 @@
 # VoiceFlow Technical Overview
 
+> **Archived (VF-14).** Superseded by [../ARCHITECTURE.md](../ARCHITECTURE.md), which now holds the runtime pipeline, configuration, environment controls and observability notes. Kept for history; some details below are out of date.
+
 ## Active Runtime Entry Points
 
 - `voiceflow.py` -> `voiceflow.ui.cli_enhanced:main`

@@ -1,37 +1,22 @@
-# VoiceFlow Architecture
+# VoiceFlow Architecture (pointer)
 
-## Two-Process Design
+The maintained description is [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md): layers, data flow, configuration, environment controls and repository layout.
 
-### Process 1 — Model Server
-- Hosts Whisper distil-large-v3.5 model in GPU memory
-- Accepts audio chunks via IPC
-- Returns transcription results with timestamps
-- Stays resident to avoid model reload latency
+## Two-process dev setup (the part specific to maintainers)
 
-### Process 2 — App Logic
-- Manages UI, hotkey listener, audio capture
-- Sends audio to model server for transcription
-- Handles learning system and vocabulary
-- Hot-reloadable via `dev.py` (no need to restart model server)
+`python dev.py` runs two processes:
 
-## Runtime Environment
-- **Python venv**: `.venv-gpu` (CUDA-enabled)
-- **Entry point**: `python dev.py` (development with hot-reload)
-- **GPU**: CUDA acceleration for Whisper inference
-- **NOT a frozen exe** — runs from source for development flexibility
+- **Model server** — loads the Whisper model once and serves it on `127.0.0.1:8765`; restarted only when `core/asr_engine.py`, `core/model_server.py` or `core/preloader.py` change.
+- **App** — UI, audio capture, hotkeys, learning; restarted on every saved `.py`, so a UI or logic change reloads in about a second without reloading the model.
 
-## Audio Pipeline
+Run it with the GPU venv: `.venv-gpu\Scripts\python.exe dev.py` (the venv needs a CUDA 12 PyTorch for the CUDA DLLs). The packaged app and `python _app_entry.py` are single-process; the model is loaded in-process.
+
+## Audio pipeline (summary)
+
 ```
-Microphone → Audio Capture → Silero VAD (filter silence)
-    → Audio Preprocessing → Whisper distil-large-v3.5
-    → Transcription → Learning Weights → Final Text Output
+Microphone -> shared capture stream (pre-roll + recording ring)
+  -> (long recordings) pause segmenter + Silero VAD gate
+  -> ASR (faster-whisper; hotwords + vocabulary prompt)
+  -> cleanup / spoken commands / formatting
+  -> history (saved before paste) -> paste into the target window
 ```
-
-## Key Components
-- **Silero VAD**: Filters silence/noise before sending to Whisper. Enabled by default.
-- **Whisper distil-large-v3.5**: Distilled model balancing speed and accuracy
-- **Learning system**: Adjusts recognition based on user corrections. 14-day data retention.
-- **Vocabulary customization**: User-defined terms for domain-specific recognition
-
-## Hotkey
-- **Ctrl+Shift**: Push-to-talk (hold to record, release to transcribe)

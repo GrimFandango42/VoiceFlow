@@ -128,8 +128,11 @@ Performance-critical fields:
 - `device`
 - `compute_type`
 - `model_tier`
+- `segmented_transcription_enabled`, `silence_vad_gate_enabled` (long dictation)
 - `pause_compaction_*`
 - `latency_boost_*`
+
+Hotkey and injection fields a port has to honour: `hotkey_*` (hold key), `repaste_hotkey`, `cancel_recording_key`, `inject_target_policy`, `paste_injection`. The transcript history (`core/history.py`) is platform-independent and should be kept as is.
 
 Compatibility override:
 

@@ -11,19 +11,37 @@ Use these first before editing config files manually.
 | Toggle code formatting mode | Tray -> `Code Mode` |
 | Switch paste vs typing injection | Tray -> `Injection` |
 | Toggle auto-enter | Tray -> `Auto-Enter` |
-| Open transcript history | Tray -> `Recent History` |
-| Correct transcript mistakes | Tray -> `Correction Review` |
+| Get a recent dictation back | Tray -> `Recent` (click to copy), or `Alt+Shift+V` to re-paste the last one |
+| Browse history / fix mistakes | Tray -> `Recent History`, `Correction Review` |
 | Toggle status visuals | Tray -> `Visual Indicators` / `Dock` |
 
 ## Q: App transcribes but text does not insert into my target window.
 
 A:
 
-1. Click back into the target app and press `Ctrl+V` once.
+Nothing is lost: the transcript is saved to history before VoiceFlow tries to paste.
+
+1. Click back into the target app and press `Alt+Shift+V` (re-paste the last transcript), or open tray -> `Recent` and click the entry to copy it, then press `Ctrl+V`. Entries that did not paste are marked `(not pasted)`.
 2. Check if a popup/notification stole focus during key release.
 3. Review `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log` for `inject_focus_drift`.
 
-VoiceFlow keeps a clipboard fallback for focus-drift edge cases.
+By default the text goes to the window that had focus the moment you released the hotkey (`inject_target_policy = release`). If that window had closed, nothing is pasted anywhere; the text is in `Recent` and on the clipboard.
+
+## Q: How do I cancel a recording?
+
+A: Press `Esc` while holding the hotkey. The audio is discarded and nothing is transcribed. (`cancel_recording_key` in the config; empty disables it.)
+
+## Q: Is VoiceFlow using my GPU?
+
+A: Look for `asr_engine_initialized ... device=cuda compute=float16` in `voiceflow.log`. `device=cpu compute=int8` means the CUDA runtime was not found (the log also has `cuda_runtime_unavailable missing_dlls=...`): VoiceFlow needs `cublas64_12.dll` and `cudnn_ops64_9.dll` (CUDA 12 / cuDNN 9) in the venv's `torch\lib`, in `VOICEFLOW_TORCH_LIB_DIR`, or on `PATH`. The packaged app bundles them and its build fails without them. Check a bundle without launching the tray: `VoiceFlow.exe --self-check=report.json`.
+
+## Q: Can it run next to Wispr Flow?
+
+A: Yes. VoiceFlow's hold key is `Ctrl+Shift`, and its re-paste (`Alt+Shift+V`) and cancel (`Esc`) keys avoid `Ctrl+Alt`, which Wispr Flow and VoiceFlow's own toggles (`Ctrl+Alt+C/P/Enter`) use.
+
+## Q: What leaves my machine?
+
+A: Audio never does, and nothing is uploaded by default. The only optional cloud step is the nightly transcript sample, off unless you tick it in `Setup & Defaults`. Details: [Security and privacy](SECURITY_AND_PRIVACY.md#optional-nightly-cloud-analysis-off-by-default).
 
 ## Q: VoiceFlow keeps pressing Enter after each transcription.
 
@@ -77,9 +95,7 @@ Yes. In startup flow, Step 1 is intentionally required before Step 2:
 3. Pick `Recommended`, `CPU Compatible`, or `GPU Balanced`.
 4. Click `Save And Launch`.
 
-Step 2 controls are locked/dimmed until Step 1 completes.
-
-Public docs intentionally omit live setup screenshots until sanitized captures are available.
+Step 2 controls are locked/dimmed until Step 1 completes. (A screenshot of the window is in the [User Guide](../USER_GUIDE.md#setup--defaults).)
 
 ## Q: Transcription is fast but quality/formatting looks rough.
 
@@ -96,13 +112,13 @@ A:
 
 1. Use tray -> `Correction Review` for misses.
 2. Keep adaptive learning enabled.
-3. Run daily learning job:
+3. Terms you correct twice are added to Whisper's vocabulary right away (`learned_hotwords.json`). Run the daily learning job for the rest:
 
 ```powershell
 .\VoiceFlow_DailyLearning.bat
 ```
 
-4. For repeated house-style terms, add local overrides in `%LOCALAPPDATA%\VoiceFlow\engineering_terms.json`.
+4. For repeated house-style terms, add `wrong -> correct` lines to `%LOCALAPPDATA%\VoiceFlow\custom_vocabulary.txt`, or local overrides in `engineering_terms.json`.
 
 Current builds already normalize a few recurring coding-tool phrases such as `Claude Code` and `Claude Desktop`; use the local terms file for anything more specific to your accent or workflow.
 
@@ -121,6 +137,9 @@ A:
 - Config: `%LOCALAPPDATA%\VoiceFlow\config.json`
 - Logs: `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow.log`
 - Fallback logs: `%LOCALAPPDATA%\VoiceFlow\logs\voiceflow-<pid>.log`
-- Recent history: `%LOCALAPPDATA%\VoiceFlow\recent_history_events.jsonl`
+- Recent dictations (tray `Recent`, last 50): `%LOCALAPPDATA%\VoiceFlow\transcript_history.json`
+- Recent-history panel events: `%LOCALAPPDATA%\VoiceFlow\recent_history_events.jsonl`
+- Learned hotwords: `%LOCALAPPDATA%\VoiceFlow\learned_hotwords.json`
+- Your vocabulary: `%LOCALAPPDATA%\VoiceFlow\custom_vocabulary.txt`
 - Corrections: `%LOCALAPPDATA%\VoiceFlow\transcription_corrections.jsonl`
 - Adaptive patterns: `%LOCALAPPDATA%\VoiceFlow\adaptive_patterns.json`

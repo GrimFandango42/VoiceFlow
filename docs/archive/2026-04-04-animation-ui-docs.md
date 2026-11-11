@@ -1,5 +1,7 @@
 # Animation + UI Spacing + Docs Implementation Plan
 
+> **Archived.** Implementation plan for the 3.2.0 ripple-ring overlay, which was later replaced by the spring-physics waveform bars (see [../../CHANGELOG.md](../../CHANGELOG.md), 3.2.1). Kept for history.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Replace broken bar animation with a modern ripple-ring orb effect, compress overlay-to-dock gap further, and rewrite README/CHANGELOG for open-source release.

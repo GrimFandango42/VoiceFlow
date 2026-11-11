@@ -1,21 +1,5 @@
 # Tests
 
-Active regression tests are in `tests/runtime/`.
+The maintained regression suite is `tests/runtime/`. Run it with `pytest -q tests\runtime`.
 
-## Run
-
-```powershell
-pytest -q tests\runtime
-```
-
-## Focused Transcription-Length Checks
-
-```powershell
-pytest -q tests\runtime\test_transcription_lengths.py
-```
-
-## Quick Runtime Smoke
-
-```powershell
-python scripts\dev\quick_smoke_test.py
-```
+Markers, CI behaviour, the packaged-build checks and the manual test matrix are in [`docs/TESTING_NOTES.md`](../docs/TESTING_NOTES.md).

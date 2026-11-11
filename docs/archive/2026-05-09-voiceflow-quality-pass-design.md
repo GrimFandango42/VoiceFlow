@@ -1,5 +1,7 @@
 # VoiceFlow Quality Pass — Design
 
+> **Archived (VF-14).** Design note for the May 2026 quality pass (drag-and-drop dock, vocabulary seed, AI learning analysis). It shipped; the cloud analysis step was later made opt-in (VF-03). Current behaviour: [../USER_GUIDE.md](../USER_GUIDE.md) and [../guides/SECURITY_AND_PRIVACY.md](../guides/SECURITY_AND_PRIVACY.md).
+
 **Date:** 2026-05-09
 **Branch:** `feat/voiceflow-quality-pass`
 **Author:** Nithin + Claude Code

@@ -1,94 +1,71 @@
 # VoiceFlow Roadmap
 
-This document captures the current priorities based on a competitive landscape review (April 2026) against WhisperWriter, OpenWhispr, Amical, OmniDictate, and Purfview/whisper-standalone-win.
+Where the project is and where it is going. Priorities come from the April 2026 competitive review (WhisperWriter, OpenWhispr, Amical, OmniDictate, whisper-standalone-win) and from daily use since. The short version: VoiceFlow's engine is ahead of the comparable open-source tools; the remaining gaps are mostly **first-run experience, observability and polish**.
 
-The short version: VoiceFlow's architecture is ahead of every comparable open-source tool. The gap is entirely **presentation and first-run experience**.
-
----
-
-## Status of the Ecosystem
-
-| Project | Stars | What they do better |
-|---------|-------|---------------------|
-| [WhisperWriter](https://github.com/savbell/whisper-writer) | ~1k | Simpler setup, more visible |
-| [OpenWhispr](https://github.com/OpenWhispr/openwhispr) | ~2.3k | Polished installer, cross-platform |
-| [Amical](https://github.com/amicalhq/amical) | ~1.1k | Context-aware per active app, modern UI |
-| [OmniDictate](https://github.com/gurjar1/OmniDictate) | ~118 | NSIS installer, voice punctuation |
-| VoiceFlow | ~2 | Everything else |
-
-VoiceFlow has streaming preview, pause compaction, three-tier text cleanup, adaptive learning, non-speech guard, and a cold-start eliminator. None of the comparable tools have all of these. The discoverability gap is fixable.
+Detailed history is in the [CHANGELOG](CHANGELOG.md); work orders are referenced by number (VF-nn).
 
 ---
 
-## Priority 1 — First Impression (High Return, Low Effort)
+## Done
 
-### Demo GIF in README
-A screen recording showing: hold hotkey → animation plays → text appears in VS Code. This converts visitors to users more than any feature description. WhisperWriter's README has one. VoiceFlow's doesn't.
+| Area | What shipped | Where |
+|---|---|---|
+| Engine | Local faster-whisper, CUDA with CPU fallback, model tiers, background warm-up | 3.1.x |
+| Live caption | Streaming preview with filler stripping; spring-physics waveform overlay | 3.2.x |
+| Release builds | One-click Windows release workflow (`build-release.yml`), installer, winget manifest template | 3.2.x |
+| First run | Setup wizard with hardware check, profiles and a model-download progress bar | 3.2.x |
+| Reliability | Copy-only audio callbacks, bounded queues, no false "hang" on long holds, ring-buffer cap | VF-10 |
+| Build gate | Build fails on a broken, CPU-only-by-accident or stale bundle; frozen `--self-check` | VF-09/10/11b |
+| Speed | Paste returns at the keystroke, idle warm-up hidden, one shared mic stream, timer-based key release | VF-11 |
+| Long dictation | Pause-segmented decoding, real VAD gate, right context for the last word, spoken commands, conservative cleanup | VF-12 |
+| Never lose text | Local history (last 50), tray **Recent**, `Alt+Shift+V` re-paste, `Esc` cancel, target-window policy | VF-12 |
+| Vocabulary | Hotwords on every decode, terms corrected twice are learned | VF-11/12 |
+| Privacy | Cloud transcript analysis is opt-in and fully disclosed | VF-03 |
+| CI | GitHub CI green without CUDA or a microphone | VF-15 |
+| Docs | Refreshed docs, generated screenshots (`scripts/capture_screenshots.py`), link checker | VF-14 |
 
-### "Wispr Flow alternative" framing
-The comparison table is there but undersells it. Wispr Flow is $120/year and cloud-based. VoiceFlow is free, local, and privacy-preserving. That positioning should be in the first sentence of the README, not buried.
+## Next
 
-### "Works in VS Code / Slack / Notepad / anywhere" framing
-Users want to know their specific app works before they download. A short compatibility matrix or a line like "injects into any Windows app including VS Code, Slack, Notepad, browsers, and terminals" converts better than a general feature list.
+### Health tracking (VF-13)
+A small, local, metadata-only record of how VoiceFlow is behaving over time: which build and device is running, whether the GPU path is healthy or has silently fallen back to the CPU, error and fallback counts, and release-to-text latency. Today the nearest things are the `longrun_health` and `transcription_timing` log lines and the idle-aware monitor, which you have to go and read. The scope is defined in the VF-13 work order; nothing from it is in this tree yet. It should stay metadata-only (no transcript text, no audio) and local.
 
----
+### Fix what the docs refresh found
+These are recorded in [`wiki/known-issues.md`](wiki/known-issues.md):
+- The setup wizard's primary "Save and Launch VoiceFlow" button renders white-on-white on the default Tk theme.
+- The overlay computes "Pasted N words" / "saved to history" messages but never draws them.
+- The `balanced` tier (`distil-large-v3.5`) loads the same weights as `quick` on a GPU, so there is no real "balanced" model yet.
 
-## Priority 2 — Installation Experience (High Return, Moderate Effort)
+### Presentation and install
+- A short demo GIF in the README (hold key, waveform, text appears). The README now has generated screenshots, not a recording.
+- Winget submission (the manifest template exists in `packaging/windows/winget`).
+- Smaller first download: ship a small runtime and fetch the model on first launch (the bundle is large because it carries torch and CUDA DLLs; the figure of ~826 MB comes from the April review and has not been re-measured).
 
-### Explicit first-run model download flow
-The setup wizard runs a hardware check but doesn't show a progress dialog when the model is downloading from Hugging Face cache. Users on slow connections or with firewall restrictions hit a 30-second silent wait with no feedback.
+### Runtime model swap
+`core/model_server.py` already keeps a persistent model process in dev mode. A tray item "Switch model → Quick | Balanced | Quality" that reloads without restarting the app would let you use a small model for notes and a large one for long dictation. No comparable open-source tool does this.
 
-Target: a modal showing "Downloading distil-large-v3 (350 MB)..." with a real progress bar, a cancel option, and a clear error if the download fails. This is the single highest-return UX improvement in the space.
+### Context-aware behaviour
+`destination_aware_formatting` and `infer_destination_profile` in `textproc.py` already adapt output to the target. The gap is more app categories (editor, mail, chat, terminal) and a tray control to choose a profile.
 
-### Separate runtime from model in the installer
-The current PyInstaller bundle is ~826 MB. Most of that is torch + CTranslate2. The model itself is downloaded at runtime but the DLLs are bundled.
+### Latency, measured
+[`docs/LATENCY_BUDGET.md`](docs/LATENCY_BUDGET.md) lists *expected* gains from VF-11 and the config-only levers still to try (`stop_drain_seconds`, the release confirm, the tail buffer). They have not been measured in the field; re-measure with `scripts/dev/log_latency.py` after a few days of use, then try the levers one at a time.
 
-The pattern that works (used by OpenWhispr, Handy, whisper-standalone-win): ship a small runtime zip (~100 MB, Python embeddable + CTranslate2 + faster-whisper + sounddevice), download the model on first launch with a progress bar. Total install footprint identical, but the initial download is small.
-
-### Winget submission
-One YAML manifest file. `winget install GrimFandango42.VoiceFlow` as a discovery path. Comparable tools like Handy are already in the winget catalog.
-
----
-
-## Priority 3 — Runtime Model Swap (Meaningful Differentiation)
-
-VoiceFlow's `core/model_server.py` already maintains a persistent model process. The infrastructure for hot model swapping exists.
-
-Target: a tray menu item "Switch model → [Quick | Balanced | Quality]" that POSTs to the model server and reloads without restarting the app. No comparable open-source tool does this. It directly addresses the "I want to use the small model for quick notes and the large model for long dictation" use case.
-
----
-
-## Priority 4 — Context-Aware Behavior (Longer Term)
-
-Amical's standout feature is reading the active application name and adjusting behavior — different cleanup rules for a code editor vs. an email client vs. a chat app.
-
-VoiceFlow already has `destination_aware_formatting` and `infer_destination_profile` in `textproc.py`. The gap is extending that profile detection to more app categories and making it configurable from the tray.
-
----
-
-## Priority 5 — Community Infrastructure
-
-### Discord server
-Costs nothing. Creates the appearance of an active community before one actually exists. Stage-Whisper, OpenWhispr, and Whispering all have one. User feedback gathered in Discord becomes the input for the adaptive learning system.
-
-### GitHub Actions release publishing
-Currently releases are created manually. A `build-release.yml` workflow that builds and publishes the PyInstaller bundle on tag push would signal project health and remove the manual step from the release process.
+### Community
+A Discord server or GitHub Discussions space, and user feedback gathered there as input to the learning system.
 
 ---
 
-## Things Already Handled Well — Don't Revisit
+## Already handled well — don't revisit
 
-- **int8 quantization on CTranslate2** — already optimal for the GPU path
-- **VAD** — VoiceFlow uses a custom non-speech guard (crest-factor + voiced-frame ratio) rather than the raw Silero integration. More sophisticated than every comparable tool.
-- **Model server for persistent loading** — better than every open-source peer
-- **Streaming preview with real-time cleanup** — WhisperWriter doesn't have it; OmniDictate's "real-time" is actually a full retranscription loop
-- **Pause compaction for long dictation** — unique in the space
-- **Three-tier text cleanup** — no comparable tool has this
-- **Adaptive learning loop** — no comparable tool has anything equivalent
-- **24/7 idle stability** — idle-aware monitor, queue cap, focus hardening
+- **int8 quantization on CTranslate2** for the CPU path; float16 on CUDA.
+- **Voice activity detection** — Silero VAD (bundled with faster-whisper) gates long recordings and each decoded piece, alongside the custom non-speech guard and silence-artifact classifier. Whisper's own `no_speech_prob` is not trusted (measured, VF-12).
+- **Model server for persistent loading** in dev mode.
+- **Streaming preview with real-time cleanup.**
+- **Long-form dictation** — pause-segmented decoding with paragraph breaks at long pauses.
+- **Three-tier text cleanup** (light, safe, heavy opt-in).
+- **Adaptive learning loop**, local by default.
+- **24/7 idle stability** — idle-aware monitor, bounded queues, overlay focus hardening.
 
----
+## Not planned
 
-## Model Tier Note
-
-The research found that `distil-large-v3.5` (currently the BALANCED tier) is ~1.5x faster than `distil-large-v3` (currently the QUICK GPU tier) at nearly identical WER for short-form utterances. Swapping the QUICK GPU mapping to v3.5 would make QUICK both faster and equivalent in quality to the current BALANCED tier. Worth evaluating after the presentation priorities above are addressed.
+- macOS / Linux builds: see the [forking guide](docs/guides/FORKING_AND_PLATFORM_GUIDE.md) for the seams a fork would replace.
+- Any default behaviour that sends audio or transcripts off the machine.

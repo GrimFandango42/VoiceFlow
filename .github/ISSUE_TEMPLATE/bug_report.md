@@ -28,8 +28,8 @@ paste log here
 **Environment**
 - Windows version: (e.g. Windows 11 23H2)
 - Python version: (e.g. 3.11.8)
-- VoiceFlow version: (shown in tray tooltip)
-- Mode: CPU / GPU (CUDA)
+- VoiceFlow build: (the "Updated MM-DD HH:MM" date on the dock; release version if you downloaded one)
+- Mode: CPU / GPU (CUDA) (log line `asr_engine_initialized` shows `device=cuda` or `device=cpu`)
 - GPU if applicable: (e.g. RTX 3080)
 - Launched via: VoiceFlow.bat / VoiceFlow.exe / other
 
