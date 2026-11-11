@@ -139,8 +139,10 @@ def is_repeat_hallucination(
 
     # Known phrase loops -- but they too must dominate. "Thank you thank you"
     # alone is a loop; "thank you thank you so much for everything" is a person.
+    # Matched on the punctuation-free words: the decoder writes "Thank you. Thank you."
+    flat = " ".join(tokens)
     for phrase in patterns:
-        if phrase in haystack:
+        if phrase in flat:
             phrase_len = len(tokenize(phrase))
             if phrase_len >= GENERIC_REPEAT_DOMINANCE * len(tokens):
                 return True
@@ -191,6 +193,9 @@ def classify(
     present means the phrase is treated as something the user actually said.
     """
     if not text or not text.strip():
+        return True, "empty"
+    # A lone ".", "..." or "-" is the decoder breathing, not a dictation.
+    if not tokenize(text):
         return True, "empty"
 
     if is_repeat_hallucination(text):
