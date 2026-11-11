@@ -48,8 +48,8 @@ A candidate is accepted only if **all** of these hold, checked on the text the u
    certainty, frequency, causality, modality, contrast or consequence - a vocabulary entry does not license them
    either: `I will ship today` -> `I will not ship today` is `meaning_word_inserted`/`novel_content`), delete a filler
    sound or an immediate stutter, respell a word or phrase into a vocabulary term or a **name or identifier** the
-   speaker already used in the same dictation (a protected token, a capitalised proper noun or a sentence-initial
-   name: `pie installer` -> `PyInstaller`, `cubernetes` -> `Kubernetes` after `Kubernetes`), or contract/expand or
+   speaker already used in the same dictation (a protected token or a mid-sentence capitalised proper noun:
+   `pie installer` -> `PyInstaller`, `cubernetes` -> `Kubernetes` after `Kubernetes`), or contract/expand or
    swap a homophone (`that is` -> `that's`, `there` -> `their`). A close spelling alone is never enough, and neither
    is an ordinary word that merely occurs elsewhere: `the cat is here` -> `the car is here`, and `The cat and car are
    here. The cat is red.` -> `... The car is red.`, and `he` -> `she` are rejected (`unsourced_replacement` /
@@ -59,6 +59,14 @@ A candidate is accepted only if **all** of these hold, checked on the text the u
    changes (`note` -> `notes`), inserting a determiner (`over WebSocket` -> `over a WebSocket`) and swapping one
    small word for another (`is good` -> `they're good`) are rejected. Each of those was seen in an evaluation run
    or a review probe.
+   Round 5 closed the last two holes. **A vocabulary term is only ever a replacement, never an insertion**: it must
+   take the place of a word that was actually transcribed and is a close spelling/phonetic match, and a replacement
+   may merge words but never grow (`we will send it today` -> `We will send it to Claude today.` is `vocab_inserted`
+   even with `Claude` in the vocabulary; `we will send it to clawed today` -> `... to Claude today.` is still
+   accepted). **A sentence-initial word is protected from loss but is not a replacement source**: its capital comes
+   from position, so `Car is ready. The cat is red.` -> `... The car is red.` and `Ship the build today. The chip is
+   broken.` -> `... the ship is broken.` are `unsourced_replacement`. The three probes are pinned verbatim in
+   `tests/runtime/test_vf17_review_round5.py`.
 5. The final word is never changed (unless it was a filler or was respelled into a vocabulary term):
    losing the tail is the defect this order exists to fix.
 6. Cap on the share of inserted small words (max(2, 15 % of the words)).
