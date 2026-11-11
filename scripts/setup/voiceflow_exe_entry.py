@@ -191,7 +191,7 @@ def _run_diagnostic_benchmark(wav_path: Path) -> int:
 SELF_CHECK_MODULES = (
     "voiceflow.core.asr_engine",
     "voiceflow.core.audio_enhanced",
-    "voiceflow.core.streaming",
+    "voiceflow.core.live_caption",
     "voiceflow.integrations.inject",
     "voiceflow.integrations.hotkeys_enhanced",
     "voiceflow.ui.cli_enhanced",

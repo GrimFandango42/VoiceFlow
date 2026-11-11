@@ -170,14 +170,21 @@ def _check_cuda(
 ) -> None:
     if timeout is None:
         timeout = CUDA_LOAD_TIMEOUT_S
-    lib = internal / CUDA_RELATIVE
     wanted = list(required) + list(_literal_tuple(EXE_ENTRY, "CUDA_COMPANION_DLLS"))
+    # The build puts the CUDA runtime at the bundle root (_internal), the only
+    # place Windows searches before our code runs; older bundles had it under
+    # torch/lib. Accept a complete set in either place, root first.
+    lib = internal / CUDA_RELATIVE
+    for candidate in (internal, internal / CUDA_RELATIVE):
+        if all((candidate / d).is_file() for d in wanted):
+            lib = candidate
+            break
     missing = [d for d in wanted if not (lib / d).is_file()]
     if missing:
         report.add(
             "cuda_runtime_dlls",
             False,
-            f"missing under {CUDA_RELATIVE}: {', '.join(missing)}"
+            f"missing under {CUDA_RELATIVE} and the bundle root: {', '.join(missing)}"
             + (" (accepted: --allow-cpu-only; this build runs CPU int8 only)" if allow_cpu_only else ""),
             warn_only=allow_cpu_only,
         )
@@ -214,7 +221,8 @@ def _check_cuda(
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:] or ["no output"]
         report.add("cuda_runtime_dlls", False, f"present but failed to load: {tail[0]}", warn_only=allow_cpu_only)
         return
-    report.add("cuda_runtime_dlls", True, f"{', '.join(wanted)} present and load from {CUDA_RELATIVE}")
+    where = CUDA_RELATIVE if lib != internal else "the bundle root"
+    report.add("cuda_runtime_dlls", True, f"{', '.join(wanted)} present and load from {where}")
 
 
 def _has_extension_module(internal: Path, module: str) -> bool:
