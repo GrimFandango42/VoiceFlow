@@ -40,6 +40,7 @@ STATUS_FAILED = "failed"          # nothing was pasted because nothing usable wa
 FAILURE_REASONS: Dict[str, str] = {
     "no_audio": "The microphone delivered no audio",
     "silent": "Only silence was recorded",
+    "no_speech": "No speech was detected (nothing pasted)",
     "non_speech": "It sounded like a noise burst, not speech",
     "filtered": "Discarded as a likely silence artifact",
     "too_short": "The recognised text was too short to paste",
@@ -253,7 +254,7 @@ def menu_label(entry: Dict[str, Any], width: int = 56) -> str:
     text = " ".join(str(entry.get("text", "")).split())
     if failed:
         # With recovered text, keep the tag short: the text is what the user is looking for.
-        tag = {"filtered": "discarded", "too_short": "too short"}.get(str(entry.get("reason", "")), "failed")
+        tag = {"filtered": "discarded", "too_short": "too short", "no_speech": "no speech"}.get(str(entry.get("reason", "")), "failed")
         text = f"[{tag}] {text}" if text else f"[failed] {failure_summary(entry)}"
     if len(text) > width:
         text = text[: width - 1].rstrip() + "…"

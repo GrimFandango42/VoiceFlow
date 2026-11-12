@@ -56,6 +56,11 @@ class Config:
     silence_vad_min_speech_seconds: float = 0.25  # total speech needed to decode a whole recording
     silence_vad_short_gate_max_seconds: float = 12.0  # recordings up to this long are VAD-checked before decoding
     paragraph_pause_seconds: float = 2.5     # pause that becomes a paragraph break
+    # VF-21: a dictation of fewer sentences than this never gets a pause-based paragraph break.
+    paragraph_min_sentences: int = 3
+    # VF-21: a lone filler/hallucination phrase ("Thank you.") over less VAD speech than this is
+    # dropped even when the decoder's own no-speech probability is low.
+    silence_artifact_max_vad_speech_seconds: float = 0.5
 
     # VF-12 formatting for AI prompts (core/dictation_format.py)
     prompt_cleanup_enabled: bool = True       # um/uh, stutters, "I mean," / "scratch that"
@@ -409,7 +414,9 @@ class Config:
     # on GPU setups, after which the user's own choice is never overridden.
     single_model_migration_version: int = 0
     vf19_migration_version: int = 0
-    # Long single-block dictations are split into paragraphs at subject changes.
+    # Long dictations come out as paragraphs: breaks at long pauses (segmenter), subject changes and
+    # sentence counts (textproc.auto_paragraphs). One switch for all of it; spoken "new paragraph"
+    # is a command and always works.
     auto_paragraphs_enabled: bool = True
     auto_lists_enabled: bool = True  # "point one ..." / "first ... second ..." become list lines
     auto_paragraph_min_words: int = 60

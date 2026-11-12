@@ -21,6 +21,7 @@ room-tone either side of the words. Nothing here loads a model.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence, Tuple
 
@@ -49,6 +50,9 @@ class SegmentPiece:
     start_s: float
     end_s: float
     suppressed: str = ""  # non-empty = decoded text was dropped, with the reason
+    #: Silence before this piece's first word measured on the VAD timeline (None = no VAD
+    #: evidence; ``gap_before_s`` from the energy detector applies then).
+    speech_gap_before_s: Optional[float] = None
 
 
 @dataclass
@@ -291,6 +295,26 @@ def vad_speech_regions(audio: np.ndarray, sample_rate: int, cfg=None) -> Optiona
     return [(max(0, int(t["start"])), min(n, int(t["end"]))) for t in stamps if int(t["end"]) > int(t["start"])]
 
 
+def _speech_extent(regions: Sequence[Region], start: int, end: int) -> Optional[Tuple[int, int]]:
+    """First speech sample and last speech sample of ``regions`` inside [start, end)."""
+    first = last = None
+    for a, b in regions:
+        lo, hi = max(a, start), min(b, end)
+        if hi > lo:
+            first = lo if first is None else min(first, lo)
+            last = hi if last is None else max(last, hi)
+    return None if first is None else (first, last)
+
+
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
+
+
+def count_sentences(text: str) -> int:
+    """Cheap sentence count (terminal punctuation); text with none counts as one."""
+    parts = [p for p in _SENTENCE_BREAK.split((text or "").strip()) if p.strip()]
+    return len(parts)
+
+
 def _overlap_samples(regions: Sequence[Region], start: int, end: int) -> int:
     return sum(max(0, min(end, b) - max(start, a)) for a, b in regions)
 
@@ -449,10 +473,18 @@ def _decode_plans(
     right_context = float(getattr(cfg, "decode_right_context_seconds", 0.4))
 
     pieces: List[SegmentPiece] = []
+    prev_speech_end: Optional[int] = None
     for plan in plans:
         start_s = plan.start / float(sample_rate)
         end_s = plan.end / float(sample_rate)
         overlap = _overlap_samples(vad_regions, plan.start, plan.end) if vad_regions is not None else None
+        speech_gap: Optional[float] = None
+        if vad_regions is not None:
+            extent = _speech_extent(vad_regions, plan.start, plan.end)
+            if extent is not None:
+                if prev_speech_end is not None:
+                    speech_gap = max(0.0, (extent[0] - prev_speech_end) / float(sample_rate))
+                prev_speech_end = extent[1]
         if overlap == 0:
             # Energy found a "segment" but VAD heard no speech anywhere in it (a clatter, a cough,
             # a fan surge). Whisper invents text for such audio and its no_speech_prob does not
@@ -472,28 +504,47 @@ def _decode_plans(
             start_s=start_s,
             end_s=end_s,
             suppressed=reason if suppress else "",
+            speech_gap_before_s=speech_gap,
         )
         if suppress and reason != "empty":
             log.info("segment_suppressed reason=%s start=%.1f end=%.1f", reason, piece.start_s, piece.end_s)
         pieces.append(piece)
 
-    out: List[str] = []
+    # (text, silence since the previous kept piece). A suppressed piece's silence is carried
+    # over so a pause around a dropped hallucination still counts.
+    kept: List[Tuple[str, float]] = []
     pending_gap = 0.0
     for piece in pieces:
-        pending_gap += piece.gap_before_s
+        if piece.speech_gap_before_s is not None:
+            pending_gap += piece.speech_gap_before_s
+        elif vad_regions is None:
+            pending_gap += piece.gap_before_s
+        # else: a VAD timeline exists and this piece has no speech in it (a cough, a clatter), so
+        # it contributes nothing -- the next speech piece's VAD gap already spans the whole
+        # stretch, and adding the energy gap too would count that silence twice.
         if not piece.text:
             continue
-        if out:
-            if pending_gap >= paragraph_gap:
-                out.append("\n\n")
-                out.append(piece.text)
-            else:
-                out[-1], joined = join_across_pause(out[-1], piece.text)
-                out.append(" ")
-                out.append(joined)
-        else:
-            out.append(piece.text)
+        kept.append((piece.text, pending_gap))
         pending_gap = 0.0
+
+    # Paragraphs from pauses: on by default, off with ``auto_paragraphs_enabled``, and never for
+    # a short dictation -- two sentences with a thinking pause between them are one thought.
+    paragraphs = bool(getattr(cfg, "auto_paragraphs_enabled", True))
+    if paragraphs:
+        min_sentences = int(getattr(cfg, "paragraph_min_sentences", 3))
+        paragraphs = sum(count_sentences(t) for t, _ in kept) >= min_sentences
+
+    out: List[str] = []
+    for text, gap in kept:
+        if not out:
+            out.append(text)
+        elif paragraphs and gap >= paragraph_gap:
+            out.append("\n\n")
+            out.append(text)
+        else:
+            out[-1], joined = join_across_pause(out[-1], text)
+            out.append(" ")
+            out.append(joined)
     return SegmentedTranscript(text="".join(out).strip(), pieces=list(pieces))
 
 
@@ -535,8 +586,36 @@ def join_across_pause(before: str, after: str) -> Tuple[str, str]:
     return before, after
 
 
+#: Why the most recent ``decode_for_duration`` came back empty on purpose: "no_speech" when VAD or the
+#: silence-artifact guard dropped it, "" otherwise (the model itself returned nothing, or text came
+#: back). Dictations are serial, so a module-level note is enough; the caller reads it right after.
+_last_empty_reason = ""
+_last_dropped_text = ""   # what the guard threw away, when there was any, so history can keep it
+
+
+def last_empty_reason() -> str:
+    return _last_empty_reason
+
+
+def last_dropped_text() -> str:
+    return _last_dropped_text
+
+
 def decode_for_duration(engine, audio: np.ndarray, cfg=None, log: Optional[logging.Logger] = None) -> str:
     """Final-decode entry point: segmented for long recordings, padded single call otherwise."""
+    global _last_empty_reason, _last_dropped_text
+    _last_empty_reason = _last_dropped_text = ""
+    text, dropped, thrown = _decode_for_duration(engine, audio, cfg, log)
+    if not text.strip() and dropped:
+        _last_empty_reason = "no_speech"
+        _last_dropped_text = thrown
+    return text
+
+
+def _decode_for_duration(engine, audio, cfg, log) -> Tuple[str, bool, str]:
+    """(text, dropped_on_purpose, text_that_was_dropped)."""
+    from voiceflow.core.silence_artifacts import classify
+
     sample_rate = int(getattr(cfg, "sample_rate", 16000) or 16000)
     duration = len(audio) / float(sample_rate) if audio is not None else 0.0
     if should_segment(duration, cfg):
@@ -548,12 +627,16 @@ def decode_for_duration(engine, audio: np.ndarray, cfg=None, log: Optional[loggi
             result.suppressed_count,
             result.fallback_reason or "none",
         )
-        return result.text
+        dropped = result.fallback_reason == "no_speech_vad" or (
+            result.segment_count > 0 and result.suppressed_count == result.segment_count
+        )
+        return result.text, dropped, ""
     # Short recordings never went through the VAD gate, so holding the key in a
     # quiet room pasted whatever the model invents for room tone. Short clips
     # only: Silero costs about 1% of the audio's length, which a long dictation
     # already pays in the segmented path above.
     gate_max = float(getattr(cfg, "silence_vad_short_gate_max_seconds", 12.0))
+    speech_s: Optional[float] = None
     if 0.0 < duration <= gate_max:
         regions = vad_speech_regions(audio, sample_rate, cfg)
         if regions is not None:
@@ -562,8 +645,22 @@ def decode_for_duration(engine, audio: np.ndarray, cfg=None, log: Optional[loggi
                 (log or logger).info(
                     "short_decode_skipped reason=vad_no_speech duration=%.2f vad_speech_s=%.2f", duration, speech_s
                 )
-                return ""
-    return decode_audio(engine, audio, cfg)
+                return "", True, ""
+    text = decode_audio(engine, audio, cfg)
+    if speech_s is not None and text.strip():
+        # A lone "Thank you." / "you" / "Okay." over a sliver of VAD speech is the model filling
+        # silence around a click or a breath, whatever no_speech_prob says (it reads ~0.04 on
+        # stationary noise). Fully spoken words always carry more VAD speech than this.
+        weak = speech_s < float(getattr(cfg, "silence_artifact_max_vad_speech_seconds", 0.5))
+        suppress, why = classify(
+            text,
+            no_speech_prob=float(getattr(engine, "last_no_speech_prob", 0.0) or 0.0),
+            non_speech_suspected=weak,
+        )
+        if suppress:
+            (log or logger).info("short_decode_suppressed reason=%s vad_speech_s=%.2f", why, speech_s)
+            return "", True, text.strip()
+    return text, False, ""
 
 
 __all__: Sequence[str] = (
@@ -579,6 +676,9 @@ __all__: Sequence[str] = (
     "decode_audio",
     "join_across_pause",
     "decode_for_duration",
+    "last_empty_reason",
+    "last_dropped_text",
+    "count_sentences",
     "should_segment",
     "transcribe_segmented",
 )

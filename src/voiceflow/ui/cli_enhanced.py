@@ -63,7 +63,13 @@ from voiceflow.core.history import (
     failure_summary,
 )
 from voiceflow.core.history import copy_text as history_copy_text
-from voiceflow.core.segmenter import decode_audio, decode_for_duration, should_segment
+from voiceflow.core.segmenter import (
+    decode_audio,
+    decode_for_duration,
+    last_dropped_text,
+    last_empty_reason,
+    should_segment,
+)
 from voiceflow.core.silence_artifacts import classify as classify_silence_artifact
 
 # Streaming preview
@@ -2547,8 +2553,8 @@ class EnhancedApp:
     #: Holding the key and saying nothing is not an error. These leave the screen
     #: alone, and reach the history only when the hold was long enough to have
     #: been a real attempt.
-    _QUIET_FAILURES = frozenset({"silent", "empty", "non_speech", "no_audio"})
-    _QUIET_FAILURE_MIN_AUDIO_SECONDS = 3.0
+    _QUIET_FAILURES = frozenset({"silent", "empty", "non_speech", "no_audio", "no_speech"})
+    _QUIET_FAILURE_MIN_AUDIO_SECONDS = 1.0
 
     def _history_fail(
         self,
@@ -3820,7 +3826,16 @@ class EnhancedApp:
                 if VISUAL_INDICATORS_AVAILABLE:
                     hide_status()
             if not text.strip():
-                self._history_fail("empty", audio_seconds=raw_audio_duration)
+                # VF-21: triggering with nothing said pastes nothing and leaves an entry in the
+                # history. "no_speech" = VAD / the silence-artifact guard dropped it on purpose.
+                # The dropped words go in the detail, not the text field: an entry with text is
+                # what Alt+Shift+V re-pastes, and a hallucination must never be that.
+                dropped = last_dropped_text()
+                self._history_fail(
+                    last_empty_reason() or "empty",
+                    detail=f'dropped "{dropped[:80]}"' if dropped else "",
+                    audio_seconds=raw_audio_duration,
+                )
 
             self._last_transcription_completed_at = time.time()
             return text
