@@ -1,4 +1,9 @@
-"""VF-12 review finding 4: build snapshot pruning is opt-in and only touches generated names.
+"""Build snapshot pruning: on by default, and it only touches generated names.
+
+The build script keeps the two newest snapshots by default (owner decision 2026-11-26,
+after 25 unpruned ~2 GB zips filled the system drive; this reverses the opt-in default
+from VF-12 review finding 4). ``-KeepPackages 0`` keeps everything, and the function
+itself deletes nothing unless a caller passes ``-Keep``.
 
 Runs the real ``Remove-StaleBuildArtifacts`` function from the build script in pwsh against a
 temporary folder of empty fixture files. Nothing outside ``tmp_path`` is read or deleted.
@@ -57,9 +62,10 @@ def _run_prune(folder: Path, keep: int | None) -> set[str]:
     return {p.name for p in folder.iterdir()}
 
 
-def test_default_keep_packages_is_zero_so_a_build_deletes_nothing():
+def test_build_keeps_two_snapshots_by_default_and_the_function_stays_safe():
     text = SCRIPT.read_text(encoding="utf-8")
-    assert re.search(r"\[int\]\$KeepPackages\s*=\s*0\b", text), "pruning must be opt-in"
+    assert re.search(r"\[int\]\$KeepPackages\s*=\s*2\b", text), "a build prunes to the two newest snapshots by default"
+    # The function default stays 0: a caller that forgets -Keep deletes nothing.
     assert re.search(r"\[int\]\$Keep\s*=\s*0\b", _function_source())
     assert "Remove-StaleBuildArtifacts -PackagePath $packagePath -Keep $KeepPackages" in text
 

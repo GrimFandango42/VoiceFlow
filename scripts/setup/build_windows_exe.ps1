@@ -22,11 +22,13 @@ param(
     # opt-in; without it a missing CUDA runtime fails the build.
     [switch]$AllowCpuOnly,
     [switch]$SkipProcessCleanup,
-    # OPT-IN pruning of old timestamped build snapshots in dist\packages (each is ~2 GB).
-    # Default 0 = keep everything: a build never deletes files unless asked. N > 0 keeps
-    # the N most recent snapshots and deletes older ones. Published release assets are
-    # never pruned.
-    [int]$KeepPackages = 0
+    # Pruning of old timestamped build snapshots in dist\packages (each is ~2 GB).
+    # Default 2: keep the two most recent snapshots and delete older ones. Every build
+    # writes one and nothing else removes them: by 2026-11-25 there were 25 of them,
+    # about 32 GB across three checkouts, on a system drive with 9 GB free, and Nithin
+    # asked for pruning to be the default. -KeepPackages 0 keeps everything. Published
+    # release assets are never pruned.
+    [int]$KeepPackages = 2
 )
 
 Set-StrictMode -Version Latest
@@ -348,7 +350,8 @@ function Remove-StaleBuildArtifacts {
         [int]$Keep = 0
     )
 
-    # 0 means keep everything, as the -KeepPackages help says.
+    # 0 means keep everything, as the -KeepPackages help says. The function default
+    # stays 0 so a caller that forgets -Keep deletes nothing; the script default is 2.
     if ($Keep -le 0) {
         return
     }
