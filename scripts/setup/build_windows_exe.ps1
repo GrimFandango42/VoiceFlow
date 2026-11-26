@@ -363,9 +363,12 @@ function Remove-StaleBuildArtifacts {
     # Only files this script generates: <name>-YYYYMMDD-HHMMSS-(portable|onefile).zip.
     # Release assets (VoiceFlow-win64.exe, VoiceFlow-portable-win64.zip,
     # SHA256SUMS.txt) carry no timestamp and are therefore never matched.
-    $snapshots = Get-ChildItem -Path $PackagePath -File -ErrorAction SilentlyContinue |
+    # @(...) matters: this script runs under Set-StrictMode -Version Latest in Windows
+    # PowerShell 5.1, where .Count on a single FileInfo (or on nothing) throws. With one
+    # snapshot in the folder that failed an otherwise finished build (2026-11-26).
+    $snapshots = @(Get-ChildItem -Path $PackagePath -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '-\d{8}-\d{6}-(portable|onefile)\.zip$' } |
-        Sort-Object LastWriteTime -Descending
+        Sort-Object LastWriteTime -Descending)
 
     if ($snapshots.Count -le $Keep) {
         return

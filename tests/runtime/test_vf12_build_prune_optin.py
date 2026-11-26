@@ -19,6 +19,9 @@ import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "setup" / "build_windows_exe.ps1"
 PWSH = shutil.which("pwsh")
+# The build script is run with Windows PowerShell 5.1 (see BUILD_GUIDE.md), whose strict mode is
+# stricter than pwsh 7 about .Count on a single object.
+WINPS = shutil.which("powershell")
 
 
 def _function_source() -> str:
@@ -88,3 +91,21 @@ def test_opt_in_keeps_n_newest_snapshots_and_never_release_assets(tmp_path):
 def test_opt_in_is_a_noop_when_there_are_fewer_snapshots_than_the_limit(tmp_path):
     names = _make_fixture(tmp_path)
     assert _run_prune(tmp_path, 10) == set(names.values())
+
+@pytest.mark.skipif(WINPS is None, reason="Windows PowerShell not installed")
+@pytest.mark.parametrize("snapshot_count", [0, 1])
+def test_prune_survives_strict_mode_with_zero_or_one_snapshot(tmp_path, snapshot_count):
+    """The build runs under Set-StrictMode -Version Latest; one snapshot used to throw on .Count."""
+    names = ["VoiceFlow-20260101-010101-portable.zip"][:snapshot_count] + ["VoiceFlow-win64.exe"]
+    for name in names:
+        (tmp_path / name).write_bytes(b"x")
+    script = (
+        "Set-StrictMode -Version Latest\n$ErrorActionPreference = 'Stop'\n"
+        f"{_function_source()}\nRemove-StaleBuildArtifacts -PackagePath '{tmp_path}' -Keep 2\n"
+    )
+    proc = subprocess.run(
+        [WINPS, "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert {p.name for p in tmp_path.iterdir()} == set(names)
