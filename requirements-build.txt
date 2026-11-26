@@ -1,0 +1,37 @@
+# Build environment for the packaged VoiceFlow bundle (VF-23).
+#   powershell -ExecutionPolicy Bypass -File scripts\setup\bootstrap_windows.ps1 -BuildVenv
+# creates .venv-build from this file; build_windows_exe.ps1 finds it without flags.
+#
+# Runtime and PyInstaller pins are what C:\AI_Projects\VoiceFlow\.venv-test had on
+# 2026-11-26, the environment that produced the good 2.16 GB bundle. faster-whisper
+# must be 1.2.1 or newer: 1.2.0 ships silero_encoder_v5/decoder_v5 instead of the
+# silero_vad_v6.onnx that scripts\setup\verify_bundle.py checks for.
+
+# Runtime
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+onnxruntime==1.29.0
+av==18.1.0
+tokenizers==0.23.2
+huggingface_hub==1.30.0
+numpy==2.5.3
+sounddevice==0.5.6
+keyboard==0.13.5
+pystray==0.19.5
+pillow==12.3.0
+psutil==7.2.2
+pyperclip==1.11.0
+pydub==0.25.1
+pyyaml==6.0.3
+pywin32==312
+
+# Packaging
+pyinstaller==6.22.2
+pyinstaller-hooks-contrib==2026.7
+
+# CUDA runtime DLLs for the bundle (cuDNN 9 + cuBLAS 12 + NVRTC 12). These wheels
+# put them under site-packages\nvidia\<pkg>\bin, which the build finds on its own,
+# so no torch install and no VOICEFLOW_TORCH_LIB_DIR are needed.
+nvidia-cudnn-cu12==9.10.2.21
+nvidia-cublas-cu12==12.9.1.4
+nvidia-cuda-nvrtc-cu12==12.9.86
