@@ -22,6 +22,10 @@ param(
     # opt-in; without it a missing CUDA runtime fails the build.
     [switch]$AllowCpuOnly,
     [switch]$SkipProcessCleanup,
+    # VF-23: run the environment preflight (Python, PyInstaller, ctranslate2,
+    # faster-whisper VAD asset, CUDA DLLs) and exit: 0 pass, 1 fail. Builds nothing
+    # and stops nothing.
+    [switch]$PreflightOnly,
     # Pruning of old timestamped build snapshots in dist\packages (each is ~2 GB).
     # Default 2: keep the two most recent snapshots and delete older ones. Every build
     # writes one and nothing else removes them: by 2026-11-25 there were 25 of them,
@@ -45,21 +49,136 @@ function Resolve-PythonExe {
         return $ExplicitPython
     }
 
+    # Order (VF-23): -PythonExe, .venv-build, .venv-gpu, venv, then (in a git
+    # worktree) the main checkout's .venv-build, then whatever "python" is on PATH.
     $preferGpu = $true
     if ($env:VOICEFLOW_USE_GPU_VENV -and $env:VOICEFLOW_USE_GPU_VENV.Trim().ToLower() -eq "0") {
         $preferGpu = $false
     }
 
+    $buildPython = Join-Path $RepoRoot ".venv-build\Scripts\python.exe"
     $gpuPython = Join-Path $RepoRoot ".venv-gpu\Scripts\python.exe"
     $venvPython = Join-Path $RepoRoot "venv\Scripts\python.exe"
 
+    if (Test-Path $buildPython) {
+        return $buildPython
+    }
     if ($preferGpu -and (Test-Path $gpuPython)) {
         return $gpuPython
     }
     if (Test-Path $venvPython) {
         return $venvPython
     }
+
+    # A git worktree has its own checkout but not the main checkout's environments.
+    # The main checkout is the parent of the common git dir.
+    try {
+        $commonDir = (& git -C $RepoRoot rev-parse --git-common-dir 2>$null | Select-Object -First 1)
+        if ($commonDir) {
+            $commonText = $commonDir.ToString().Trim()
+            if (-not [System.IO.Path]::IsPathRooted($commonText)) {
+                $commonText = Join-Path $RepoRoot $commonText
+            }
+            $mainRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($commonText))
+            if ($mainRoot -and ($mainRoot.TrimEnd('\', '/') -ne $RepoRoot.TrimEnd('\', '/'))) {
+                $mainBuild = Join-Path $mainRoot ".venv-build\Scripts\python.exe"
+                if (Test-Path $mainBuild) {
+                    return $mainBuild
+                }
+            }
+        }
+    } catch {
+        # not a git checkout, or git missing: fall through
+    }
     return "python"
+}
+
+# The ten DLLs a bundle must contain for device=cuda to work. Used by the preflight
+# (are they findable before PyInstaller starts) and Assert-CudaRuntimeComplete (did
+# they land in the bundle). One list, not two.
+function Get-RequiredCudaDlls {
+    return @(
+        "cudnn64_9.dll",
+        "cudnn_ops64_9.dll",
+        "cudnn_graph64_9.dll",
+        "cudnn_cnn64_9.dll",
+        "cudnn_adv64_9.dll",
+        "cudnn_engines_precompiled64_9.dll",
+        "cudnn_engines_runtime_compiled64_9.dll",
+        "cudnn_heuristic64_9.dll",
+        "cublas64_12.dll",
+        "cublasLt64_12.dll"
+    )
+}
+
+function Get-VadAssetName {
+    <# The VAD file name lives in verify_bundle.py (VAD_RELATIVE); read it from there. #>
+    param([string]$VerifyBundlePath)
+    $text = Get-Content -Raw -Path $VerifyBundlePath
+    $m = [regex]::Match($text, 'VAD_RELATIVE\s*=\s*Path\("faster_whisper"\)\s*/\s*"assets"\s*/\s*"([^"]+)"')
+    if (-not $m.Success) {
+        throw "[build_windows_exe] Cannot read VAD_RELATIVE from $VerifyBundlePath"
+    }
+    return $m.Groups[1].Value
+}
+
+function Test-BuildPreflight {
+    <#
+      Check the build environment in seconds, before PyInstaller spends minutes
+      and fails (or worse, succeeds with a wrong bundle). Returns a list of
+      problems; empty means pass. -SitePackages is for tests; normally it is asked
+      of the chosen Python.
+    #>
+    param(
+        [string]$RepoRoot,
+        [string]$PythonExe,
+        [string]$SitePackages = "",
+        [switch]$AllowCpuOnly
+    )
+
+    $problems = New-Object System.Collections.Generic.List[string]
+    $fix = "powershell -ExecutionPolicy Bypass -File scripts\setup\bootstrap_windows.ps1 -BuildVenv"
+
+    if (-not $SitePackages) {
+        $SitePackages = ""
+        try {
+            $sp = (& $PythonExe -c "import sysconfig;print(sysconfig.get_paths()['purelib'])" 2>$null | Select-Object -First 1)
+            if ($sp) { $SitePackages = $sp.ToString().Trim() }
+        } catch {
+            $SitePackages = ""
+        }
+        if (-not $SitePackages -or -not (Test-Path $SitePackages)) {
+            $problems.Add("Python '$PythonExe' did not run or has no site-packages. Create the build environment: $fix")
+            return $problems
+        }
+    }
+
+    foreach ($pkg in @(@("PyInstaller", "pyinstaller"), @("ctranslate2", "ctranslate2"))) {
+        if (-not (Test-Path (Join-Path $SitePackages $pkg[0]))) {
+            $problems.Add("$($pkg[1]) is not installed in $SitePackages. Fix: $fix")
+        }
+    }
+
+    $vadName = Get-VadAssetName -VerifyBundlePath (Join-Path $RepoRoot "scripts\setup\verify_bundle.py")
+    $fwDir = Join-Path $SitePackages "faster_whisper"
+    if (-not (Test-Path $fwDir)) {
+        $problems.Add("faster-whisper is not installed in $SitePackages. Fix: $fix")
+    } elseif (-not (Test-Path (Join-Path $fwDir "assets\$vadName"))) {
+        $problems.Add("faster-whisper here has no assets\$vadName (older releases ship silero_encoder_v5/decoder_v5 instead), so verify_bundle.py would fail the build. Install faster-whisper 1.2.1 or newer. Fix: $fix")
+    }
+
+    if (-not $AllowCpuOnly) {
+        $found = @{}
+        foreach ($f in (Get-CudaRuntimeDlls -RepoRoot $RepoRoot -PythonExe $PythonExe -SitePackages $SitePackages)) {
+            $found[[System.IO.Path]::GetFileName($f).ToLowerInvariant()] = $true
+        }
+        $missing = @((Get-RequiredCudaDlls) | Where-Object { -not $found.ContainsKey($_.ToLowerInvariant()) })
+        if ($missing.Count -gt 0) {
+            $problems.Add("CUDA runtime DLLs not found (" + ($missing -join ", ") + "). Install the nvidia-cudnn-cu12 / nvidia-cublas-cu12 wheels with: $fix  -- or point VOICEFLOW_TORCH_LIB_DIR at a folder that has them, or pass -AllowCpuOnly for a deliberately CPU-only bundle.")
+        }
+    }
+
+    return $problems
 }
 
 function Resolve-PythonBaseDir {
@@ -398,18 +517,7 @@ function Assert-CudaRuntimeComplete {
 
     # The bundle root is the only location Windows searches before our code runs.
     $cudaDir = Join-Path $BundleRoot "_internal"
-    $required = @(
-        "cudnn64_9.dll",
-        "cudnn_ops64_9.dll",
-        "cudnn_graph64_9.dll",
-        "cudnn_cnn64_9.dll",
-        "cudnn_adv64_9.dll",
-        "cudnn_engines_precompiled64_9.dll",
-        "cudnn_engines_runtime_compiled64_9.dll",
-        "cudnn_heuristic64_9.dll",
-        "cublas64_12.dll",
-        "cublasLt64_12.dll"
-    )
+    $required = Get-RequiredCudaDlls
 
     $missing = @()
     foreach ($dll in $required) {
@@ -435,7 +543,8 @@ function Assert-CudaRuntimeComplete {
 function Get-CudaRuntimeDlls {
     param(
         [string]$RepoRoot,
-        [string]$PythonExe
+        [string]$PythonExe,
+        [string]$SitePackages = ""
     )
 
     $candidates = @()
@@ -447,6 +556,15 @@ function Get-CudaRuntimeDlls {
     # is both coherent (cuDNN ships its whole dependency chain) and stable --
     # unlike torch, which may be a CPU-only build, and unlike a previous bundle,
     # which lives in the directory this build is about to overwrite.
+    if ($SitePackages) {
+        # Known site-packages (the preflight, tests): no need to ask Python again.
+        foreach ($pkg in @("cudnn", "cublas", "cuda_runtime", "cufft", "curand", "cusolver", "cusparse", "cuda_nvrtc")) {
+            $candidates += (Join-Path $SitePackages ("nvidia\" + $pkg + "\bin"))
+        }
+        $candidates += (Join-Path $SitePackages "torch\lib")
+    }
+
+    if (-not $SitePackages) {
     try {
         $nvidiaRoot = (& $PythonExe -c "import importlib.util,pathlib;print(pathlib.Path(importlib.util.find_spec('nvidia').submodule_search_locations[0]))" 2>$null | Select-Object -First 1)
         if ($nvidiaRoot) {
@@ -471,6 +589,8 @@ function Get-CudaRuntimeDlls {
         }
     } catch {
         # no-op
+    }
+
     }
 
     $candidates += (Join-Path $RepoRoot ".venv-gpu\Lib\site-packages\torch\lib")
@@ -603,6 +723,21 @@ if ($InstallPackagingDeps) {
     Write-Host "[build_windows_exe] Installing packaging dependencies..."
     & $pythonExe -m pip install --upgrade pip
     & $pythonExe -m pip install pyinstaller pyinstaller-hooks-contrib
+}
+
+# Preflight before anything is stopped or built: a wrong environment costs seconds
+# here instead of a six-minute PyInstaller run (VF-23).
+$preflightProblems = @(Test-BuildPreflight -RepoRoot $repoRoot -PythonExe $pythonExe -AllowCpuOnly:$AllowCpuOnly)
+if ($preflightProblems.Count -gt 0) {
+    Write-Host "[build_windows_exe] Preflight FAILED:" -ForegroundColor Red
+    foreach ($problem in $preflightProblems) {
+        Write-Host ("  - " + $problem)
+    }
+    exit 1
+}
+Write-Host "[build_windows_exe] Preflight passed."
+if ($PreflightOnly) {
+    exit 0
 }
 
 if (-not $SkipProcessCleanup) {

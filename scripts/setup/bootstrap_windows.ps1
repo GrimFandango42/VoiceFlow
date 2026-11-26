@@ -1,5 +1,8 @@
 param(
     [switch]$GpuVenv,
+    # VF-23: create .venv-build from requirements-build.txt (pinned runtime, PyInstaller
+    # and the NVIDIA CUDA wheels). build_windows_exe.ps1 finds it without flags.
+    [switch]$BuildVenv,
     [switch]$SkipSmoke
 )
 
@@ -8,7 +11,10 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repoRoot
 
-$venvName = if ($GpuVenv) { ".venv-gpu" } else { "venv" }
+if ($BuildVenv -and $GpuVenv) {
+    throw "Pass either -BuildVenv or -GpuVenv, not both."
+}
+$venvName = if ($BuildVenv) { ".venv-build" } elseif ($GpuVenv) { ".venv-gpu" } else { "venv" }
 $venvPath = Join-Path $repoRoot $venvName
 $pythonExe = Join-Path $venvPath "Scripts\python.exe"
 
@@ -30,9 +36,12 @@ Write-Host "[2/4] Upgrading pip" -ForegroundColor Yellow
 & $pythonExe -m pip install --upgrade pip
 
 Write-Host "[3/4] Installing requirements" -ForegroundColor Yellow
-& $pythonExe -m pip install -r "scripts\setup\requirements_windows.txt"
+$requirementsFile = if ($BuildVenv) { "requirements-build.txt" } else { "scripts\setup\requirements_windows.txt" }
+& $pythonExe -m pip install -r $requirementsFile
 
-if (-not $SkipSmoke) {
+if ($BuildVenv) {
+    Write-Host "[4/4] Smoke check skipped (build environment has no app test dependencies)" -ForegroundColor DarkYellow
+} elseif (-not $SkipSmoke) {
     Write-Host "[4/4] Running smoke check" -ForegroundColor Yellow
     & $pythonExe "scripts\dev\quick_smoke_test.py"
     if ($LASTEXITCODE -ne 0) {
@@ -44,5 +53,9 @@ if (-not $SkipSmoke) {
 
 Write-Host ""
 Write-Host "Bootstrap complete." -ForegroundColor Green
-Write-Host "Launch packaged app with: .\dist\VoiceFlow\VoiceFlow.exe" -ForegroundColor Green
+if ($BuildVenv) {
+    Write-Host "Build the bundle with: powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1" -ForegroundColor Green
+} else {
+    Write-Host "Launch packaged app with: .\dist\VoiceFlow\VoiceFlow.exe" -ForegroundColor Green
+}
 Write-Host "Use batch launchers only for source/debug workflows." -ForegroundColor DarkYellow

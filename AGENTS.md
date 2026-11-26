@@ -50,6 +50,10 @@ python scripts/capture_screenshots.py # regenerate docs/screenshots (demo mode, 
 
 # Build the packaged EXE (verifies itself; fails on a stale or broken bundle)
 powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -OutputName VoiceFlow -Clean
+# Needs .venv-build (found automatically; worktrees use the main checkout's). Create it once:
+#   powershell -ExecutionPolicy Bypass -File scripts\setup\bootstrap_windows.ps1 -BuildVenv
+# Never build with the system Python (old faster-whisper, 3.5 GB bundle). A preflight runs
+# first and names what is missing; -PreflightOnly runs just that. See docs/BUILD_GUIDE.md.
 
 # Check a bundle without the mic/tray/hotkeys
 dist\VoiceFlow\VoiceFlow.exe --self-check=report.json

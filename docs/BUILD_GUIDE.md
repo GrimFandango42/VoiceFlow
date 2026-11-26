@@ -37,6 +37,27 @@ pytest -q tests\runtime
 powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -OutputName VoiceFlow -Clean
 ```
 
+### The build environment (one-time)
+
+The build finds its Python without flags, in this order: `-PythonExe`, `.venv-build`, `.venv-gpu`, `venv`, the main checkout's `.venv-build` (when run from a git worktree), then `python` on PATH. Create `.venv-build` once, from the pinned `requirements-build.txt` (faster-whisper 1.2.1, ctranslate2, PyInstaller and the NVIDIA cuDNN/cuBLAS/NVRTC wheels, so no torch and no `VOICEFLOW_TORCH_LIB_DIR` are needed):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup\bootstrap_windows.ps1 -BuildVenv
+```
+
+Worktrees reuse the main checkout's `.venv-build`; they do not each need one. Do not build with the system Python: its faster-whisper may be an older release, and its site-packages get bundled (3.5 GB instead of 2.2 GB).
+
+Before PyInstaller starts, the build runs a preflight (seconds, stops nothing, builds nothing). Run it alone with `-PreflightOnly` (exit 0 pass, 1 fail). Each failure line names what is missing:
+
+| Message | Meaning and fix |
+|---|---|
+| `Python '...' did not run or has no site-packages` | No usable build Python. Create `.venv-build` (command above) or pass `-PythonExe`. |
+| `pyinstaller` / `ctranslate2` `is not installed` | Wrong environment. Use `.venv-build`. |
+| `faster-whisper here has no assets\silero_vad_v6.onnx` | faster-whisper older than 1.2.1 (ships v5 encoder/decoder files); `verify_bundle.py` would fail the finished build. Use `.venv-build`. |
+| `CUDA runtime DLLs not found (...)` | The nvidia wheels (or `VOICEFLOW_TORCH_LIB_DIR`) do not supply the listed DLLs; the bundle would run on CPU. Use `.venv-build`, or pass `-AllowCpuOnly` if a CPU-only bundle is intended. |
+
+The VAD file name is read from `verify_bundle.py` (`VAD_RELATIVE`); the CUDA DLL list is shared by the preflight and the post-build check.
+
 The build script stops stale VoiceFlow processes before packaging and bundles the setup wizard runtime assets needed by the packaged app.
 
 The build **fails (non-zero exit)** unless the bundle is fit for daily use. After PyInstaller, in both one-dir and `-OneFile` mode, it runs `scripts\setup\verify_bundle.py`:
