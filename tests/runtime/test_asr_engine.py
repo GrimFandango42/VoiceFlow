@@ -398,6 +398,7 @@ def test_source_process_finds_cuda_dlls_in_the_checkouts_bundle(monkeypatch, tmp
     # And registering from it makes the runtime check see the DLLs.
     registered: list[object] = []
     monkeypatch.setattr(asr_mod, "_probe_external_torch_lib_dirs", lambda: [bundle_lib])
+    monkeypatch.setattr(asr_mod, "_probe_nvidia_wheel_groups", lambda: [])  # VF-22 probe: not under test here
     monkeypatch.setattr(asr_mod, "_add_dll_search_path", registered.append)
     assert asr_mod._register_external_cuda_runtime_path(list(asr_mod.CUDA_REQUIRED_DLLS)) is True
     assert registered == [bundle_lib]
