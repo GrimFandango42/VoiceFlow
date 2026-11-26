@@ -43,8 +43,20 @@ _MODEL_INIT_LOCK = threading.Lock()
 
 # Seconds to wait before the one same-device retry of a non-CUDA init failure.
 _CUDA_INIT_RETRY_DELAY_S = 0.25
-# Minimum gap between attempts to move a CPU-fallback model back to the GPU.
+# Steady-state gap between attempts to move a CPU-fallback model back to the GPU.
 _CUDA_RESTORE_MIN_INTERVAL_S = 120.0
+# VF-22: the first restore attempt runs as soon as the model has finished loading
+# (the preload), then these gaps, then _CUDA_RESTORE_MIN_INTERVAL_S forever. A
+# fallback that was only a startup hiccup is over in seconds, not 2 minutes.
+_CUDA_RESTORE_SCHEDULE_S = (15.0, 30.0, 60.0)
+
+
+def cuda_restore_delay_s(failed_attempts: int) -> float:
+    """Seconds to wait after ``failed_attempts`` failed restore attempts (1-based)."""
+    index = max(0, int(failed_attempts) - 1)
+    if index < len(_CUDA_RESTORE_SCHEDULE_S):
+        return float(_CUDA_RESTORE_SCHEDULE_S[index])
+    return float(_CUDA_RESTORE_MIN_INTERVAL_S)
 
 # Failures that retrying on CUDA cannot fix: the card is full, or the runtime
 # libraries are not there. Anything else (a race in a download helper, a
@@ -201,20 +213,7 @@ def _probe_external_torch_lib_dirs() -> list[Path]:
     # Active interpreter environment (source mode).
     candidates.append(Path(sys.prefix) / "Lib" / "site-packages" / "torch" / "lib")
 
-    probe_roots: list[Path] = []
-    try:
-        exe_dir = Path(sys.executable).resolve().parent
-        probe_roots.extend([exe_dir, exe_dir.parent, exe_dir.parent.parent])
-    except Exception:
-        pass
-
-    try:
-        repo_root = Path(__file__).resolve().parents[3]
-        probe_roots.append(repo_root)
-    except Exception:
-        pass
-
-    probe_roots.append(Path.cwd())
+    probe_roots = _nearby_probe_roots()
 
     for root in probe_roots:
         for venv_name in (".venv-gpu", "venv", ".venv"):
@@ -227,13 +226,20 @@ def _probe_external_torch_lib_dirs() -> list[Path]:
     bundle_override = os.environ.get("VOICEFLOW_CUDA_DLL_DIR", "").strip()
     if bundle_override:
         candidates.append(Path(bundle_override))
-    if os.environ.get("VOICEFLOW_CUDA_PROBE_BUNDLE", "1").strip() != "0":
+    if _probe_checkout_bundle():
         for root in probe_roots:
+            # The build ships the CUDA runtime at the bundle root (_internal);
+            # bundles before VF-18 had it under _internal/torch/lib.
+            candidates.append(root / "dist" / "VoiceFlow" / "_internal")
             candidates.append(root / "dist" / "VoiceFlow" / "_internal" / "torch" / "lib")
 
+    return _dedupe_paths(candidates)
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
     deduped: list[Path] = []
     seen: set[str] = set()
-    for candidate in candidates:
+    for candidate in paths:
         key = str(candidate).lower()
         if key in seen:
             continue
@@ -242,17 +248,151 @@ def _probe_external_torch_lib_dirs() -> list[Path]:
     return deduped
 
 
-def _register_external_cuda_runtime_path(required_dlls: list[str]) -> bool:
-    """Register CUDA runtime DLL directory without importing torch.
-    Returns True if a suitable directory was found and registered.
+def _probe_checkout_bundle() -> bool:
+    return os.environ.get("VOICEFLOW_CUDA_PROBE_BUNDLE", "1").strip() != "0"
+
+
+def _repo_root() -> Optional[Path]:
+    try:
+        return Path(__file__).resolve().parents[3]
+    except Exception:
+        return None
+
+
+def _nearby_probe_roots() -> list[Path]:
+    """Directories around the interpreter and the checkout that may hold a venv or bundle."""
+    roots: list[Path] = []
+    try:
+        exe_dir = Path(sys.executable).resolve().parent
+        roots.extend([exe_dir, exe_dir.parent, exe_dir.parent.parent])
+    except Exception:
+        pass
+    repo_root = _repo_root()
+    if repo_root is not None:
+        roots.append(repo_root)
+    try:
+        roots.append(Path.cwd())
+    except Exception:
+        pass
+    return roots
+
+
+def _interpreter_site_dirs() -> list[Path]:
+    """Every site-packages the running interpreter imports from (no imports of torch).
+
+    Covers a venv, the system Python under ``pyw.exe``/``pythonw.exe`` (the Desktop
+    shortcut), the per-user site, and an embedded/frozen layout; none of it depends
+    on PATH, so a scheduled-task environment with a minimal PATH finds the same
+    directories as an interactive shell.
     """
-    for candidate in _probe_external_torch_lib_dirs():
+    dirs: list[Path] = []
+    try:
+        import site
+
+        get_site = getattr(site, "getsitepackages", None)
+        if callable(get_site):
+            dirs.extend(Path(d) for d in (get_site() or []))
+        get_user = getattr(site, "getusersitepackages", None)
+        if callable(get_user):
+            user_dir = get_user()
+            if user_dir:
+                dirs.append(Path(user_dir))
+    except Exception:
+        pass
+    # The base interpreter of a venv is reached only through sys.path (when the
+    # venv includes system site-packages), never by default.
+    for prefix in (sys.prefix, getattr(sys, "exec_prefix", sys.prefix)):
+        if prefix:
+            dirs.append(Path(prefix) / "Lib" / "site-packages")
+    for entry in list(sys.path):
         try:
-            if not candidate.exists():
+            if entry and Path(entry).name.lower() in {"site-packages", "dist-packages"}:
+                dirs.append(Path(entry))
+        except Exception:
+            continue
+    return _dedupe_paths(dirs)
+
+
+def _nvidia_bin_group(site_dir: Path) -> list[Path]:
+    """``<site_dir>/nvidia/*/bin`` directories (the pip ``nvidia-*-cu12`` wheels).
+
+    The wheels put each library in its own package (``nvidia/cublas/bin``,
+    ``nvidia/cudnn/bin``, ...), so the required pair is never in one directory.
+    """
+    nvidia = site_dir / "nvidia"
+    try:
+        if not nvidia.is_dir():
+            return []
+        return sorted(p for p in nvidia.glob("*/bin") if p.is_dir())
+    except Exception:
+        return []
+
+
+def _probe_nvidia_wheel_groups() -> list[list[Path]]:
+    """Groups of ``nvidia/*/bin`` directories, one group per site-packages, in priority order."""
+    roots: list[Path] = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            roots.append(Path(str(meipass)))
+        try:
+            roots.append(Path(sys.executable).resolve().parent / "_internal")
+        except Exception:
+            pass
+    roots.extend(_interpreter_site_dirs())
+    for root in _nearby_probe_roots():
+        for venv_name in (".venv-gpu", "venv", ".venv"):
+            roots.append(root / venv_name / "Lib" / "site-packages")
+
+    groups: list[list[Path]] = []
+    for root in _dedupe_paths(roots):
+        group = _nvidia_bin_group(root)
+        if group:
+            groups.append(group)
+    return groups
+
+
+def _cuda_runtime_candidate_groups() -> list[list[Path]]:
+    """Every place the CUDA runtime may live, as groups of directories, best first.
+
+    A group qualifies when its directories together hold every required DLL.
+    Explicit overrides come first. A frozen bundle prefers what it ships; a
+    source run prefers its own interpreter's pip wheels (they match the installed
+    ctranslate2) over a nearby venv or the checkout's bundle.
+    """
+    singles = _probe_external_torch_lib_dirs()
+    wheels = _probe_nvidia_wheel_groups()
+    overrides: list[Path] = []
+    for var in ("VOICEFLOW_TORCH_LIB_DIR", "VOICEFLOW_CUDA_DLL_DIR"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            overrides.append(Path(value))
+    override_keys = {str(p).lower() for p in overrides}
+    rest = [[p] for p in singles if str(p).lower() not in override_keys]
+    ordered = [[p] for p in overrides]
+    if getattr(sys, "frozen", False):
+        ordered += rest + wheels
+    else:
+        ordered += wheels + rest
+    return ordered
+
+
+def _register_external_cuda_runtime_path(required_dlls: list[str]) -> bool:
+    """Register the CUDA runtime DLL directories without importing torch.
+
+    Returns True when a group of directories holding every required DLL was
+    found; all of that group's directories are then on PATH and in the
+    process's DLL search list.
+    """
+    for group in _cuda_runtime_candidate_groups():
+        try:
+            present = [d for d in group if d.is_dir()]
+            if not present:
                 continue
-            if not all((candidate / dll).exists() for dll in required_dlls):
+            if not all(any((d / dll).exists() for d in present) for dll in required_dlls):
                 continue
-            _add_dll_search_path(candidate)
+            for directory in present:
+                _add_dll_search_path(directory)
             return True
         except Exception:
             continue
@@ -694,6 +834,10 @@ class FasterWhisperBackend(ASRBackend):
         self._cuda_wanted_compute: Optional[str] = None
         self._cpu_fallback_reason = ""
         self._next_cuda_restore_at = 0.0
+        # VF-22: restore attempts since the fallback; the first is due when the
+        # (CPU) model has finished loading, see load().
+        self._cuda_restore_attempts = 0
+        self._clock: Callable[[], float] = time.monotonic
         self._restore_lock = threading.Lock()
         # None until first needed: whether this faster-whisper build accepts hotwords.
         self._hotwords_supported: Optional[bool] = None
@@ -718,6 +862,7 @@ class FasterWhisperBackend(ASRBackend):
 
                 load_time = time.time() - start_time
                 logger.info(f"Model loaded in {load_time:.2f}s")
+                self._mark_restore_due_after_load()
                 logging.getLogger("voiceflow").info(
                     "asr_model_loaded model_id=%s ref=%s device=%s compute=%s load_s=%.2f",
                     self.config.model_id,
@@ -824,14 +969,29 @@ class FasterWhisperBackend(ASRBackend):
         self.config.compute_type = "int8"
         self._cuda_wanted_compute = wanted_compute or "float16"
         self._cpu_fallback_reason = reason
-        self._next_cuda_restore_at = time.monotonic() + _CUDA_RESTORE_MIN_INTERVAL_S
+        self._cuda_restore_attempts = 0
+        # Not due until the CPU model has loaded: load() makes the first attempt
+        # due the moment the preload finishes. A model that is already loaded
+        # (fallback entered after load) is due now.
+        self._next_cuda_restore_at = float("inf") if self._model is None else self._clock()
         logging.getLogger("voiceflow").warning(
-            "asr_cpu_fallback_active model=%s reason=%s restore_retry_s=%.0f",
+            "asr_cpu_fallback_active model=%s reason=%s restore_retry_s=after_preload,%s",
             self.config.model_id,
             reason,
-            _CUDA_RESTORE_MIN_INTERVAL_S,
+            ",".join(f"{s:.0f}" for s in (*_CUDA_RESTORE_SCHEDULE_S, _CUDA_RESTORE_MIN_INTERVAL_S)),
         )
         _notify_device_event("cpu_fallback", f"{self.config.model_id}: {reason}")
+
+    def _mark_restore_due_after_load(self) -> None:
+        """The preload finished: a pending first restore attempt is due now."""
+        if self.fell_back_to_cpu and self._cuda_restore_attempts == 0:
+            self._next_cuda_restore_at = self._clock()
+
+    def seconds_until_cuda_restore(self) -> Optional[float]:
+        """Seconds until the next restore attempt is due; None when not fallen back or not scheduled yet."""
+        if not self.fell_back_to_cpu or self._next_cuda_restore_at == float("inf"):
+            return None
+        return max(0.0, self._next_cuda_restore_at - self._clock())
 
     def retry_cuda_if_fallen_back(self, force: bool = False) -> bool:
         """Try to move a CPU-fallback model back onto the GPU.
@@ -843,25 +1003,31 @@ class FasterWhisperBackend(ASRBackend):
         """
         if not self.fell_back_to_cpu:
             return False
-        if not force and time.monotonic() < self._next_cuda_restore_at:
+        if not force and self._clock() < self._next_cuda_restore_at:
             return False
         if not self._restore_lock.acquire(blocking=False):
             return False
         try:
             wanted = self._cuda_wanted_compute or "float16"
             model_ref = self._resolve_model_ref(self.config.model_id)
+            self._cuda_restore_attempts += 1
             try:
+                # (Re)register the DLL directories (filesystem only, no device
+                # probe), so a runtime installed after the start is found.
+                _register_external_cuda_runtime_path(list(CUDA_REQUIRED_DLLS))
                 from faster_whisper import WhisperModel
 
                 model = self._construct(WhisperModel, model_ref, "cuda", wanted)
                 list(model.transcribe(np.zeros(1600, dtype=np.float32), language="en"))
             except Exception as exc:
-                self._next_cuda_restore_at = time.monotonic() + _CUDA_RESTORE_MIN_INTERVAL_S
+                delay = cuda_restore_delay_s(self._cuda_restore_attempts)
+                self._next_cuda_restore_at = self._clock() + delay
                 logging.getLogger("voiceflow").info(
-                    "asr_cuda_restore_failed kind=%s error=%s next_try_s=%.0f",
+                    "asr_cuda_restore_failed attempt=%d kind=%s error=%s next_try_s=%.0f",
+                    self._cuda_restore_attempts,
                     classify_cuda_init_failure(exc),
                     exc,
-                    _CUDA_RESTORE_MIN_INTERVAL_S,
+                    delay,
                 )
                 return False
             with self._lock:
@@ -871,6 +1037,7 @@ class FasterWhisperBackend(ASRBackend):
                 self._cuda_wanted_compute = None
                 self._cpu_fallback_reason = ""
                 self._retried_cpu_fallback = False
+                self._cuda_restore_attempts = 0
             logging.getLogger("voiceflow").warning(
                 "asr_cuda_restored model=%s compute=%s", self.config.model_id, wanted
             )
@@ -1662,6 +1829,11 @@ class ASREngine:
         backend = self._backend
         retry = getattr(backend, "retry_cuda_if_fallen_back", None)
         return bool(retry(force=force)) if callable(retry) else False
+
+    def seconds_until_cuda_restore(self) -> Optional[float]:
+        """When the next GPU restore attempt is due (None: nothing scheduled)."""
+        fn = getattr(self._backend, "seconds_until_cuda_restore", None)
+        return fn() if callable(fn) else None
 
     @staticmethod
     def list_models() -> Dict[str, Dict[str, Any]]:

@@ -631,6 +631,7 @@ class EnhancedApp:
         # announced too (VF-18).
         self._device_warning = ""
         self._cuda_restore_thread: Optional[threading.Thread] = None
+        self._cuda_restore_wake = threading.Event()
         self._register_device_listener()
         self.asr = WhisperASR(cfg)
         self._log_model_selection(cfg)
@@ -806,6 +807,9 @@ class EnhancedApp:
             self._model_ready = True
             print(f"[MODEL] Ready! {progress.message}")
             self._log_runtime_device("model_ready", self.asr)
+            _log_launch_path(self.asr)
+            # VF-22: a CPU fallback gets its first GPU restore attempt now.
+            self._wake_cuda_restore()
         elif progress.state == PreloadState.FAILED:
             print(f"[MODEL] FAILED: {progress.message}")
 
@@ -968,17 +972,49 @@ class EnhancedApp:
         except Exception:
             return False
 
+    _CUDA_RESTORE_POLL_MAX_S = 30.0
+    _CUDA_RESTORE_POLL_MIN_S = 1.0
+
+    def _next_cuda_restore_wait_s(self) -> float:
+        """How long the restore loop sleeps: until the earliest due attempt, within [1, 30] s."""
+        waits: List[float] = []
+        for engine in self._fallen_back_engines():
+            fn = getattr(engine, "seconds_until_cuda_restore", None)
+            if not callable(fn):
+                continue
+            try:
+                due_in = fn()
+            except Exception:
+                continue
+            if due_in is not None:
+                waits.append(float(due_in))
+        if not waits:
+            return self._CUDA_RESTORE_POLL_MAX_S
+        return min(self._CUDA_RESTORE_POLL_MAX_S, max(self._CUDA_RESTORE_POLL_MIN_S, min(waits)))
+
+    def _wake_cuda_restore(self) -> None:
+        wake = getattr(self, "_cuda_restore_wake", None)
+        if wake is not None:
+            wake.set()
+
     def _cuda_restore_loop(self) -> None:
-        """While idle, try to move a CPU-fallback model back onto the GPU."""
-        while not self._housekeeping_stop.wait(30.0):
+        """While idle, try to move a CPU-fallback model back onto the GPU.
+
+        VF-22: attempts follow the engine's schedule (right after the preload,
+        then 15 s, 30 s, 60 s, then every 120 s); the loop sleeps until the
+        next one is due or until the preload wakes it.
+        """
+        wake = getattr(self, "_cuda_restore_wake", None) or threading.Event()
+        while not self._housekeeping_stop.is_set():
             try:
                 fallen = self._fallen_back_engines()
-                if not fallen or not self._is_idle_for_restore():
-                    continue
-                for engine in fallen:
-                    engine.retry_cuda_if_fallen_back()
+                if fallen and self._is_idle_for_restore():
+                    for engine in fallen:
+                        engine.retry_cuda_if_fallen_back()
             except Exception:
                 logging.getLogger("voiceflow").debug("cuda_restore_loop_error", exc_info=True)
+            wake.wait(self._next_cuda_restore_wait_s())
+            wake.clear()
 
     def swap_model_tier(self, new_tier: str, on_complete=None) -> None:
         """Hot-swap the primary ASR engine to a different model tier.
@@ -3910,6 +3946,7 @@ class EnhancedApp:
             except Exception:
                 pass
         self._housekeeping_stop.set()
+        self._wake_cuda_restore()  # let the restore loop see the stop now
         if self._housekeeping_thread and self._housekeeping_thread.is_alive():
             self._housekeeping_thread.join(timeout=1.5)
         self._stop_live_checkpoint_monitor()
@@ -3998,8 +4035,64 @@ def _run_launch_selfcheck(alog: Any, runtime_log: logging.Logger) -> Dict[str, A
         return {"ok": False, "problems": [f"self-check crashed: {type(exc).__name__}: {exc}"]}
 
 
+_LAUNCH_PARENT: Optional[str] = None
+_LAUNCH_PATH_LOGGED = False
+
+
+def _capture_launch_parent() -> None:
+    """Remember the parent now: a launcher such as wscript may exit before the model is ready."""
+    global _LAUNCH_PARENT
+    try:
+        from voiceflow.utils.launch_diagnostics import _parent_process_name
+
+        _LAUNCH_PARENT = _parent_process_name()
+    except Exception:
+        _LAUNCH_PARENT = "unknown"
+
+
+def _log_launch_path(engine: Optional[Any]) -> None:
+    """VF-22: one `launch_path` line per start, after the engine is ready."""
+    global _LAUNCH_PATH_LOGGED
+    if _LAUNCH_PATH_LOGGED:
+        return
+    try:
+        from voiceflow.utils.launch_identity import launch_path_line
+
+        status: Dict[str, Any] = {}
+        status_fn = getattr(engine, "device_status", None)
+        if callable(status_fn):
+            status = status_fn() or {}
+        _LAUNCH_PATH_LOGGED = True
+        logging.getLogger("voiceflow").info(
+            launch_path_line(
+                device=status.get("device"),
+                compute=status.get("compute_type"),
+                parent=_LAUNCH_PARENT,
+            )
+        )
+    except Exception:
+        logging.getLogger("voiceflow").debug("launch_path_log_failed", exc_info=True)
+
+
+def _publish_instance_record(runtime_log: logging.Logger) -> None:
+    """Tell the watchdog this process is the running VoiceFlow (bundle or source)."""
+    try:
+        import atexit
+
+        from voiceflow.utils.launch_identity import remove_instance_record, write_instance_record
+
+        data_dir = config_dir()
+        path = write_instance_record(data_dir)
+        if path is not None:
+            atexit.register(remove_instance_record, data_dir, pid=os.getpid())
+            runtime_log.info("instance_record_written path=%s", path)
+    except Exception as exc:
+        runtime_log.warning("instance_record_failed error=%s", exc)
+
+
 def main(argv=None):
     """Enhanced main with better error handling and monitoring"""
+    _capture_launch_parent()
     if not _acquire_single_instance_mutex():
         return 0
     if not _is_primary_cli_process():
@@ -4061,6 +4154,7 @@ def main(argv=None):
     runtime_log = _alog.get()
     runtime_log.info("single_instance_ok pid=%d", os.getpid())
     runtime_log.info("single_instance_watchdog_started interval_s=2.0")
+    _publish_instance_record(runtime_log)
     _apply_process_priority(cfg, runtime_log)
     startup_selfcheck = _run_launch_selfcheck(_alog, runtime_log)
 
