@@ -172,3 +172,34 @@ def test_cuda_fallback_skipped_when_environment_already_has_the_dlls(tmp_path):
         (sp / "nvidia" / pkg / "bin").mkdir(parents=True, exist_ok=True)
         (sp / "nvidia" / pkg / "bin" / n).write_bytes(b"dll")
     assert _fallback(wt, sp) == ""
+
+
+# ---- the exact documented line, from the root and from src ----------------
+
+def _documented_lines():
+    text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    import re
+    prefix = 'python "$(git rev-parse --show-toplevel)' + chr(92) + "scripts" + chr(92) + "dev" + chr(92) + 'correct.py" '
+    out = []
+    for m in re.finditer(re.escape(prefix) + r"[^`]*", text):
+        out.append(m.group(0))
+    return out
+
+
+def test_instruction_files_have_no_control_characters_and_match():
+    import re
+    a = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    c = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    assert a == c
+    assert not re.findall("[" + chr(0) + "-" + chr(8) + chr(11) + chr(12) + chr(14) + "-" + chr(31) + "]", a)
+    assert _documented_lines()
+
+
+@needs_pwsh
+@pytest.mark.parametrize("sub", ["", "src"])
+def test_documented_correct_command_runs_verbatim(tmp_path, sub):
+    line = next(ln for ln in _documented_lines() if " list" in ln)
+    line += f' --data-dir "{tmp_path}"'
+    proc = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", line],
+                          cwd=ROOT / sub if sub else ROOT, capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
