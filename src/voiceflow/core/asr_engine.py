@@ -1956,15 +1956,19 @@ class ModernWhisperASR(ASREngine):
             self.model_config.hotwords = effective_hotwords_for_config(self.cfg)
         except Exception:
             pass
-        if initial_prompt is None and bool(getattr(self.cfg, "enable_smart_prompting", True)):
+        if bool(getattr(self.cfg, "enable_smart_prompting", True)):
             try:
-                from voiceflow.core.vocab import initial_prompt as _vocab_initial_prompt
+                from voiceflow.core.vocab import compose_prompt as _vocab_compose_prompt
 
-                vocab_prompt = _vocab_initial_prompt()
+                # VF-24: a caller's rolling context (the live caption's running text)
+                # used to REPLACE the vocabulary prompt, so only the caption's first
+                # decode was biased toward the user's terms. Compose the two instead,
+                # within the same character budget.
+                vocab_prompt = _vocab_compose_prompt(initial_prompt or "")
                 if vocab_prompt:
                     initial_prompt = vocab_prompt
             except Exception:
-                # Vocab is best-effort. If it fails, fall back to no prompt.
+                # Vocab is best-effort. If it fails, keep whatever the caller passed.
                 pass
         # Call parent's transcribe method and extract text
         result = ASREngine.transcribe(self, audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)

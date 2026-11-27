@@ -116,6 +116,14 @@ _PAIR_WEIGHT_BY_CORRECTION_SOURCE: Dict[str, float] = {
 }
 _AUTO_PAIR_WEIGHT = 0.5
 
+#: VF-24: after this many consecutive target days with no correction rows, the insights
+#: file carries one note saying so (the learner has nothing to learn from).
+ZERO_CORRECTION_NOTE_DAYS = 7
+ZERO_CORRECTION_NOTE = (
+    "no correction input for 7 days; log a mis-hearing with: "
+    'python -m voiceflow.ai.corrections add --heard "..." --meant "..."'
+)
+
 
 def _pair_weight_for_source(source: str) -> float:
     """Return pair accumulation weight for a correction source string.
@@ -419,6 +427,42 @@ class DailyLearningJob:
         if not isinstance(default.get("entry_points"), dict):
             default["entry_points"] = {}
         return default
+
+    @staticmethod
+    def _update_correction_input(state: Dict[str, Any], target: date, items: int) -> bool:
+        """Track consecutive target dates with zero correction rows (VF-24 item 5).
+
+        Keyed on the target date, so the 08:00 run and the startup catch-up processing
+        the same day count it once; an older date is ignored. A gap of more than one day
+        restarts the count (the days in between were never looked at). At
+        ``ZERO_CORRECTION_NOTE_DAYS`` one note is set and left alone until a day with a
+        correction clears it. Returns True when the state changed.
+        """
+        block = state.get("correction_input")
+        block = dict(block) if isinstance(block, dict) else {}
+        before = dict(block)
+        last = _parse_local_date_from_iso(block.get("last_counted_date"))
+        if last is not None and target <= last:
+            return False
+        streak = int(block.get("zero_streak_days", 0) or 0)
+        if items > 0:
+            streak = 0
+            block["last_nonzero_date"] = target.isoformat()
+            block["note"] = ""
+        else:
+            consecutive = last is not None and (target - last).days == 1
+            streak = streak + 1 if consecutive else 1
+            if streak >= ZERO_CORRECTION_NOTE_DAYS and not block.get("note"):
+                block["note"] = ZERO_CORRECTION_NOTE
+        block["zero_streak_days"] = streak
+        block["last_counted_date"] = target.isoformat()
+        block["last_items"] = int(items)
+        block.setdefault("last_nonzero_date", "")
+        block.setdefault("note", "")
+        if block == before:
+            return False
+        state["correction_input"] = block
+        return True
 
     def _save_insights_state(self, state: Dict[str, Any]) -> None:
         try:
@@ -833,10 +877,19 @@ class DailyLearningJob:
             top_instruction_themes=top_instruction_themes,
         )
 
-        if not dry_run and instructional_used > 0:
-            entry_map = insights_state.setdefault("entry_points", {})
-            for key, value in entry_point_counts.items():
-                entry_map[key] = int(entry_map.get(key, 0)) + int(value)
+        # VF-24: count days with no correction input; after seven, leave one note.
+        correction_input_changed = False
+        if not dry_run:
+            correction_input_changed = self._update_correction_input(
+                insights_state, target_date, int(len(corrections))
+            )
+        correction_input = dict(insights_state.get("correction_input") or {})
+
+        if not dry_run and (instructional_used > 0 or correction_input_changed):
+            if instructional_used > 0:
+                entry_map = insights_state.setdefault("entry_points", {})
+                for key, value in entry_point_counts.items():
+                    entry_map[key] = int(entry_map.get(key, 0)) + int(value)
             self._save_insights_state(insights_state)
 
         # VF-17: promote repeated phonetic misses (from accepted reconstructions and
@@ -886,6 +939,7 @@ class DailyLearningJob:
                 "insights_path": str(self.insights_path),
             },
             "ai_learning_analysis": ai_learning_analysis,
+            "correction_input": correction_input,
             "hotword_promotion": hotword_promotion,
             "adaptive_snapshot": self.manager.snapshot(max_rules=12, max_tokens=20),
             "paths": {
@@ -958,6 +1012,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     )
     print(f"[DAILY-LEARNING] report={stats.get('report_path', '')}")
+    correction_input = report.get("correction_input") or {}
+    if correction_input.get("note"):
+        print(f"[DAILY-LEARNING] {correction_input['note']}")
 
     top_pairs = report.get("top_replacement_pairs", [])
     if top_pairs:

@@ -34,24 +34,41 @@ logger = logging.getLogger(__name__)
 #: while leaving room for a real vocabulary rather than a token sample of one.
 INITIAL_PROMPT_MAX_CHARS = 700
 
-INITIAL_PROMPT_TERMS: Tuple[str, ...] = (
+#: VF-24: names Nithin says every day and Whisper mis-hears ("cloud" for Claude,
+#: "Jamelan" for Gemini, "OpenRoder" for OpenRouter, "Doet" for Duet). The one source
+#: for the shipped seed: they lead the built-in prompt terms here and the hotword string
+#: in ``ai/hotword_learning.py``. Merged in code at decode time, so the user's
+#: ``custom_vocabulary.txt`` is never rewritten and existing installs get them too.
+NAME_SEED_TERMS: Tuple[str, ...] = (
     "Claude",
     "Claude Code",
-    "Claude Desktop",
+    "Claude Max",
     "Anthropic",
+    "Gemini",
+    "OpenRouter",
+    "Duet",
+    "Codex",
+    "Antigravity",
+    "Reachy",
+    "GLaDOS",
+    "Hetzner",
+    "Ollama",
+)
+
+INITIAL_PROMPT_TERMS: Tuple[str, ...] = (
+    *NAME_SEED_TERMS,
+    "Claude Desktop",
     "MCP",
     "subagent",
     "OpenClaw",
     "Cowork",
     "OpenAI",
     "ChatGPT",
-    "Gemini",
     "GitHub",
     "VS Code",
     "Cursor",
     "PowerShell",
     "Tailscale",
-    "Hetzner",
     "TypeScript",
     "VoiceFlow",
     "HomeVision",
@@ -68,16 +85,14 @@ INITIAL_PROMPT_TERMS: Tuple[str, ...] = (
     "Opus",
     "Haiku",
     "Wispr",
-    "Codex",
     "Atlas",
     "LIMS",
     "Veeva",
-    "Ollama",
     "Madison",
 )
 
-_PROMPT_CACHE_KEY: Optional[Tuple[str, float]] = None
-_PROMPT_CACHE_VALUE: str = ""
+_PROMPT_CACHE_KEY: Optional[Tuple[str, float, float]] = None
+_PROMPT_CACHE_VALUE: List[str] = []
 
 
 def _bundled_default_path() -> Path:
@@ -183,26 +198,30 @@ def initial_prompt(max_chars: int = INITIAL_PROMPT_MAX_CHARS) -> str:
             return 0.0
 
     mtime = _mtime(path)
+    # The cache holds the ordered term list; the string is cut per call because the live
+    # caption asks for a shorter prompt (VF-24 compose_prompt) than the final pass.
     cache_key = (str(path), mtime, _mtime(priority_path))
     if _PROMPT_CACHE_KEY == cache_key and _PROMPT_CACHE_VALUE:
-        return _PROMPT_CACHE_VALUE
-
-    priority_terms = _read_corrections(_priority_vocab_path())
-    user_terms = _read_corrections(path)
-    # Priority is the user's, but spelling is canonical: someone writing
-    # "claude" in their vocab file should not downgrade the built-in "Claude".
-    canonical = {t.strip().lower(): t.strip() for t in INITIAL_PROMPT_TERMS}
-    seen: set[str] = set()
-    ordered: List[str] = []
-    for term in (*priority_terms, *user_terms, *INITIAL_PROMPT_TERMS):
-        normalized = term.strip()
-        if not normalized:
-            continue
-        key = normalized.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        ordered.append(canonical.get(key, normalized))
+        ordered = _PROMPT_CACHE_VALUE
+    else:
+        priority_terms = _read_corrections(_priority_vocab_path())
+        user_terms = _read_corrections(path)
+        # Priority is the user's, but spelling is canonical: someone writing
+        # "claude" in their vocab file should not downgrade the built-in "Claude".
+        canonical = {t.strip().lower(): t.strip() for t in INITIAL_PROMPT_TERMS}
+        seen: set[str] = set()
+        ordered = []
+        for term in (*priority_terms, *user_terms, *INITIAL_PROMPT_TERMS):
+            normalized = term.strip()
+            if not normalized:
+                continue
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(canonical.get(key, normalized))
+        _PROMPT_CACHE_KEY = cache_key
+        _PROMPT_CACHE_VALUE = ordered
 
     prompt = ""
     for term in ordered:
@@ -212,10 +231,26 @@ def initial_prompt(max_chars: int = INITIAL_PROMPT_MAX_CHARS) -> str:
             # term behind it.
             continue
         prompt = candidate
-
-    _PROMPT_CACHE_KEY = cache_key
-    _PROMPT_CACHE_VALUE = prompt
     return prompt
+
+
+def compose_prompt(context: str, max_chars: int = INITIAL_PROMPT_MAX_CHARS) -> str:
+    """Vocabulary conditioning plus a caller's rolling context, inside one budget (VF-24).
+
+    The live caption passes its own running text as ``initial_prompt``. Before VF-24
+    that replaced the vocabulary prompt, so only the caption's first decode (empty
+    context) was biased toward the user's terms. Now the vocabulary comes first and the
+    context last: faster-whisper keeps the *end* of an over-long prompt, and the end is
+    the text the next words continue. The total never exceeds ``max_chars``, the same
+    budget as the final pass, so a caption decode costs no more than its first one did.
+    """
+    ctx = " ".join(str(context or "").split())
+    if not ctx:
+        return initial_prompt(max_chars)
+    if len(ctx) >= max_chars:
+        return ctx[-max_chars:]
+    vocab_part = initial_prompt(max(0, max_chars - len(ctx) - 2))
+    return f"{vocab_part}. {ctx}" if vocab_part else ctx
 
 
 def known_terms(max_terms: int = 60) -> List[str]:
@@ -255,11 +290,15 @@ def append_promoted_terms(pairs: List[Tuple[str, str]], *, header: str = "# VF-1
             if line.strip() and not line.strip().startswith("#")
         }
         new_lines: List[str] = []
+        from voiceflow.core.rewrite_policy import is_unsafe_global_source
+
         for wrong, right in pairs:
             wrong, right = wrong.strip(), right.strip()
             rule = f"{wrong} -> {right}"
             if not wrong or not right or rule.lower() in existing_rules:
                 continue
+            if is_unsafe_global_source(wrong):
+                continue  # VF-24: "cloud -> Claude" would rewrite every real cloud
             new_lines.append(rule)
             existing_rules.add(rule.lower())
             written.append((wrong, right))
@@ -281,4 +320,4 @@ def invalidate_cache() -> None:
     """
     global _PROMPT_CACHE_KEY, _PROMPT_CACHE_VALUE
     _PROMPT_CACHE_KEY = None
-    _PROMPT_CACHE_VALUE = ""
+    _PROMPT_CACHE_VALUE = []

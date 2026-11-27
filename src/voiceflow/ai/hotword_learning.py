@@ -25,13 +25,19 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from voiceflow.core.vocab import NAME_SEED_TERMS
+
 logger = logging.getLogger(__name__)
 
 #: Always present, regardless of what an older saved config says (saved configs override
 #: dataclass defaults, so a default change alone never reaches an existing install).
-SEED_HOTWORDS: Tuple[str, ...] = (
-    "VoiceFlow", "Wispr", "Claude", "Codex", "Gemini", "Ollama", "Atlas", "LIMS", "Veeva", "Madison",
-)
+#: VF-24: the shipped name seed (``core/vocab.NAME_SEED_TERMS``) plus the app's own name,
+#: then the user's configured terms, then learned ones, all inside ``MAX_HOTWORD_TERMS``
+#: (measured, see docs/VF-24-report.md). The older seeds Wispr, Atlas, LIMS, Veeva and
+#: Madison left this tuple to keep room under the measured ceiling; they are still in the
+#: default ``asr_hotwords`` (so in every saved config that kept the default) and in the
+#: vocabulary prompt.
+SEED_HOTWORDS: Tuple[str, ...] = tuple(dict.fromkeys((*NAME_SEED_TERMS, "VoiceFlow")))
 
 #: Sources that count as the user explicitly correcting a transcript.
 EXPLICIT_CORRECTION_SOURCES = frozenset(
@@ -41,6 +47,16 @@ EXPLICIT_CORRECTION_SOURCES = frozenset(
 #: Character budget for the whole hotword string. Hotwords are prepended to every 30 s
 #: decode window, so they compete with the text conditioning for Whisper's prompt tokens.
 MAX_HOTWORD_CHARS = 320
+
+#: VF-24: ceiling on the number of terms in the hotword string, measured with
+#: ``scripts/vf_eval.py --hotwords-sweep`` (docs/VF-24-report.md): 19 terms cost +2.3 %
+#: decode time on CPU small.en with no WER change; 24 cost +11.5 % and 32 raised WER.
+#: Seeds use 14, leaving 5 for configured and learned terms.
+MAX_HOTWORD_TERMS = 19
+
+#: VF-24: slots under the ceiling held for learned (twice-corrected) terms, so the default
+#: configured list cannot crowd them out (see ``effective_hotwords``).
+LEARNED_RESERVED_TERMS = 5
 
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9'\-]*")
 _COMMON = frozenset(
@@ -195,27 +211,47 @@ def effective_hotwords(
     max_terms: int = 24,
     store_path: Optional[Path] = None,
     max_chars: int = MAX_HOTWORD_CHARS,
+    max_total_terms: int = MAX_HOTWORD_TERMS,
 ) -> str:
     """Seed terms + configured terms + learned terms, de-duplicated, within the budget.
 
-    Order is priority order: seeds and the user's configured terms are never crowded out by
-    learned ones; learned terms fill what is left, most-corrected first.
+    Order is priority order: seeds first, then the user's configured terms, then learned
+    terms, most-corrected first. Both budgets hold: ``max_chars`` for the string and
+    ``max_total_terms`` for the count.
+
+    VF-24: the measured term ceiling is small, and the default ``asr_hotwords`` plus the
+    seeds would fill it, leaving no room for a term the user corrected twice. So up to
+    ``LEARNED_RESERVED_TERMS`` slots are held for learned terms (only as many as there
+    are new learned terms); configured terms use the rest.
     """
+    cap = max(0, int(max_total_terms))
     configured_terms = [t.strip() for t in str(configured or "").split(",") if t.strip()]
     learned = _learned_terms(store_path, min_count, max_terms) if learned_enabled else []
     seen: set = set()
     out: List[str] = []
     length = 0
-    for term in (*SEED_HOTWORDS, *configured_terms, *learned):
-        key = term.lower()
-        if key in seen:
-            continue
-        added = len(term) + (2 if out else 0)
-        if length + added > max_chars:
-            continue
-        seen.add(key)
-        out.append(term)
-        length += added
+
+    def _take(terms: Iterable[str], limit: int) -> None:
+        nonlocal length
+        for term in terms:
+            if len(out) >= limit:
+                return
+            key = term.lower()
+            if key in seen:
+                continue
+            added = len(term) + (2 if out else 0)
+            if length + added > max_chars:
+                continue
+            seen.add(key)
+            out.append(term)
+            length += added
+
+    _take(SEED_HOTWORDS, cap)
+    known = {t.lower() for t in (*SEED_HOTWORDS, *configured_terms)}
+    new_learned = list(dict.fromkeys(t for t in learned if t.lower() not in known))
+    reserve = min(LEARNED_RESERVED_TERMS, len(new_learned))
+    _take(configured_terms, max(len(out), cap - reserve))
+    _take(new_learned, cap)
     return ", ".join(out)
 
 
@@ -230,6 +266,7 @@ def effective_hotwords_for_config(cfg: Any) -> str:
 
 __all__: Sequence[str] = (
     "SEED_HOTWORDS",
+    "MAX_HOTWORD_TERMS",
     "EXPLICIT_CORRECTION_SOURCES",
     "LearnedHotwords",
     "effective_hotwords",

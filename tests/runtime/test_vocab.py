@@ -81,7 +81,9 @@ def test_seed_default_vocabulary_creates_user_file_when_missing(_redirect_user_v
     assert _redirect_user_vocab.exists()
     contents = _redirect_user_vocab.read_text(encoding="utf-8")
     # Spot-check: known seed entry should be present.
-    assert "cloud -> Claude" in contents
+    # (VF-24: a phrase rule. "cloud -> Claude" only ever matched the comment line.)
+    assert "cloud code -> Claude Code" in contents
+    assert "cloud max -> Claude Max" in contents
 
 
 def test_seed_default_vocabulary_respects_existing_file(_redirect_user_vocab: Path) -> None:
