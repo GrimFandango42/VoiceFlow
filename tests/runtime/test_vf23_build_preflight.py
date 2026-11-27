@@ -23,6 +23,7 @@ GIT = shutil.which("git")
 pytestmark = pytest.mark.skipif(PWSH is None, reason="pwsh not installed")
 
 FUNCTIONS = (
+    "Get-MainCheckoutRoot",
     "Resolve-PythonExe",
     "Get-RequiredCudaDlls",
     "Get-VadAssetName",
