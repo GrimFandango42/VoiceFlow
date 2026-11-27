@@ -225,3 +225,55 @@ had the numbers below wrong):
   passes, grey the unstable tail), which needs `streaming.py` changes; (2) turn the dormant checkpoints on
   (`live_flush_during_hold`), which is a behaviour and stability trade-off the config comment calls out; (3) remove the
   preview. Option 1 best matches "fully faithful reproduction of a conversation".
+
+## A short dictation comes out once (VF-24)
+
+Report (27 Nov): a short sentence said once ("Here's an example.") was pasted three or four times, for clips of
+about 3-4 s released right after the last word; not seen on longer dictations or with a pause before the release.
+The log showed one primary decode (`passes=1`, `retry_used=False`) and a no-op cleanup (`delta_chars=0`), so the
+repeat was in the decoder's output, not in paste, live caption or cleanup. The first three in a row came with the
+VF-17 tail lift on by default (`asr_tail_lift_db` 9.0).
+
+### Reproduction: not reproduced
+
+`scripts/dev/vf24_repeat_probe.py` runs the app's own final-decode route offline (AudioPreprocessor, pause
+compaction, `segmenter.decode_audio` with its 0.4 s of room tone, a real `ModernWhisperASR` with the vocabulary
+prompt and hotword seeds) on Windows SAPI TTS clips of 12 short phrases (1-6 words), two voices, with the key
+released 0 or 50 ms after the last word. It points the app's data folder at an empty temp folder, forces CPU and
+stays offline; model `distil-large-v3`, CPU int8 (the app runs the same model on CUDA float16). A clip "repeats" when
+the normalised reference sentence appears twice or more in the decode.
+
+| Setting | Variants per row | Clips | Repeats | Repeat rate |
+|---|---|---|---|---|
+| lift off (`asr_tail_lift_db: 0`) | cut 0 / 50 ms, last 350 ms faded 0 / 10 dB | 96 | 0 | 0.0 % |
+| lift 9 dB (the VF-17 default) | same | 96 | 0 | 0.0 % |
+| lift off | cut 0 ms, faded 10 dB, last 90 ms of speech cut off (key released mid-word), room noise off / 15 dB SNR | 96 | 0 | 0.0 % |
+| lift 9 dB | same | 96 | 0 | 0.0 % |
+| shipped defaults (lift skipped under 6 s, decode guards on), lift 9 | first grid | 96 | 0 | 0.0 % |
+
+All 384 decodes of the pre-VF-24 behaviour gave the sentence exactly once. A further attempt to force a loop by
+priming the decoder prompt with the sentence repeated also gave one copy, with or without the guards. **So this
+branch does not reproduce the defect, and the tail lift is not shown to cause it**: TTS is cleaner and more regular
+than Nithin's voice, the app decodes on CUDA float16, and his `custom_vocabulary.txt` hotwords were not available
+(the data folder is deliberately never read). Re-run the probe on his machine against a recorded clip (`keep_audio_last_n`
+keeps the newest 30) before calling the cause settled.
+
+### What changed (each piece has its own switch)
+
+| Piece | What it does | Switch |
+|---|---|---|
+| Repeat collapse (last line, `core/repeat_guard.py`) | A clip under 8 s whose text has the same sentence two or more times in a row (equal after case and punctuation are normalised; also an unpunctuated "Here's an example here's an example", and a loop cut off mid-copy) is reduced to the first copy. Logs `repeat_collapsed n=<copies removed> audio_s=...`. Never touches a clip of 8 s or more, a clip of unknown length, a non-adjacent repeat ("A. B. A."), or a one-word sentence ("No. No." is emphasis, and one-word loops belong to `silence_artifacts`). The raw decode stays in the tuning log / history raw field. | `repeat_collapse_enabled`, `repeat_collapse_max_seconds` |
+| Tail lift gate | The VF-17 lift is skipped for a clip shorter than 6 s (measured on the audio the engine receives, which includes the 0.4 s room-tone pad). Longer dictations keep it. Cost: a very short clip whose last word fades is no longer levelled. | `asr_tail_lift_skip_short`, `asr_tail_lift_min_clip_seconds` |
+| Decode guards | A final-pass decode of a clip under 8 s passes `no_repeat_ngram_size=4`, `compression_ratio_threshold=1.8` and `temperature=[0, 0.2, 0.4]` to faster-whisper (with a single temperature the compression-ratio check could never trigger a re-decode; a sentence tripled has ratio ~1.9, normal short sentences stay under ~1.3). Skipped for the live-caption partials and for any faster-whisper that lacks an argument. `hallucination_silence_threshold` needs word timestamps, which the app does not use, so it is not set. | `asr_short_clip_guards`, `asr_short_clip_seconds` |
+| Tail pad | Not added. `decode_audio` already appends 0.4 s of room tone to every final decode (VF-12), and the engine-side pad measured as no help in VF-17 (`asr_tail_pad_ms` stays 0). | `asr_tail_pad_ms` |
+
+Non-regression: with the shipped defaults all 96 clips of the first grid decode to exactly the same text as before.
+Tests: `tests/runtime/test_vf24_repeat_guard.py` (2x/3x/4x collapse, "No. No." stays, non-adjacent stays, 8 s and
+longer untouched), `tests/runtime/test_vf24_short_clip_engine.py` (lift and pad decisions on synthetic signals, the
+guards reach the decode only on a short final pass).
+
+### Next step
+
+After merge, rebuild the bundle (VF-18b recipe) and swap it in when he is not dictating; then put `asr_tail_lift_db`
+back to 9.0 in his config (he set 0 on 27 Nov as a mitigation) and watch `repeat_collapsed` in the log: any line
+there is a real decoder repeat, so a clip's raw text and audio can be compared against the lift setting.
