@@ -526,10 +526,12 @@ class TestEffectiveHotwords:
     SEEDS = ["VoiceFlow", "Wispr", "Claude", "Codex", "Gemini", "Ollama", "Atlas", "LIMS", "Veeva", "Madison"]
 
     def test_all_ten_seeds_present_even_with_an_old_saved_config(self, tmp_path):
-        old_saved = "VoiceFlow, Wispr, Claude, Codex, Atlas, LIMS, Veeva"
+        # VF-24: the shipped seeds are now NAME_SEED_TERMS + VoiceFlow; the other original
+        # seeds arrive through the default asr_hotwords, which old saved configs carry.
+        old_saved = Config().asr_hotwords
         out = hw.effective_hotwords(old_saved, store_path=tmp_path / "none.json")
         terms = [t.strip() for t in out.split(",")]
-        for seed in self.SEEDS:
+        for seed in (*self.SEEDS, *hw.SEED_HOTWORDS):
             assert seed in terms
 
     def test_config_default_lists_the_seed_terms_too(self):
@@ -541,8 +543,10 @@ class TestEffectiveHotwords:
         store.observe_pairs([("kubernetes", "Kubernetes")])
         out = hw.effective_hotwords("Zephyr", store_path=tmp_path / "l.json", min_count=1)
         terms = [t.strip() for t in out.split(",")]
-        assert terms[:10] == self.SEEDS
-        assert terms[10:] == ["Zephyr", "Kubernetes"]
+        # VF-24: the shipped seed list changed (core/vocab.NAME_SEED_TERMS leads it).
+        seeds = list(hw.SEED_HOTWORDS)
+        assert terms[: len(seeds)] == seeds
+        assert terms[len(seeds):] == ["Zephyr", "Kubernetes"]
 
     def test_deduplicates_case_insensitively(self, tmp_path):
         out = hw.effective_hotwords("claude, VOICEFLOW", store_path=tmp_path / "none.json")
@@ -553,7 +557,7 @@ class TestEffectiveHotwords:
         store.observe_pairs([("x", f"Term{chr(65 + i % 26)}{chr(97 + i // 26)}abc") for i in range(120)])
         out = hw.effective_hotwords("", store_path=tmp_path / "l.json", min_count=1, max_terms=500)
         assert len(out) <= hw.MAX_HOTWORD_CHARS
-        assert all(seed in out for seed in self.SEEDS), "seeds are never crowded out"
+        assert all(seed in out for seed in hw.SEED_HOTWORDS), "seeds are never crowded out"
 
     def test_learned_terms_are_capped(self, tmp_path):
         store = hw.LearnedHotwords(tmp_path / "l.json", min_count=1, max_terms=3)

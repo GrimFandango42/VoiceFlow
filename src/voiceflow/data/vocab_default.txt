@@ -17,6 +17,8 @@
 # in unambiguous Anthropic contexts.
 cloud code -> Claude Code
 cloud desktop -> Claude Desktop
+cloud max -> Claude Max
+cloud duet -> Claude Duet
 cloud sonnet -> Claude Sonnet
 cloud opus -> Claude Opus
 cloud haiku -> Claude Haiku

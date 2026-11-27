@@ -14,6 +14,7 @@ import time
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Tuple
 
+from voiceflow.core.rewrite_policy import is_unsafe_global_source
 from voiceflow.utils.settings import config_dir
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,8 @@ class AdaptiveLearningManager:
             dst = entry.get("to", "")
             if not src or not dst or src.lower() == dst.lower():
                 continue
+            if is_unsafe_global_source(src):
+                continue  # VF-24: a "cloud -> Claude" rule already on disk stays inert
 
             pattern = re.compile(rf"\b{re.escape(src)}\b", re.IGNORECASE)
             token_count = max(1, len(_tokenize(src)))
@@ -255,9 +258,13 @@ class AdaptiveLearningManager:
             learned_pairs = [pair for pair in learned_pairs if is_hotword_candidate(*pair)]
         if self._hotword_store is not None and source_key in _EXPLICIT_CORRECTION_SOURCES:
             try:
+                # Before the filter below: "do it -> Duet" still teaches the decoder "Duet".
                 self._hotword_store.observe_pairs(learned_pairs)
             except Exception as exc:
                 logger.warning(f"Learned hotword update failed: {exc}")
+        # VF-24: never a global rule from ordinary English ("cloud", "do it"); the phrase
+        # pair ("cloud max" -> "Claude Max") that extract_learning_pairs also yields stays.
+        learned_pairs = [pair for pair in learned_pairs if not is_unsafe_global_source(pair[0])]
         replacements = self._patterns.setdefault("replacements", {})
 
         for src, dst in learned_pairs:

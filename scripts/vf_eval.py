@@ -59,6 +59,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 SR = 16000
+ASR_CACHE_VERSION = "vf24-1"
 
 # --------------------------------------------------------------------------- #
 # Metrics
@@ -223,6 +224,37 @@ SCENARIOS: Dict[str, Tuple[str, List[Utterance]]] = {
     ]),
 }
 
+#: VF-24: each sentence names one shipped seed term (the target scored for "name hit").
+NAME_SENTENCES: List[Tuple[str, str]] = [
+    ("I asked Claude to review the pull request before lunch.", "Claude"),
+    ("Claude Code finished the refactor in about ten minutes.", "Claude Code"),
+    ("My Claude Max plan covers the extra usage this month.", "Claude Max"),
+    ("Anthropic released a new model this week.", "Anthropic"),
+    ("Gemini wrote the first draft and I edited it.", "Gemini"),
+    ("Route the cheaper calls through OpenRouter instead.", "OpenRouter"),
+    ("Duet keeps the two assistants talking to each other.", "Duet"),
+    ("Codex reviews the plan before anything is built.", "Codex"),
+    ("Antigravity opened the project in a new window.", "Antigravity"),
+    ("Reachy waved at the kids when they came home.", "Reachy"),
+    ("GLaDOS reads the weather report every morning.", "GLaDOS"),
+    ("The server runs on Hetzner in Germany.", "Hetzner"),
+    ("Ollama runs the small model on the laptop.", "Ollama"),
+]
+
+#: VF-24: real clouds. Neither the hotwords nor the text rules may turn these into Claude.
+CLOUD_CONTROLS: List[str] = [
+    "We deploy the service to Google Cloud and keep the backups there.",
+    "It is a cloud-based tool that syncs every hour.",
+    "All of the photos are stored in the cloud now.",
+    "The cloud side of the pipeline handles the heavy work.",
+    "I use Claude Code to deploy to the cloud.",
+]
+
+SCENARIOS["names"] = (
+    "VF-24 names and real-cloud controls",
+    [_single(s) for s, _ in NAME_SENTENCES] + [_single(s) for s in CLOUD_CONTROLS],
+)
+
 #: Vocabulary the user would plausibly have curated; shared by Whisper's prompt
 #: and the reconstruction pass, identical for before and after.
 EVAL_VOCAB = [
@@ -345,20 +377,37 @@ class Asr:
         self.cache_path = cache / f"asr_{model_name.replace('/', '_')}.json"
         self.cache: Dict[str, str] = json.loads(self.cache_path.read_text()) if self.cache_path.exists() else {}
 
-    def transcribe(self, audio: np.ndarray, pad_ms: int = 0) -> str:
+    def transcribe(self, audio: np.ndarray, pad_ms: int = 0, hotwords: str = "", use_cache: bool = True) -> str:
         if pad_ms:
             audio = np.concatenate([audio, np.zeros(int(SR * pad_ms / 1000), np.float32)])
-        key = hashlib.sha1(audio.tobytes() + self.prompt.encode()).hexdigest()
-        if key in self.cache:
+        # VF-24: the key covers everything that changes the decode (model, prompt,
+        # hotwords, harness version), so a hotword sweep can never reuse another
+        # configuration's result. An empty hotword string keeps the old key, so existing
+        # caches stay valid for the default run.
+        extra = f"|{ASR_CACHE_VERSION}|{self.name}|{hotwords}".encode() if hotwords else b""
+        key = hashlib.sha1(audio.tobytes() + self.prompt.encode() + extra).hexdigest()
+        if use_cache and key in self.cache:
             return self.cache[key]
         beam = 2 if len(audio) / SR >= 12.0 else 1  # the app's long-form lift
+        kwargs: Dict[str, Any] = {"hotwords": hotwords} if hotwords else {}
         segs, _ = self.model.transcribe(
-            audio, language="en", beam_size=beam, without_timestamps=True, vad_filter=False, initial_prompt=self.prompt
+            audio, language="en", beam_size=beam, without_timestamps=True, vad_filter=False, initial_prompt=self.prompt,
+            **kwargs,
         )
         text = " ".join(s.text.strip() for s in segs).strip()
-        self.cache[key] = text
-        self.cache_path.write_text(json.dumps(self.cache))
+        if use_cache:
+            self.cache[key] = text
+            self.cache_path.write_text(json.dumps(self.cache))
         return text
+
+    def token_count(self, text: str) -> int:
+        """Tokens the decoder spends on ``text`` in the prompt (faster-whisper prefixes a space)."""
+        if not text:
+            return 0
+        try:
+            return len(self.model.hf_tokenizer.encode(" " + text.strip(), add_special_tokens=False).ids)
+        except Exception:
+            return -1
 
 
 def text_pipeline(raw: str, duration: float) -> str:
@@ -695,6 +744,127 @@ def acceptance_failures(results: List[Dict[str, Any]], have_llm: bool, window: O
     return fails
 
 
+# --------------------------------------------------------------------------- #
+# VF-24: how many hotwords fit before accuracy or speed drops
+# --------------------------------------------------------------------------- #
+
+def _word_present(term: str, text: str) -> bool:
+    return re.search(rf"(?<![A-Za-z]){re.escape(term)}(?![A-Za-z])", text) is not None
+
+
+def _claude_count(text: str) -> int:
+    return len(re.findall(r"\bclaude\b", text, flags=re.IGNORECASE))
+
+
+def hotword_candidates() -> List[str]:
+    """Shipped seeds first (what the app always sends), then the remaining prompt terms."""
+    from voiceflow.ai.hotword_learning import SEED_HOTWORDS
+    from voiceflow.core import vocab
+
+    return list(dict.fromkeys([*SEED_HOTWORDS, *vocab.INITIAL_PROMPT_TERMS, *EVAL_VOCAB]))
+
+
+def run_hotword_sweep(tts: Tts, asr: Asr, counts: Sequence[int], wer_scenarios: Sequence[str]) -> Dict[str, Any]:
+    """Decode the same audio with N hotwords for each N; fresh decodes only, never the cache.
+
+    The N=0 baseline runs first AND last: the spread between the two is the measurement
+    noise, declared before any N is judged. A count is acceptable when mean raw WER on
+    ordinary speech rises by at most 0.5 points over the baseline mean, the median decode
+    time rises by no more than the noise band (at least 3 %), and the real-cloud controls
+    gain no "Claude". Raw ASR text is scored for names (did the decoder get it?) and the
+    post-processed text separately (what the user would see).
+    """
+    after_cfg = make_cfg(1500, tail_lift_db=9.0)
+    items: List[Dict[str, Any]] = []
+    for key in wer_scenarios:
+        for n, utt in enumerate(SCENARIOS[key][1]):
+            items.append({"kind": "wer", "scenario": key, "ref": utt.reference, "audio": build_audio(utt, tts, 1000 + n)})
+    for n, (sentence, target) in enumerate(NAME_SENTENCES):
+        items.append({"kind": "name", "ref": sentence, "target": target, "audio": build_audio(_single(sentence), tts, 3000 + n)})
+    for n, sentence in enumerate(CLOUD_CONTROLS):
+        items.append({"kind": "control", "ref": sentence, "audio": build_audio(_single(sentence), tts, 4000 + n)})
+    for item in items:
+        item["audio"], _ = prepare_audio(item["audio"], after_cfg)
+        item["dur"] = len(item["audio"]) / SR
+
+    pool = hotword_candidates()
+    asr.transcribe(items[0]["audio"], use_cache=False)  # warm-up: first decode pays one-off costs
+    plan = [0, *[int(c) for c in counts if int(c) > 0], 0]
+    passes: List[Dict[str, Any]] = []
+    for count in plan:
+        hotwords = ", ".join(pool[:count])
+        times: List[float] = []
+        wers: List[float] = []
+        raw_hits = post_hits = false_raw = false_post = 0
+        for item in items:
+            t0 = time.perf_counter()
+            raw = asr.transcribe(item["audio"], hotwords=hotwords, use_cache=False)
+            times.append((time.perf_counter() - t0) * 1000.0)
+            post = text_pipeline(raw, item["dur"])
+            if item["kind"] == "wer":
+                wers.append(wer(item["ref"], raw))
+            elif item["kind"] == "name":
+                raw_hits += _word_present(item["target"], raw)
+                post_hits += _word_present(item["target"], post)
+            else:
+                ref_claude = _claude_count(item["ref"])
+                false_raw += max(0, _claude_count(raw) - ref_claude)
+                false_post += max(0, _claude_count(post) - ref_claude)
+        passes.append({
+            "count": count, "terms_sent": len(pool[:count]), "hotword_chars": len(hotwords),
+            "hotword_tokens": asr.token_count(hotwords), "mean_raw_wer": float(np.mean(wers)) if wers else None,
+            "median_decode_ms": float(np.median(times)), "mean_decode_ms": float(np.mean(times)),
+            "name_hit_raw": raw_hits / len(NAME_SENTENCES), "name_hit_post": post_hits / len(NAME_SENTENCES),
+            "false_claude_raw": false_raw, "false_claude_post": false_post,
+        })
+        print(f"[vf_eval] hotwords={count:>2}  wer={pct(passes[-1]['mean_raw_wer'] or 0)}  "
+              f"median={passes[-1]['median_decode_ms']:.0f} ms  names raw={raw_hits}/{len(NAME_SENTENCES)} "
+              f"post={post_hits}/{len(NAME_SENTENCES)}  false-Claude raw={false_raw} post={false_post}",
+              file=sys.stderr, flush=True)
+
+    first, last = passes[0], passes[-1]
+    base_time = (first["median_decode_ms"] + last["median_decode_ms"]) / 2.0
+    base_wer = ((first["mean_raw_wer"] or 0.0) + (last["mean_raw_wer"] or 0.0)) / 2.0
+    time_noise = abs(first["median_decode_ms"] - last["median_decode_ms"]) / max(1e-9, base_time)
+    time_tol = max(0.03, 2.0 * time_noise)
+    chosen = 0
+    for p in passes[1:-1]:
+        p["decode_delta_ms"] = p["median_decode_ms"] - base_time
+        p["decode_delta_pct"] = p["decode_delta_ms"] / max(1e-9, base_time)
+        p["wer_delta"] = (p["mean_raw_wer"] or 0.0) - base_wer
+        p["ok"] = bool(p["wer_delta"] <= 0.005 and p["decode_delta_pct"] <= time_tol
+                       and p["false_claude_raw"] <= max(first["false_claude_raw"], last["false_claude_raw"])
+                       and p["false_claude_post"] == 0)
+        if p["ok"]:
+            chosen = max(chosen, p["count"])
+    return {
+        "model": asr.name, "prompt_chars": len(asr.prompt), "prompt_tokens": asr.token_count(asr.prompt),
+        "utterances": len(items), "wer_scenarios": list(wer_scenarios), "baseline_wer": base_wer,
+        "baseline_median_ms": base_time, "time_noise_pct": time_noise, "time_tolerance_pct": time_tol,
+        "passes": passes, "chosen_max_terms": chosen, "pool": pool,
+    }
+
+
+def print_sweep(sweep: Dict[str, Any]) -> str:
+    lines = [
+        f"model {sweep['model']} | prompt {sweep['prompt_chars']} chars / {sweep['prompt_tokens']} tokens | "
+        f"{sweep['utterances']} utterances | baseline WER {pct(sweep['baseline_wer'])} | baseline median "
+        f"{sweep['baseline_median_ms']:.0f} ms | noise {pct(sweep['time_noise_pct'])} -> tolerance {pct(sweep['time_tolerance_pct'])}",
+        "",
+        "| hotwords | chars | tokens | raw WER | median ms | delta ms | delta % | names raw | names post | false Claude raw/post | ok |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for p in sweep["passes"]:
+        lines.append(
+            f"| {p['count']} | {p['hotword_chars']} | {p['hotword_tokens']} | {pct(p['mean_raw_wer'] or 0)} | "
+            f"{p['median_decode_ms']:.0f} | {p.get('decode_delta_ms', 0.0):+.0f} | {pct(p.get('decode_delta_pct', 0.0))} | "
+            f"{pct(p['name_hit_raw'])} | {pct(p['name_hit_post'])} | {p['false_claude_raw']}/{p['false_claude_post']} | "
+            f"{'yes' if p.get('ok') else ('base' if 'ok' not in p else 'no')} |"
+        )
+    lines.append(f"\nlargest acceptable hotword count: {sweep['chosen_max_terms']}")
+    return "\n".join(lines)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scenarios", default="pauses,fast,noise,technical,tail", help="comma list of: " + ",".join(SCENARIOS))
@@ -706,6 +876,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--no-corpus", action="store_true", help="skip the real-corpus replay")
     ap.add_argument("--cache-dir", default=str(Path(tempfile.gettempdir()) / "voiceflow_vf_eval"))
     ap.add_argument("--out", default="", help="write the full JSON result here")
+    ap.add_argument("--hotwords-sweep", default="",
+                    help="VF-24: comma list of hotword counts (e.g. 8,16,24,32,48); runs only the sweep")
+    ap.add_argument("--sweep-scenarios", default="fast,noise,technical",
+                    help="ordinary-speech scenarios scored for WER in the sweep")
     args = ap.parse_args(argv)
 
     cache = Path(args.cache_dir)
@@ -714,9 +888,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     empty_vocab = cache / "empty_vocab.txt"
     empty_vocab.write_text("", encoding="utf-8")
     os.environ["VOICEFLOW_VOCABULARY_PATH"] = str(empty_vocab)
+    if args.hotwords_sweep:
+        # VF-24: the sweep must not read the live data folder at all (engineering_terms.json
+        # and friends resolve under %LOCALAPPDATA%\VoiceFlow). Point every lookup at the cache.
+        empty_terms = cache / "empty_terms.json"
+        empty_terms.write_text("{}", encoding="utf-8")
+        os.environ["VOICEFLOW_TERMS_PATH"] = str(empty_terms)
+        sandbox = cache / "sandbox_localappdata"
+        sandbox.mkdir(parents=True, exist_ok=True)
+        os.environ["LOCALAPPDATA"] = str(sandbox)
 
     started = time.time()
     tts, asr = Tts(cache), Asr(args.asr_model, cache)
+    if args.hotwords_sweep:
+        import faster_whisper
+
+        counts = [int(c) for c in args.hotwords_sweep.split(",") if c.strip()]
+        scen = [k.strip() for k in args.sweep_scenarios.split(",") if k.strip()]
+        sweep = run_hotword_sweep(tts, asr, counts, scen)
+        sweep["faster_whisper"] = getattr(faster_whisper, "__version__", "?")
+        sweep["python"] = sys.version.split()[0]
+        sweep["elapsed_s"] = round(time.time() - started, 1)
+        table = print_sweep(sweep)
+        print("\n## VF-24 hotword sweep (CPU, int8, fresh decodes)\n")
+        print(f"faster-whisper {sweep['faster_whisper']} | Python {sweep['python']}\n")
+        print(table)
+        if args.out:
+            Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.out).write_text(json.dumps(sweep, indent=2, default=str), encoding="utf-8")
+        return 0
     recon = None if args.no_llm else Recon(cache, args.llm_model)
     if recon is not None and not recon.available:
         print("[vf_eval] Ollama / a suitable model is not available: reconstruction columns skipped", file=sys.stderr)

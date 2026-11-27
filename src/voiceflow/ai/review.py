@@ -239,6 +239,13 @@ def _apply_many(rows: List[Dict[str, Any]]) -> int:
             dst = str(row.get("to", "")).strip()
             if not src or not dst or src.lower() == dst.lower():
                 continue
+            from voiceflow.core.rewrite_policy import is_unsafe_global_source
+
+            if is_unsafe_global_source(src):
+                # VF-24: approving "cloud -> Claude" would rewrite every real cloud.
+                print(f"Skipped {src!r} -> {dst!r}: {src!r} is ordinary English; "
+                      f"approve a phrase instead (for example 'cloud max -> Claude Max').")
+                continue
             _append_vocab_correction(vocab_path, src, dst)
             _record_in_adaptive_memory(src, dst)
             applied += 1

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from voiceflow.core.dictation_format import protect_codeish, restore_codeish
+from voiceflow.core.rewrite_policy import is_unsafe_global_source
 
 SYMBOL_MAP: Dict[str, str] = {
     # Brackets
@@ -174,6 +175,13 @@ _GLOBAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bvoice[\s-]*flo(?:w|wn|wna|na|nah)?\b", re.IGNORECASE), "VoiceFlow"),
     # The dictation app he runs alongside VoiceFlow; Whisper writes it as the model's name.
     (re.compile(r"\bwhisper[\s-]*flow\b", re.IGNORECASE), "Wispr Flow"),
+    # VF-24: "cloud" is how Whisper often hears "Claude". Rewritten only inside these
+    # product phrases, which cannot mean a real cloud; a bare "cloud" is never touched
+    # (see core/rewrite_policy.py). "CloudMax" is the joined form: [\s-]* allows zero.
+    (re.compile(r"\bcloud[\s-]*code\b", re.IGNORECASE), "Claude Code"),
+    (re.compile(r"\bcloud[\s-]*desktop\b", re.IGNORECASE), "Claude Desktop"),
+    (re.compile(r"\bcloud[\s-]*max\b", re.IGNORECASE), "Claude Max"),
+    (re.compile(r"\bcloud[\s-]*duet\b", re.IGNORECASE), "Claude Duet"),
 )
 
 _CONTEXTUAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -183,11 +191,11 @@ _CONTEXTUAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bsee[\s-]*el[\s-]*eye\b", re.IGNORECASE), "CLI"),
     (re.compile(r"\bc[\s-]*l[\s-]*i\b", re.IGNORECASE), "CLI"),
     (re.compile(r"\bci[\s-]*cd\b", re.IGNORECASE), "CI/CD"),
-    (re.compile(r"\bcloud[\s-]*code\b", re.IGNORECASE), "Claude Code"),
     (re.compile(r"\bclaude[\s-]*code\b", re.IGNORECASE), "Claude Code"),
-    (re.compile(r"\bcloud[\s-]*desktop\b", re.IGNORECASE), "Claude Desktop"),
     (re.compile(r"\bclaude[\s-]*desktop\b", re.IGNORECASE), "Claude Desktop"),
-    (re.compile(r"\bcloud\b(?=,\s*(?:the\s+)?(?:ai|coding)\s+assistant\b)", re.IGNORECASE), "Claude"),
+    # VF-24 review: no "cloud, the AI assistant" lookahead rule any more. A bare
+    # "cloud" is never rewritten, whatever follows it; only the product phrases
+    # in _GLOBAL_TECH_TERM_RULES become "Claude".
 )
 
 _TECH_TERM_CACHE_KEY: tuple[str, float] | None = None
@@ -363,6 +371,9 @@ def _load_custom_vocabulary() -> tuple[tuple[re.Pattern[str], str], ...]:
                 src, dst = src.strip(), dst.strip()
                 if not src or not dst:
                     continue
+                if is_unsafe_global_source(src):
+                    # VF-24: "cloud -> Claude" in this file would rewrite every real cloud.
+                    continue
                 try:
                     rules.append((re.compile(rf"\b{re.escape(src)}\b", re.IGNORECASE), dst))
                 except re.error:
@@ -380,7 +391,7 @@ def _compile_exact_term_rules(mapping: dict[str, str]) -> tuple[tuple[re.Pattern
     for source, target in mapping.items():
         src = str(source or "").strip()
         dst = str(target or "").strip()
-        if not src or not dst:
+        if not src or not dst or is_unsafe_global_source(src):
             continue
         compiled.append((re.compile(rf"\b{re.escape(src)}\b", re.IGNORECASE), dst))
     return tuple(compiled)
@@ -1231,14 +1242,13 @@ def _apply_context_corrections(
         text = re.sub(r"\bpublished retained\b", "publish retained", text, flags=re.IGNORECASE)
         text = re.sub(r"\ball indicates\b", "all indicate", text, flags=re.IGNORECASE)
     if aggressive:
-        # AI ecosystem naming corrections: "cloud" is frequently a mis-hear for "Claude".
-        # Keep this context-aware to avoid breaking real cloud-provider references.
+        # AI ecosystem naming corrections. "cloud" -> "Claude" happens only inside the
+        # product phrases in _GLOBAL_TECH_TERM_RULES (VF-24): "Anthropic's cloud" can be
+        # real infrastructure, so it is no longer rewritten here.
         text = re.sub(r"\bcloud[\s-]*code\b", "Claude Code", text, flags=re.IGNORECASE)
         text = re.sub(r"\bclaude[\s-]*code\b", "Claude Code", text, flags=re.IGNORECASE)
-        text = re.sub(r"\banthropics?\s+cloud\b", "Anthropic's Claude", text, flags=re.IGNORECASE)
-        text = re.sub(r"\ban[\s-]*traffic\s+cloud\b", "Anthropic Claude", text, flags=re.IGNORECASE)
-        text = re.sub(r"\banth[\s-]*traffic\s+cloud\b", "Anthropic Claude", text, flags=re.IGNORECASE)
         text = re.sub(r"\ban[\s-]*traffic\b", "Anthropic", text, flags=re.IGNORECASE)
+        text = re.sub(r"\banth[\s-]*traffic\b", "Anthropic", text, flags=re.IGNORECASE)
         text = re.sub(
             r"\bdeployed?\s+a\s+google\s+cloud\s+and\s+aws\b",
             "deploy to Google Cloud and AWS",
@@ -1331,66 +1341,9 @@ def _apply_sentence_level_disambiguation(text: str, *, aggressive: bool) -> str:
         elif whether_context and not weather_context:
             sentence = re.sub(r"\bweather\b", "whether", sentence, flags=re.IGNORECASE)
 
-        infra_cloud_context = any(
-            phrase in lower
-            for phrase in [
-                "aws",
-                "azure",
-                "gcp",
-                "google cloud",
-                "icloud",
-                "cloud provider",
-                "cloud storage",
-                "cloud deployment",
-                "cloud environment",
-                "cloud environments",
-                "public cloud",
-                "private cloud",
-                "multi-cloud",
-                "kubernetes",
-                "terraform",
-                "vpc",
-                "rds",
-                "eks",
-            ]
-        )
-        safe_claude_context = any(
-            phrase in lower
-            for phrase in [
-                "anthropic",
-                "claude code",
-                "claude desktop",
-                "cloud code",
-                "cloud desktop",
-            ]
-        )
-        if safe_claude_context and not infra_cloud_context:
-            sentence = re.sub(r"\bcloud\b", "Claude", sentence, flags=re.IGNORECASE)
-            sentence = re.sub(r"\bcloud's\b", "Claude's", sentence, flags=re.IGNORECASE)
-
-        if aggressive:
-            # Claude vs cloud disambiguation for broader coding-assistant context.
-            claude_context = any(
-                phrase in lower
-                for phrase in [
-                    "anthropic",
-                    "claude",
-                    "claude code",
-                    "claude desktop",
-                    "coding assistant",
-                    "llm",
-                    "prompt",
-                    "agent",
-                    "cursor",
-                    "gemini",
-                    "chatgpt",
-                    "copilot",
-                    "vs code",
-                ]
-            )
-            if claude_context and not infra_cloud_context:
-                sentence = re.sub(r"\bcloud\b", "Claude", sentence, flags=re.IGNORECASE)
-                sentence = re.sub(r"\bcloud's\b", "Claude's", sentence, flags=re.IGNORECASE)
+        # VF-24: no sentence-wide "cloud" -> "Claude" here any more. It turned "I use
+        # Claude Code to deploy to the cloud" into "... deploy to the Claude". The safe
+        # product phrases ("cloud code", "cloud max", ...) are handled by the term rules.
 
         rebuilt.append(sentence + sep)
 
