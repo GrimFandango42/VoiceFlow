@@ -21,7 +21,7 @@ the two orders do not contradict each other: anything VF-12 would call a rewrite
 |---|---|---|
 | 1 Tail loss | (a) Pause compaction's "blip" filter (runs < 120 ms are zeroed) deleted a soft last word that followed a pause: the last 1500 ms now bypass it (`pause_compaction_tail_protect_ms`; `0` = old behaviour). (b) A speaker who lets the last word fade ("...of the", "...for now") is levelled before ASR: speech that trails the last full-level speech and is > 6 dB under the clip's speech level is lifted toward it by at most 9 dB (`asr_tail_lift_db`; `0` = off), never touching a sample outside the lifted frames. A trailing-silence pad (`asr_tail_pad_ms`) was measured and did **not** help, so it ships off. | `core/asr_engine.py`, `core/config.py` |
 | 2 Tuning log | `tuning_log.jsonl` in `%LOCALAPPDATA%\VoiceFlow`: untruncated (cap 8000 chars) raw / pasted / reconstructed / user-edited text plus metadata. Local only, never uploaded (VF-03). Rotates at 2000 entries or 30 days into one previous generation. | `ai/tuning_log.py` |
-| 3 Reconstruction | A local Ollama model (CPU only: `num_gpu=0`, half the cores; the GPU belongs to Reachy, OPS-07) proposes a repaired version after the normal text pipeline. | `ai/reconstruction.py`, `ai/reconstruction_runtime.py` |
+| 3 Reconstruction | Off by default (`reconstruction_enabled: false`). When on, a local Ollama model (CPU only: `num_gpu=0`, half the cores; the GPU belongs to Reachy, OPS-07) proposes a repaired version after the normal text pipeline. | `ai/reconstruction.py`, `ai/reconstruction_runtime.py` |
 | 4 Guards | `check_candidate` is the only gate between the model and the paste. Any failure, timeout or Ollama error pastes the pre-reconstruction text unchanged and is logged. | `ai/reconstruction.py` |
 | 5 Speed | Paste first; the improvement is offered afterwards (async) unless measured p95 fits the budget. | `ai/reconstruction_runtime.py`, `integrations/inject.py`, tray |
 | 6 Learning | Repeated phonetic misses become hotwords in `custom_vocabulary.txt`. | `ai/hotword_promotion.py`, `ai/adaptive_memory.py`, `ai/daily_learning.py` |
@@ -77,7 +77,7 @@ end-to-end fake-Ollama test proving the raw text is what gets pasted.
 
 ## No speed regression (item 5)
 
-`reconstruction_mode: auto` (default) pastes the pre-reconstruction text immediately and goes
+The pass runs only when `reconstruction_enabled` is set (default `false`, see `core/config.py`). When it is on, `reconstruction_mode: auto` (default) pastes the pre-reconstruction text immediately and goes
 synchronous only after at least 5 timed runs have p95 <= `reconstruction_budget_ms` (800). Otherwise an
 accepted result becomes a *pending improvement*: overlay note, tray entry **Replace last paste with
 improved version**, and `Ctrl+Alt+R` (`replace_last_paste_hotkey`).

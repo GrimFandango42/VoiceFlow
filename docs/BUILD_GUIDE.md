@@ -37,6 +37,8 @@ pytest -q tests\runtime
 powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -OutputName VoiceFlow -Clean
 ```
 
+Each build also writes a timestamped snapshot zip to `dist\packages` (`VoiceFlow-<date>-<time>-portable.zip` or `-onefile.zip`), about 2 GB each. By default the build keeps the two newest and deletes older ones. `-KeepPackages N` changes how many are kept, and `-KeepPackages 0` keeps all. Published release assets in that folder (`VoiceFlow-win64.exe`, `VoiceFlow-portable-win64.zip`, `SHA256SUMS.txt`) carry no timestamp and are never pruned.
+
 ### The build environment (one-time)
 
 The build finds its Python without flags, in this order: `-PythonExe`, `.venv-build`, `.venv-gpu`, `venv`, the main checkout's `.venv-build` (when run from a git worktree), then `python` on PATH. Create `.venv-build` once, from the pinned `requirements-build.txt` (faster-whisper 1.2.1, ctranslate2, PyInstaller and the NVIDIA cuDNN/cuBLAS/NVRTC wheels, so no torch and no `VOICEFLOW_TORCH_LIB_DIR` are needed):

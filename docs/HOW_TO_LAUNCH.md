@@ -16,13 +16,14 @@ Use the packaged executable for acceptance testing; the batch launchers are sour
 
 ## Launch paths
 
-Which shortcut starts what on the main desktop today (VF-22; changing this is VF-18b):
+Which trigger starts what on the main Windows desktop, as of 2026-11-26. Every desktop icon now starts the bundle; `VoiceFlow_Tray.vbs` stays for source development:
 
-| Shortcut / trigger | Starts | Runs as |
+| Trigger | Starts | Runs as |
 |---|---|---|
-| Start menu **VoiceFlow**, Startup folder | `dist\VoiceFlow\VoiceFlow.exe` | **bundle** (`VoiceFlow.exe`) |
-| Desktop `VoiceFlow.lnk` and `VoiceFlow (Tray).lnk` | `wscript VoiceFlow_Tray.vbs` → `pyw.exe src\voiceflow\ui\launcher_silent.pyw` | **source** (`pythonw.exe`; `.venv-gpu`, then `venv`, then the system Python through `pyw`) |
+| Start menu **VoiceFlow**, Startup folder (`scripts\setup\register_startup_shortcut.ps1`), Desktop `VoiceFlow.lnk` and `VoiceFlow (Tray).lnk` | `dist\VoiceFlow\VoiceFlow.exe` | **bundle** (`VoiceFlow.exe`) |
+| Logon scheduled task `VoiceFlow` | `dist\VoiceFlow\VoiceFlow.exe` | **bundle** |
 | `scripts\ops\voiceflow-watchdog.ps1` (Task Scheduler, every 15 min) | the bundle, only when no VoiceFlow is running | **bundle** |
+| `VoiceFlow_Tray.vbs`, run by hand for development | `pyw.exe src\voiceflow\ui\launcher_silent.pyw` | **source** (`pythonw.exe`; `.venv-gpu`, then `venv`, then the system Python through `pyw`) |
 
 Every start writes one line, once the model is ready, that says which of these it was:
 
@@ -30,7 +31,7 @@ Every start writes one line, once the model is ready, that says which of these i
 launch_path kind=source parent=pyw.exe python=3.13.1 device=cuda compute=float16
 ```
 
-`kind` is `bundle` for the EXE and `source` for any Python; `parent` is the process that started it (typically `explorer.exe` for the Start menu and Startup, `pyw.exe` for the Desktop shortcuts, `powershell.exe` for the watchdog); `python` is the interpreter version (for the bundle, the one it was built with). `device=cpu` here on a machine with a GPU is a bug: the CUDA runtime check registers the bundle's own DLLs, the pip `nvidia\*\bin` wheels of the running interpreter (system Python, venv or user site) and the checkout's bundle before it looks, without relying on PATH. If the runtime really is missing, the log has `cuda_runtime_unavailable missing_dlls=...` and `asr_cpu_fallback_active`, and VoiceFlow retries the GPU as soon as the model has loaded, then after 15 s, 30 s and 60 s, then every 120 s (`asr_cuda_restore_failed attempt=N ...` per try, `asr_cuda_restored` when it works).
+`kind` is `bundle` for the EXE and `source` for any Python; `parent` is the process that started it (typically `explorer.exe` for the Start menu, Startup and Desktop icons, `svchost.exe` for the logon task, `powershell.exe` for the watchdog; `pyw.exe` for the development launcher); `python` is the interpreter version (for the bundle, the one it was built with). `device=cpu` here on a machine with a GPU is a bug: the CUDA runtime check registers the bundle's own DLLs, the pip `nvidia\*\bin` wheels of the running interpreter (system Python, venv or user site) and the checkout's bundle before it looks, without relying on PATH. If the runtime really is missing, the log has `cuda_runtime_unavailable missing_dlls=...` and `asr_cpu_fallback_active`, and VoiceFlow retries the GPU as soon as the model has loaded, then after 15 s, 30 s and 60 s, then every 120 s (`asr_cuda_restore_failed attempt=N ...` per try, `asr_cuda_restored` when it works).
 
 Each running VoiceFlow, bundle or source, holds the single-instance mutex `Local\VoiceFlow_CLI_Enhanced` and writes `%LOCALAPPDATA%\VoiceFlow\instance.json` (pid, process name, start time, kind). The watchdog counts VoiceFlow as running when either says so (a record whose pid is gone or now belongs to another program is ignored), so it no longer starts the bundle beside a source instance. When it does start the bundle it logs `pid=N still running after 20s` or `pid=N exited early, code C` in `logs\watchdog.log`, and after an early exit it does not start the bundle again for an hour. `pwsh -NoProfile -File scripts\ops\voiceflow-watchdog.ps1 -WhatIf` prints its decision and starts nothing.
 

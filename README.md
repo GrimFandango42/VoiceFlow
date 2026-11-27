@@ -56,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File scripts\setup\bootstrap_windows.ps1 -Gp
 
 `dev.py` loads the model once in its own process and restarts only the app when you save a `.py` file. See [How to launch](docs/HOW_TO_LAUNCH.md).
 
-**GPU note.** The CUDA path needs cuBLAS 12 and cuDNN 9 (`cublas64_12.dll`, `cudnn_ops64_9.dll`). When run from source, VoiceFlow looks for them in the environment's `torch\lib` (a [CUDA 12 build of PyTorch](https://pytorch.org/get-started/locally/) puts them there; it is several GB, and PyTorch itself is not used for transcription), in one folder named by `VOICEFLOW_TORCH_LIB_DIR`, or on `PATH`. The smaller `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels also contain them, but in their own `bin` folders: the build script finds those, a source run only does if both folders are on `PATH`. A CPU-only `torch` satisfies the install and then silently gives no GPU, and a CUDA 11.8 / cuDNN 8 stack is the wrong major version for ctranslate2 4.x. Check with:
+**GPU note.** The CUDA path needs cuBLAS 12 and cuDNN 9 (`cublas64_12.dll`, `cudnn_ops64_9.dll`). VoiceFlow looks for them before it loads the model, without needing `PATH`: in the folder named by `VOICEFLOW_TORCH_LIB_DIR`, in the `nvidia\*\bin` folders of the pip `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels of the Python that runs it, in a `torch\lib` folder (a [CUDA 12 build of PyTorch](https://pytorch.org/get-started/locally/) puts them there; it is several GB, and PyTorch itself is not used for transcription), and in the packaged bundle. A CPU-only `torch` satisfies the install and then silently gives no GPU, and a CUDA 11.8 / cuDNN 8 stack is the wrong major version for ctranslate2 4.x. Check with:
 
 ```powershell
 python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"
@@ -65,6 +65,12 @@ python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"
 `0` means VoiceFlow will fall back to CPU `int8` (roughly 85x slower). The log line `asr_engine_initialized` shows the device actually in use (`device=cuda compute=float16`). The packaged build bundles these DLLs and refuses to build without them ([Build guide](docs/BUILD_GUIDE.md)).
 
 </details>
+
+### Starting it and keeping it running
+
+- **The bundle is the copy to run day to day.** `scripts\setup\register_startup_shortcut.ps1` adds a Windows sign-in shortcut to `dist\VoiceFlow\VoiceFlow.exe`.
+- **Optional watchdog.** `scripts\ops\voiceflow-watchdog.ps1`, run on a schedule, starts the bundle only when no VoiceFlow is running (a source copy counts). If the bundle exits right after starting, the watchdog waits an hour before trying again. Run it with `-WhatIf` to see its decision without starting anything.
+- **One line per start.** Once the model is ready, the log says how the app was started and which device it got, for example `launch_path kind=bundle parent=explorer.exe python=3.13.1 device=cuda compute=float16`. `device=cpu` on a machine with a working GPU is a bug. The launch paths are in [How to launch](docs/HOW_TO_LAUNCH.md#launch-paths).
 
 ### Dictate
 
@@ -91,13 +97,14 @@ flowchart LR
   asr --> fmt["Text formatting: lists, paragraphs<br/><sub>core/dictation_format.py, core/list_format.py</sub>"]
   fmt --> paste(["Paste into the active window<br/><sub>integrations/inject.py</sub>"])
   fmt --> hist[("History, saved before the paste<br/><sub>core/history.py</sub>")]
+  fmt -.-> repair["Optional repair pass, off by default<br/><sub>ai/reconstruction.py</sub>"] -.-> paste
   asr -.-> log[("Log and health lines<br/><sub>utils/logging_setup.py</sub>")]
   ui["Tray, overlay, dock<br/><sub>ui/</sub>"] -. shows state .- mic
 ```
 
 1. **Hold the key.** One microphone stream fills a buffer and a live caption appears on the overlay.
 2. **Let go.** Recordings of 20 seconds or more are cut at your pauses and decoded piece by piece; silence and noise are gated by Silero VAD (a small voice-activity model) so Whisper never hears them.
-3. **Decode.** One faster-whisper model does the work. The default `quick` tier uses `distil-large-v3` on a CUDA GPU and `small.en` on the CPU. If CUDA fails, VoiceFlow says so (tray, balloon, overlay), falls back to CPU `int8` and retries the GPU about every two minutes while idle.
+3. **Decode.** One faster-whisper model does the work. The default `quick` tier uses `distil-large-v3` on a CUDA GPU and `small.en` on the CPU. If CUDA fails, VoiceFlow says so (tray, balloon, overlay), falls back to CPU `int8`, and retries the GPU at 15, 30 and 60 seconds after the start, then about every two minutes while idle.
 4. **Format.** Spoken lists become real lists, long dictations break into paragraphs at pauses, `um`/`uh` and false starts are cleaned conservatively.
 5. **Save, then paste.** The transcript goes into local history *before* the paste, into the window that had focus when you released the key.
 
@@ -117,7 +124,9 @@ The full data flow, configuration and environment variables are in [Architecture
 <details>
 <summary><b>More: learning, self-check, privacy</b></summary>
 
-- **Learns your words.** Terms you correct twice in **Correction Review** become Whisper hotwords; corrections also feed local replacement rules. Explicit corrections count more than automatic analysis.
+- **Learns your words.** Terms you correct twice in **Correction Review** become Whisper hotwords; corrections also feed local replacement rules. Explicit corrections count more than automatic analysis. A mishearing you fix again and again is promoted to your custom vocabulary by the daily learning job: after two explicit edits, or after three different dictations when the optional repair pass is on.
+- **Keeps the last word.** A word that trails off at the end of a dictation survives more often: on a synthetic test set it went from 78% to 100% (real voices are not measured yet; see [Faithful dictation](docs/FAITHFUL_DICTATION.md)).
+- **Optional repair pass, off by default.** With `reconstruction_enabled` on and a local [Ollama](https://ollama.com) model installed, VoiceFlow proposes fixes to capitals, punctuation and small dropped words. The text is pasted first and the improvement is offered afterwards. The pass never changes a number, name, URL, file path or code-like word, and any doubt keeps the original text. `Ctrl+Alt+R` or tray → **Replace last paste with improved version** swaps it in. See [Faithful dictation](docs/FAITHFUL_DICTATION.md).
 - **Tray-first.** Settings, history and correction review live in the tray menu; no window sits open. The dock can be hidden.
   ![The dock alone, reading Ready with the build date and History and Hide buttons](docs/screenshots/overlay-idle.png)
 - **Self-check.** The packaged app can check itself without touching the microphone, tray or hotkeys: `VoiceFlow.exe --self-check=report.json` ([Build guide](docs/BUILD_GUIDE.md)).
@@ -148,9 +157,9 @@ Wispr Flow is the product VoiceFlow was built to replace for one person's own us
 
 | Folder | What is in it |
 |---|---|
-| [`src/voiceflow/`](src/voiceflow/) | The app: `core/` (audio, Whisper engine, segmenter, formatting, history), `integrations/` (hotkeys, paste), `ui/` (tray, overlay, dock, setup wizard), `ai/` (local learning), `utils/` (config, logging, build identity) |
+| [`src/voiceflow/`](src/voiceflow/) | The app: `core/` (audio, Whisper engine, segmenter, formatting, history), `integrations/` (hotkeys, paste), `ui/` (tray, overlay, dock, setup wizard), `ai/` (local learning and the optional repair pass), `utils/` (config, logging, build identity) |
 | [`tests/`](tests/) | The pytest suite, in `tests/runtime/` |
-| [`scripts/`](scripts/) | `setup/` (bootstrap, build, bundle check), `dev/` (smoke test, latency log analysis), screenshot and docs checkers |
+| [`scripts/`](scripts/) | `setup/` (bootstrap, build, bundle check), `dev/` (smoke test, latency log analysis), `ops/` (watchdog), screenshot and docs checkers |
 | [`docs/`](docs/) | User guide, architecture, build and launch guides, screenshots ([index](docs/README.md)) |
 | [`packaging/windows/`](packaging/windows/) | Installer script and winget manifest template |
 | [`wiki/`](wiki/) | Decisions, known issues and the project log |
@@ -183,7 +192,16 @@ ruff check src/                                          # the CI lint gate
 python scripts/check_docs.py                             # every link and image path resolves
 ```
 
-The test suite points `%LOCALAPPDATA%` at a temporary folder, so it never touches your real VoiceFlow data. For end-to-end checks, build the bundle (`scripts\setup\build_windows_exe.ps1`, see the [Build guide](docs/BUILD_GUIDE.md)) and test `dist\VoiceFlow\VoiceFlow.exe` rather than the batch launchers.
+To build the bundle, create the build environment once, then run the build command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup\bootstrap_windows.ps1 -BuildVenv
+powershell -ExecutionPolicy Bypass -File scripts\setup\build_windows_exe.ps1 -OutputName VoiceFlow -Clean
+```
+
+Before PyInstaller starts, the build checks its Python, its packages and the CUDA runtime DLLs. `-PreflightOnly` runs just that check and names what is missing. The build then verifies the finished bundle and fails unless it is fit for daily use. It keeps the two newest build snapshots in `dist\packages` (`-KeepPackages` changes that). The [Build guide](docs/BUILD_GUIDE.md) has the details.
+
+The test suite points `%LOCALAPPDATA%` at a temporary folder, so it never touches your real VoiceFlow data. For end-to-end checks, test `dist\VoiceFlow\VoiceFlow.exe` rather than the batch launchers.
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md). Decisions are recorded in [`wiki/decisions.md`](wiki/decisions.md) and the [Changelog](CHANGELOG.md); plans are in the [Roadmap](ROADMAP.md). macOS and Linux are not supported; the [forking guide](docs/guides/FORKING_AND_PLATFORM_GUIDE.md) lists the parts a port would replace.
 
