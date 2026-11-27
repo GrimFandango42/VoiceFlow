@@ -46,11 +46,13 @@ function Resolve-PythonExe {
     param([string]$RepoRoot, [string]$ExplicitPython)
 
     if ($ExplicitPython) {
+        $script:PythonChoiceReason = "-PythonExe was given"
         return $ExplicitPython
     }
 
-    # Order (VF-23): -PythonExe, .venv-build, .venv-gpu, venv, then (in a git
-    # worktree) the main checkout's .venv-build, then whatever "python" is on PATH.
+    # Order (VF-23, VF-26): -PythonExe, this checkout's .venv-build, .venv-gpu, venv,
+    # .venv-test, then (in a git worktree) the main checkout's .venv-build and
+    # .venv-test, then whatever "python" is on PATH.
     $preferGpu = $true
     if ($env:VOICEFLOW_USE_GPU_VENV -and $env:VOICEFLOW_USE_GPU_VENV.Trim().ToLower() -eq "0") {
         $preferGpu = $false
@@ -60,18 +62,43 @@ function Resolve-PythonExe {
     $gpuPython = Join-Path $RepoRoot ".venv-gpu\Scripts\python.exe"
     $venvPython = Join-Path $RepoRoot "venv\Scripts\python.exe"
 
+    $testPython = Join-Path $RepoRoot ".venv-test\Scripts\python.exe"
+
     if (Test-Path $buildPython) {
+        $script:PythonChoiceReason = ".venv-build in this checkout"
         return $buildPython
     }
     if ($preferGpu -and (Test-Path $gpuPython)) {
+        $script:PythonChoiceReason = ".venv-gpu in this checkout"
         return $gpuPython
     }
     if (Test-Path $venvPython) {
+        $script:PythonChoiceReason = "venv in this checkout"
         return $venvPython
+    }
+    if (Test-Path $testPython) {
+        $script:PythonChoiceReason = ".venv-test in this checkout"
+        return $testPython
     }
 
     # A git worktree has its own checkout but not the main checkout's environments.
-    # The main checkout is the parent of the common git dir.
+    $mainRoot = Get-MainCheckoutRoot -RepoRoot $RepoRoot
+    if ($mainRoot) {
+        foreach ($name in @(".venv-build", ".venv-test")) {
+            $candidate = Join-Path $mainRoot ($name + "\Scripts\python.exe")
+            if (Test-Path $candidate) {
+                $script:PythonChoiceReason = "$name in the main checkout ($mainRoot)"
+                return $candidate
+            }
+        }
+    }
+    $script:PythonChoiceReason = "no build environment found; fell back to python on PATH"
+    return "python"
+}
+
+function Get-MainCheckoutRoot {
+    <# In a git worktree, the main checkout (parent of the common git dir); "" otherwise. #>
+    param([string]$RepoRoot)
     try {
         $commonDir = (& git -C $RepoRoot rev-parse --git-common-dir 2>$null | Select-Object -First 1)
         if ($commonDir) {
@@ -81,16 +108,40 @@ function Resolve-PythonExe {
             }
             $mainRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($commonText))
             if ($mainRoot -and ($mainRoot.TrimEnd('\', '/') -ne $RepoRoot.TrimEnd('\', '/'))) {
-                $mainBuild = Join-Path $mainRoot ".venv-build\Scripts\python.exe"
-                if (Test-Path $mainBuild) {
-                    return $mainBuild
-                }
+                return $mainRoot
             }
         }
     } catch {
         # not a git checkout, or git missing: fall through
     }
-    return "python"
+    return ""
+}
+
+function Resolve-CudaFallbackDir {
+    <#
+      VF-26: when the chosen environment lacks the CUDA DLLs and VOICEFLOW_TORCH_LIB_DIR
+      is unset, return the main checkout's dist\VoiceFlow\_internal if it holds every
+      required DLL; otherwise "". Sets nothing.
+    #>
+    param([string]$RepoRoot, [string]$PythonExe, [string]$SitePackages = "")
+
+    if ($env:VOICEFLOW_TORCH_LIB_DIR) { return "" }
+    $found = @{}
+    foreach ($f in (Get-CudaRuntimeDlls -RepoRoot $RepoRoot -PythonExe $PythonExe -SitePackages $SitePackages)) {
+        $found[[System.IO.Path]::GetFileName($f).ToLowerInvariant()] = $true
+    }
+    $required = @(Get-RequiredCudaDlls)
+    if (@($required | Where-Object { -not $found.ContainsKey($_.ToLowerInvariant()) }).Count -eq 0) {
+        return ""
+    }
+    $mainRoot = Get-MainCheckoutRoot -RepoRoot $RepoRoot
+    if (-not $mainRoot) { return "" }
+    $internal = Join-Path $mainRoot "dist\VoiceFlow\_internal"
+    if (-not (Test-Path $internal)) { return "" }
+    foreach ($name in $required) {
+        if (-not (Test-Path (Join-Path $internal $name))) { return "" }
+    }
+    return $internal
 }
 
 # The ten DLLs a bundle must contain for device=cuda to work. Used by the preflight
@@ -717,7 +768,7 @@ $pythonExe = Resolve-PythonExe -RepoRoot $repoRoot -ExplicitPython $PythonExe
 $pythonBaseDir = Resolve-PythonBaseDir -PythonExe $pythonExe
 
 Write-Host "[build_windows_exe] repo: $repoRoot"
-Write-Host "[build_windows_exe] python: $pythonExe"
+Write-Host "[build_windows_exe] python: $pythonExe ($script:PythonChoiceReason)"
 if ($pythonBaseDir) {
     Write-Host "[build_windows_exe] python base: $pythonBaseDir"
 }
@@ -726,6 +777,20 @@ if ($InstallPackagingDeps) {
     Write-Host "[build_windows_exe] Installing packaging dependencies..."
     & $pythonExe -m pip install --upgrade pip
     & $pythonExe -m pip install pyinstaller pyinstaller-hooks-contrib
+}
+
+# VF-26: no CUDA DLLs in this environment and no VOICEFLOW_TORCH_LIB_DIR: borrow the
+# main checkout's last bundle if it holds all of them. Process scope only.
+if ($env:VOICEFLOW_TORCH_LIB_DIR) {
+    Write-Host "[build_windows_exe] CUDA DLL folder: $($env:VOICEFLOW_TORCH_LIB_DIR) (VOICEFLOW_TORCH_LIB_DIR was set)"
+} elseif (-not $AllowCpuOnly -and -not $SkipCudaRuntime) {
+    $fallbackDir = Resolve-CudaFallbackDir -RepoRoot $repoRoot -PythonExe $pythonExe
+    if ($fallbackDir) {
+        $env:VOICEFLOW_TORCH_LIB_DIR = $fallbackDir
+        Write-Host "[build_windows_exe] CUDA DLL folder: $fallbackDir (the chosen Python has none; using the main checkout's built bundle, which holds all required DLLs)"
+    } else {
+        Write-Host "[build_windows_exe] CUDA DLL folder: from the chosen Python environment"
+    }
 }
 
 # Preflight before anything is stopped or built: a wrong environment costs seconds
