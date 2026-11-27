@@ -93,10 +93,12 @@ def test_normalize_context_terms_safe_defaults_fix_claude_product_names():
     assert "Claude Desktop" in normalized
 
 
-def test_normalize_context_terms_safe_defaults_fix_claude_ai_assistant_phrase():
+def test_normalize_context_terms_leaves_bare_cloud_before_assistant_phrase():
+    # VF-24: a bare "cloud" is never rewritten, even before "the ai assistant";
+    # only "cloud code/desktop/max/duet" become Claude.
     text = "cloud, the ai assistant, did a better job on that diff"
     normalized = normalize_context_terms(text, aggressive=False, light=True)
-    assert normalized.startswith("Claude, the ai assistant")
+    assert normalized.startswith("cloud, the ai assistant")
 
 
 def test_normalize_context_terms_safe_defaults_keep_google_cloud():

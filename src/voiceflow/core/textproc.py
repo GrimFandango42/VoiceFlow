@@ -193,7 +193,9 @@ _CONTEXTUAL_TECH_TERM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bci[\s-]*cd\b", re.IGNORECASE), "CI/CD"),
     (re.compile(r"\bclaude[\s-]*code\b", re.IGNORECASE), "Claude Code"),
     (re.compile(r"\bclaude[\s-]*desktop\b", re.IGNORECASE), "Claude Desktop"),
-    (re.compile(r"\bcloud\b(?=,\s*(?:the\s+)?(?:ai|coding)\s+assistant\b)", re.IGNORECASE), "Claude"),
+    # VF-24 review: no "cloud, the AI assistant" lookahead rule any more. A bare
+    # "cloud" is never rewritten, whatever follows it; only the product phrases
+    # in _GLOBAL_TECH_TERM_RULES become "Claude".
 )
 
 _TECH_TERM_CACHE_KEY: tuple[str, float] | None = None

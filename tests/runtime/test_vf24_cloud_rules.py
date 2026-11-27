@@ -52,6 +52,10 @@ def test_product_phrases_become_claude(heard: str, expected: str, aggressive: bo
         "I use Claude Code to deploy to the cloud.",
         "Anthropic's cloud spend went up.",
         "Ask the coding assistant to check the cloud bill.",
+        # VF-24 review: the old "cloud, the AI/coding assistant" lookahead rule is gone.
+        "The cloud, the coding assistant, is open.",
+        "cloud, the ai assistant, did a better job on that diff",
+        "Cloud, the AI assistant, wrote it.",
         "Please do it now.",
     ],
 )
