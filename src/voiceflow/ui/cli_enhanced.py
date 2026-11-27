@@ -70,6 +70,7 @@ from voiceflow.core.segmenter import (
     last_empty_reason,
     should_segment,
 )
+from voiceflow.core.repeat_guard import collapse_adjacent_repeats
 from voiceflow.core.silence_artifacts import classify as classify_silence_artifact
 
 # Streaming preview
@@ -3473,6 +3474,23 @@ class EnhancedApp:
                 )
                 self._last_transcription_completed_at = time.time()
                 return ""
+
+            # VF-24 last-line guard: a short clip the decoder looped ("Here's an example." x4) is
+            # reduced to one copy. Clips at or over the limit, non-adjacent repeats and one-word
+            # sentences are never touched; the raw decode stays in ``raw_transcript`` / the tuning log.
+            if text and bool(getattr(self.cfg, "repeat_collapse_enabled", True)):
+                try:
+                    text, repeats_removed = collapse_adjacent_repeats(
+                        text,
+                        raw_audio_duration,
+                        float(getattr(self.cfg, "repeat_collapse_max_seconds", 8.0)),
+                    )
+                    if repeats_removed:
+                        self._log.info(
+                            "repeat_collapsed n=%d audio_s=%.2f", repeats_removed, raw_audio_duration
+                        )
+                except Exception as exc:  # a guard must never be able to lose a dictation
+                    self._log.warning("repeat_collapse_failed error=%s", exc)
 
             # Apply basic processing
             postprocess_start = time.perf_counter()

@@ -132,6 +132,13 @@ class Config:
     pause_compaction_tail_protect_ms: int = 1500  # VF-17: never blip-filter/cut soft speech in the last N ms (0 = legacy behaviour)
     asr_tail_pad_ms: int = 0  # VF-17: trailing silence appended before ASR (0 = off; see docs/FAITHFUL_DICTATION.md for measurements)
     asr_tail_lift_db: float = 9.0  # VF-17: max gain (dB) applied to a clearly-spoken but faded trailing word before ASR (0 = off)
+    asr_tail_lift_skip_short: bool = True  # VF-24: no tail lift for a clip shorter than asr_tail_lift_min_clip_seconds
+    asr_tail_lift_min_clip_seconds: float = 6.0
+    asr_short_clip_guards: bool = True  # VF-24: faster-whisper repetition guards for clips under asr_short_clip_seconds
+    asr_short_clip_seconds: float = 8.0
+    # VF-24: a short dictation must come out once. Each switch is independent; see docs/FAITHFUL_DICTATION.md.
+    repeat_collapse_enabled: bool = True  # post-decode: collapse a sentence the decoder repeated back-to-back (clips under the limit below only)
+    repeat_collapse_max_seconds: float = 8.0  # clips at or above this length are never touched by the guard
     pause_compaction_retry_on_short_output: bool = True  # Retry raw audio when compaction result looks clipped
     pause_compaction_retry_min_reduction_pct: float = 38.0  # Trigger raw retry only after heavy compaction
     pause_compaction_retry_max_words: int = 8  # Treat very short result as likely clipped output

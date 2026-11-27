@@ -516,6 +516,9 @@ class ModelConfig:
     # it is not conditioning on previous text), hotwords are re-applied to every window,
     # so a 2-minute dictation is biased as much at 100 s as at 5 s.
     hotwords: str = ""
+    # VF-24: repetition guards for a short final decode (see ``short_clip_repetition_guards``).
+    short_clip_guards: bool = False
+    short_clip_seconds: float = 8.0
 
 
 def _model_accepts_hotwords(model: Any) -> bool:
@@ -529,6 +532,19 @@ def _model_accepts_hotwords(model: Any) -> bool:
     return "hotwords" in params or any(
         p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
     )
+
+
+def _model_accepts_kwargs(model: Any, names: tuple) -> frozenset:
+    """The subset of ``names`` this model's ``transcribe`` takes (all of them when it takes ``**kwargs``)."""
+    try:
+        import inspect
+
+        params = inspect.signature(model.transcribe).parameters
+    except (TypeError, ValueError, AttributeError):
+        return frozenset()
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return frozenset(names)
+    return frozenset(n for n in names if n in params)
 
 
 # faster-whisper's own default ``no_speech_threshold``: a window the decoder itself
@@ -768,6 +784,28 @@ def lift_quiet_tail(
     return out.astype(audio.dtype, copy=False)
 
 
+def should_lift_tail(duration_s: float, *, skip_short: bool = True, min_clip_seconds: float = 6.0) -> bool:
+    """VF-24: is the VF-17 tail lift allowed for a clip of ``duration_s``? (False for a short clip when ``skip_short``.)"""
+    if not skip_short:
+        return True
+    return float(duration_s) >= float(min_clip_seconds)
+
+
+def short_clip_repetition_guards(duration_s: float, *, max_seconds: float = 8.0) -> Dict[str, Any]:
+    """VF-24: extra faster-whisper decode arguments for a short clip; ``{}`` for a longer one."""
+    if not (0.0 < float(duration_s) < float(max_seconds)):
+        return {}
+    # Greedy decode with a single temperature never re-decodes, so the compression-ratio check could not
+    # act. Give it two warmer retries, and a threshold that a 3-4x repeated short sentence (ratio ~2) crosses
+    # (ordinary short sentences stay under ~1.3). no_repeat_ngram_size=4 stops the decoder from emitting the
+    # same four tokens twice, which is what a looped "Here's an example." does on its second copy.
+    return {
+        "temperature": [0.0, 0.2, 0.4],
+        "compression_ratio_threshold": 1.8,
+        "no_repeat_ngram_size": 4,
+    }
+
+
 @dataclass
 class TranscriptionSegment:
     """Rich transcription segment with metadata"""
@@ -841,6 +879,7 @@ class FasterWhisperBackend(ASRBackend):
         self._restore_lock = threading.Lock()
         # None until first needed: whether this faster-whisper build accepts hotwords.
         self._hotwords_supported: Optional[bool] = None
+        self._guard_kwargs_supported: Optional[frozenset] = None
 
     def load(self) -> None:
         with self._lock:
@@ -1115,6 +1154,18 @@ class FasterWhisperBackend(ASRBackend):
                         "min_speech_duration_ms": 150,
                         "max_speech_duration_s": 300,
                     }
+                if is_final_pass and bool(getattr(self.config, "short_clip_guards", False)):
+                    guards = short_clip_repetition_guards(
+                        audio_duration, max_seconds=float(getattr(self.config, "short_clip_seconds", 8.0))
+                    )
+                    if guards:
+                        kwargs.update(guards)
+                        # no_repeat_ngram_size needs a faster-whisper that has it (>= 1.0); drop what it lacks.
+                        if self._guard_kwargs_supported is None:
+                            self._guard_kwargs_supported = _model_accepts_kwargs(self._model, tuple(guards))
+                        for name in tuple(guards):
+                            if name not in self._guard_kwargs_supported:
+                                kwargs.pop(name, None)
                 if initial_prompt:
                     kwargs["initial_prompt"] = initial_prompt
                 hotwords = str(getattr(self.config, "hotwords", "") or "").strip()
@@ -1694,6 +1745,13 @@ class ASREngine:
         # Kept as a knob so the eval harness can show pad=0 vs pad=N.
         backend_audio = audio
         lift_db = float(getattr(self, "tail_lift_db", 0.0) or 0.0)
+        if lift_db > 0 and not should_lift_tail(
+            audio_duration,
+            skip_short=bool(getattr(self, "tail_lift_skip_short", False)),
+            min_clip_seconds=float(getattr(self, "tail_lift_min_clip_seconds", 6.0)),
+        ):
+            logger.debug("tail lift skipped: short clip (%.2fs)", audio_duration)
+            lift_db = 0.0
         if lift_db > 0:
             try:
                 backend_audio = lift_quiet_tail(audio, self.sample_rate, max_gain_db=lift_db)
@@ -1940,6 +1998,8 @@ class ModernWhisperASR(ASREngine):
         self.cfg = cfg
         self.tail_pad_ms = max(0, int(getattr(cfg, "asr_tail_pad_ms", 0) or 0))
         self.tail_lift_db = max(0.0, float(getattr(cfg, "asr_tail_lift_db", 0.0) or 0.0))
+        self.tail_lift_skip_short = bool(getattr(cfg, "asr_tail_lift_skip_short", True))
+        self.tail_lift_min_clip_seconds = float(getattr(cfg, "asr_tail_lift_min_clip_seconds", 6.0) or 0.0)
 
         # Session tracking for legacy compatibility
         self.session_start_time = time.time()
@@ -1970,6 +2030,9 @@ class ModernWhisperASR(ASREngine):
             except Exception:
                 # Vocab is best-effort. If it fails, keep whatever the caller passed.
                 pass
+        # VF-24: repetition guards for a short final decode (a backend reads them per call, like the hotwords).
+        self.model_config.short_clip_guards = bool(getattr(self.cfg, "asr_short_clip_guards", True))
+        self.model_config.short_clip_seconds = float(getattr(self.cfg, "asr_short_clip_seconds", 8.0) or 8.0)
         # Call parent's transcribe method and extract text
         result = ASREngine.transcribe(self, audio, initial_prompt=initial_prompt, beam_size_override=beam_size_override, vad_filter_override=vad_filter_override)
         return result.text
